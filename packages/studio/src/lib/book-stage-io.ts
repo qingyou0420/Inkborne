@@ -85,10 +85,19 @@ export async function collectBookStageFacts(input: {
   const storyDir = join(input.bookDir, "story");
   const authorIntent = await readText(join(storyDir, "author_intent.md"));
   const storyCardExists = await pathExists(join(storyDir, "story_card.md"));
+  const canonExists = await pathExists(join(storyDir, "canon.md"));
   const storyFrame = (await readText(join(storyDir, "outline", "story_frame.md"))).trim()
     || (await readText(join(storyDir, "story_bible.md"))).trim();
   const volumeMap = (await readText(join(storyDir, "outline", "volume_map.md"))).trim()
     || (await readText(join(storyDir, "volume_outline.md"))).trim();
+  let settingsAdoptedCount = 0;
+  try {
+    const catalogRaw = JSON.parse(await readText(join(storyDir, "settings", "index.json"))) as { entries?: Array<{ adoptedArtifactId?: string; archived?: boolean }> };
+    settingsAdoptedCount = (catalogRaw.entries ?? []).filter((entry) => entry.adoptedArtifactId && !entry.archived).length;
+  } catch {
+    settingsAdoptedCount = 0;
+  }
+
   const tree = parseVolumeMapTree(volumeMap);
   const targetChapters = input.targetChapters && input.targetChapters > 0 ? input.targetChapters : 200;
   const weaveLocked = resolveOutlineWeaveStep(tree, targetChapters, volumeMap) !== "volumes";
@@ -98,6 +107,8 @@ export async function collectBookStageFacts(input: {
     bookExists: input.bookExists,
     authorIntentNonEmpty: authorIntent.trim().length > 0,
     storyCardExists,
+    canonExists,
+    settingsAdoptedCount,
     storyFrameNonEmpty: storyFrame.length > 0,
     storyFrameFourSectionsNonEmpty: storyFrameHasFourSections(storyFrame),
     majorRoleCount: await countMajorRoles(input.bookDir),

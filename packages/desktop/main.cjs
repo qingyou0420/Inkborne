@@ -8,7 +8,7 @@ const fs = require("fs");
 const http = require("http");
 const crypto = require("crypto");
 const { spawn, execFile } = require("child_process");
-const { defaultProjectRoot, ensureProjectLayout, saveFirstRunLlm } = require("./lib/project.cjs");
+const { defaultProjectRoot, ensureProjectLayout, resolveSavedProjectRoot, saveFirstRunLlm } = require("./lib/project.cjs");
 const { HOST, SCAN_START, normalizePinnedPort, pickListenPort, canBindPort } = require("./lib/port.cjs");
 const {
   emptyEngineHandle,
@@ -334,12 +334,21 @@ async function stopEngine({ graceful = true } = {}) {
   clearEngineHandle(engineHandle);
 }
 
+function provisionProjectRoot(cfg) {
+  const existing = resolveSavedProjectRoot(cfg.projectRoot);
+  if (existing) return existing;
+  const root = ensureProjectLayout(defaultProjectRoot(tryAppPath("documents") || undefined));
+  saveShellConfig({
+    INKOS_PROJECT_ROOT: root,
+    FW_FIRST_RUN_DONE: "1",
+  });
+  appendLog(`auto projectRoot=${root}`);
+  return root;
+}
+
 async function resolveEngineUrl() {
   const shellCfg = loadShellConfig();
-  projectRoot = shellCfg.projectRoot;
-  if (!projectRoot) {
-    throw new Error("尚未配置项目根。请先完成首次设置。");
-  }
+  projectRoot = provisionProjectRoot(shellCfg);
   ensureProjectLayout(projectRoot);
   if (!shellCfg.instanceToken) {
     instanceToken = crypto.randomUUID();
@@ -1026,19 +1035,13 @@ function registerIpc() {
 async function boot() {
   registerIpc();
   buildMenu();
-  const cfg = loadShellConfig();
-  const hasRoot = Boolean(cfg.projectRoot && fs.existsSync(path.join(cfg.projectRoot, "inkos.json")));
-  if (!hasRoot || !cfg.firstRunDone) {
-    createWindow(firstRunFileUrl());
-    return;
-  }
   try {
     const url = await resolveEngineUrl();
     createWindow(url);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     dialog.showErrorBox("启动失败", `${msg}\n\n日志：${getLogPath()}`);
-    createWindow(firstRunFileUrl());
+    app.quit();
   }
 }
 

@@ -76,6 +76,22 @@ describe("deriveBookStage", () => {
     expect(snap.steps.ground).toBe("todo");
   });
 
+  it("treats adopted canon.md as 问心 done without foundation files", () => {
+    const snap = deriveBookStage(facts({ canonExists: true }));
+    expect(snap.stage).toBe("ground");
+    expect(snap.steps.ask).toBe("done");
+    expect(snap.steps.ground).toBe("current");
+  });
+
+  it("treats adopted settings catalog as 研墨 done without story_frame.md", () => {
+    const snap = deriveBookStage(facts({
+      canonExists: true,
+      settingsAdoptedCount: 2,
+    }));
+    expect(snap.stage).toBe("weave");
+    expect(snap.steps.ground).toBe("done");
+  });
+
   it("does not rewind an old book that already has a story frame", () => {
     const snap = deriveBookStage(facts({
       storyFrameNonEmpty: true,

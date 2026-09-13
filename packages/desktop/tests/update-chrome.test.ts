@@ -46,6 +46,7 @@ describe("desktop update chrome", () => {
     expect(main).not.toMatch(/选择 FantaWriter 安装包/);
     const bootFn = main.match(/async function boot\(\) \{[\s\S]*?\nconst gotLock/);
     expect(bootFn?.[0] ?? "").not.toMatch(/checkUpdate\(|checkGithubLatest|findLatestInstaller/);
+    expect(bootFn?.[0] ?? "").not.toMatch(/firstRunFileUrl|first-run\.html/);
 
     expect(panel).toMatch(/<h1>检查更新<\/h1>/);
     expect(panel).toMatch(/>下载</);

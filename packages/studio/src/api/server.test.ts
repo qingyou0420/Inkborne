@@ -465,6 +465,11 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     loadTranslationManifest: actual.loadTranslationManifest,
     runTranslationProject: actual.runTranslationProject,
     writeTranslationExport: actual.writeTranslationExport,
+    isLightweightAuthoringBook: actual.isLightweightAuthoringBook,
+    fillMissingAuthoringRoles: actual.fillMissingAuthoringRoles,
+    resolveAuthoringRole: actual.resolveAuthoringRole,
+    bindRestoredChapter: actual.bindRestoredChapter,
+    loadRoleApiKeys: actual.loadRoleApiKeys,
   };
 });
 
@@ -736,6 +741,10 @@ describe("createStudioServer daemon lifecycle", () => {
     deleteBookSessionMock.mockReset();
     migrateBookSessionMock.mockReset();
     resolveServiceModelMock.mockReset();
+    resolveServiceModelMock.mockResolvedValue({
+      model: { id: "gpt-5.4", provider: "openai", api: "openai-completions" },
+      apiKey: "sk-test",
+    });
     loadSecretsMock.mockReset();
     saveSecretsMock.mockReset();
     getServiceApiKeyMock.mockReset();

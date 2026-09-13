@@ -59,12 +59,12 @@ describe("P2-2 研墨", () => {
     expect(ground).toMatch(/基础设定/);
     expect(ground).toMatch(/故事概要/);
     expect(ground).toMatch(/ground-toc/);
-    expect(ground).toMatch(/ground-confirm-bar/);
+    expect(ground).toMatch(/AuthoringGroundPanel/);
     expect(ground).toMatch(/\/books\/\$\{bookId\}\/story-card/);
     expect(ground).not.toMatch(/ground-nav/);
+    expect(ground).not.toMatch(/ground-confirm-bar/);
+    expect(ground).not.toMatch(/foundation\/revise/);
     expect(ground).toMatch(/open_questions\.md/);
-    expect(ground).toMatch(/ground-confirm/);
-    expect(ground).toMatch(/foundation\/revise/);
     expect(ground).toMatch(/TruthProposalCard/);
     expect(ground).toMatch(/GROUND_REEDIT_WARNING/);
     expect(server).toMatch(/\/api\/v1\/books\/:id\/ground\/confirm/);

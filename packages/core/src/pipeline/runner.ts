@@ -6,6 +6,9 @@ import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
+import type { AuthoringRoles } from "../authoring/types.js";
+import { loadRoleApiKeysSync, resolveRoleForAgent } from "../authoring/model-config.js";
+import { isLightweightAuthoringBook } from "../authoring/context.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import {
@@ -275,6 +278,8 @@ export interface PipelineConfig {
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
   readonly modelOverrides?: Record<string, string | AgentLLMOverride>;
+  readonly authoringRoles?: AuthoringRoles;
+  readonly roleApiKeys?: Record<string, string>;
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
   readonly onContextCompression?: ContextCompressionCallback;
@@ -442,6 +447,7 @@ export class PipelineRunner {
   private readonly state: StateManager;
   private readonly config: PipelineConfig;
   private readonly agentClients = new Map<string, LLMClient>();
+  private cachedRoleApiKeys: Record<string, string> | undefined;
   private readonly operationContext = new AsyncLocalStorage<{
     readonly signal?: AbortSignal;
     readonly abort?: AbortController;
@@ -715,7 +721,40 @@ export class PipelineRunner {
     };
   }
 
+  private apiKeysForRoles(): Record<string, string> | undefined {
+    if (this.config.roleApiKeys) return this.config.roleApiKeys;
+    if (this.cachedRoleApiKeys) return this.cachedRoleApiKeys;
+    this.cachedRoleApiKeys = loadRoleApiKeysSync(this.config.projectRoot);
+    return this.cachedRoleApiKeys;
+  }
+
   private resolveOverride(agentName: string): { model: string; client: LLMClient } {
+    const base = this.config.defaultLLMConfig;
+    if (base && this.config.authoringRoles) {
+      const resolved = resolveRoleForAgent({
+        agentName,
+        baseLlm: base,
+        roles: this.config.authoringRoles,
+        apiKeys: this.apiKeysForRoles(),
+      });
+      if (resolved) {
+        const cacheKey = [
+          "role",
+          resolved.roleId,
+          resolved.serviceRef,
+          resolved.llm.baseUrl,
+          resolved.modelId,
+          `stream:${resolved.stream}`,
+          `format:${resolved.apiFormat}`,
+        ].join("|");
+        let client = this.agentClients.get(cacheKey);
+        if (!client) {
+          client = createLLMClient(resolved.llm);
+          this.agentClients.set(cacheKey, client);
+        }
+        return { model: resolved.modelId, client };
+      }
+    }
     const override = this.config.modelOverrides?.[agentName];
     if (!override) {
       return { model: this.config.model, client: this.config.client };
@@ -727,7 +766,6 @@ export class PipelineRunner {
     if (!override.baseUrl) {
       return { model: override.model, client: this.config.client };
     }
-    const base = this.config.defaultLLMConfig;
     const provider = override.provider ?? base?.provider ?? "custom";
     const apiKeySource = override.apiKeyEnv
       ? `env:${override.apiKeyEnv}`
@@ -870,7 +908,7 @@ export class PipelineRunner {
       await this.state.snapshotStateAt(stagingBookDir, 0);
 
       if (await this.pathExists(bookDir)) {
-        if (await this.state.isCompleteBookDirectory(bookDir)) {
+        if (await this.state.isCompleteBookDirectory(bookDir) || await isLightweightAuthoringBook(bookDir)) {
           throw new Error(`Book "${book.id}" already exists at books/${book.id}/. Use a different title or delete the existing book first.`);
         }
         await rm(bookDir, { recursive: true, force: true });

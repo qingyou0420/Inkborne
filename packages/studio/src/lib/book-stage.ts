@@ -18,6 +18,8 @@ export interface BookStageFacts {
   readonly bookExists: boolean;
   readonly authorIntentNonEmpty: boolean;
   readonly storyCardExists: boolean;
+  readonly canonExists?: boolean;
+  readonly settingsAdoptedCount?: number;
   readonly storyFrameNonEmpty: boolean;
   readonly storyFrameFourSectionsNonEmpty: boolean;
   readonly majorRoleCount: number;
@@ -104,11 +106,13 @@ export function splitMarkdownSections(markdown: string): ReadonlyArray<{ heading
 
 export function inferAskDone(facts: BookStageFacts): boolean {
   if (facts.askConfirmedAt) return true;
+  if (facts.canonExists) return true;
   if (facts.authorIntentNonEmpty && facts.storyCardExists) return true;
   return facts.storyFrameNonEmpty || facts.weaveLocked || facts.chaptersWritten > 0;
 }
 
 export function inferGroundDone(facts: BookStageFacts): boolean {
+  if ((facts.settingsAdoptedCount ?? 0) >= 1) return true;
   if (facts.groundConfirmedAt && (facts.storyFrameNonEmpty || facts.majorRoleCount >= 1)) return true;
   return facts.storyFrameFourSectionsNonEmpty && facts.majorRoleCount >= 1 && Boolean(facts.groundConfirmedAt);
 }

@@ -93,6 +93,11 @@ import {
   loadPromptPackPrompt,
   promptOverridePath,
   toPosixPath,
+  isLightweightAuthoringBook,
+  fillMissingAuthoringRoles,
+  loadRoleApiKeys,
+  resolveAuthoringRole,
+  bindRestoredChapter,
   type ActionPayload,
   type ActionSource,
   type AgentSkill,
@@ -189,6 +194,7 @@ import {
 } from "./resolve-agent-model.js";
 import { buildStudioBookConfig } from "./book-create.js";
 import { persistAskArtifacts } from "../lib/ask-artifacts.js";
+import { registerAuthoringRoutes } from "./authoring-routes.js";
 import { collectBookStageFacts, loadBookWorkflow, resolveBookStage } from "../lib/book-stage-io.js";
 import { mergeStoryCard, resolveStoryCard, type StoryCardDraft } from "../lib/story-card.js";
 import { validateGroundConfirm } from "../lib/ground-confirm.js";
@@ -3050,6 +3056,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       chapterReviewMode,
       revisionGate: overrides?.revisionGate ?? revisionGate,
       modelOverrides: currentConfig.modelOverrides,
+      authoringRoles: fillMissingAuthoringRoles(currentConfig),
+      roleApiKeys: await loadRoleApiKeys(root),
       notifyChannels: currentConfig.notify,
       logger,
       onContextCompression: (event) => {
@@ -3440,6 +3448,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (await isBookFoundationComplete(state.bookDir(id))) {
       return c.json({ status: "ready" });
     }
+    if (await isLightweightAuthoringBook(state.bookDir(id))) {
+      return c.json({ status: "ready", lightweight: true });
+    }
     return c.json({ status: "missing" }, 404);
   });
 
@@ -3615,6 +3626,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         },
       );
       broadcast("chapter:restored", { bookId: id, chapterNumber: num });
+      const chapterFile = result.touchedFiles.find((file) =>
+        /^chapters[/\\]\d+_.+\.md$/i.test(file.replace(/\\/g, "/")) && !file.includes(".versions")
+      );
+      const relativePath = chapterFile?.replace(/\\/g, "/");
+      const index = await state.loadChapterIndex(id);
+      const title = index.find((item) => item.number === num)?.title;
+      await bindRestoredChapter({
+        root: { projectRoot: root, bookId: id },
+        chapterNumber: num,
+        title,
+        relativePath,
+        body: fullText,
+      });
       return c.json({ ok: true, chapterNumber: num, versionId: c.req.param("versionId"), result });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
@@ -5603,10 +5627,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         }
       };
 
-      // Resolve model — existing book sessions follow the current Studio default
-      // unless the session has an explicit model override. A stale request body
-      // still sending the old picker value must not pin Opus forever.
+      // Resolve model — 问心 (book / book-create) uses ask.main; other chats keep
+      // the Studio global default. An explicit per-session override still pins.
       const rawConfig = config.llm as unknown as Record<string, unknown>;
+      const askRole = sessionKind === "book" || sessionKind === "book-create"
+        ? resolveAuthoringRole({
+          roleId: "ask.main",
+          baseLlm: config.llm,
+          roles: fillMissingAuthoringRoles(config),
+        })
+        : undefined;
       const binding = resolveAgentModelBinding({
         sessionModelOverride: reqSessionModelOverride
           ?? (bookSession as { modelOverride?: string }).modelOverride,
@@ -5614,8 +5644,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           ?? (bookSession as { modelOverrideService?: string }).modelOverrideService,
         requestModel: reqModel,
         requestService: reqService,
-        defaultModel: typeof rawConfig.defaultModel === "string" ? rawConfig.defaultModel : config.llm.model,
-        defaultService: typeof rawConfig.service === "string" ? rawConfig.service : reqService,
+        defaultModel: askRole?.modelId
+          ?? (typeof rawConfig.defaultModel === "string" ? rawConfig.defaultModel : config.llm.model),
+        defaultService: askRole?.serviceRef
+          ?? (typeof rawConfig.service === "string" ? rawConfig.service : reqService),
       });
       const bindModel = binding.model;
       const bindService = binding.service;
@@ -5723,7 +5755,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             apiKey: resolvedApiKey ?? "",
             ...(configuredEntry?.apiFormat ? { apiFormat: configuredEntry.apiFormat } : {}),
             ...(configuredEntry?.stream !== undefined ? { stream: configuredEntry.stream } : {}),
-            baseUrl: configuredEntry?.baseUrl ?? "",
+            ...(askRole && typeof askRole.temperature === "number" ? { temperature: askRole.temperature } : {}),
+            ...(askRole && typeof askRole.thinkingBudget === "number" ? { thinkingBudget: askRole.thinkingBudget } : {}),
+            ...(askRole && typeof askRole.stream === "boolean" ? { stream: askRole.stream } : {}),
+            baseUrl: configuredEntry?.baseUrl ?? askRole?.llm.baseUrl ?? "",
           } as any)
         : client;
       // Only a structured action request can start a production task. Free text
@@ -5971,6 +6006,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           attachments,
           sessionId: bookSession.sessionId,
           language: surfaceLanguage,
+          ...(askRole?.instructions ? { extraSystemPrompt: askRole.instructions } : {}),
           onContextCompression: (event) => {
             broadcast("context:compression", {
               sessionId: streamSessionId,
@@ -7669,6 +7705,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const { assetRef, delta } = await generateNodeImage({ projectRoot: root, projectId: id, node, deps });
     const { rev } = await applyGraphDelta({ projectRoot: root, projectId: id, delta });
     return c.json({ assetRef, rev });
+  });
+
+  registerAuthoringRoutes(app, {
+    root,
+    loadProject: () => loadCurrentProjectConfig({ requireApiKey: false }),
+    saveRoles: async (roles) => {
+      const raw = await loadRawConfig(root);
+      raw.authoringRoles = roles;
+      await saveRawConfig(root, raw);
+    },
   });
 
   return app;

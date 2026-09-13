@@ -1,6 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState } from "react";
 import { SerialCockpitStrip, startDraft, startWriteNext } from "../components/SerialCockpitStrip";
+import { AuthoringWritePanel } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
@@ -131,6 +132,7 @@ export function BookDetail({
     remaining: ReadonlyArray<number>;
   } | null>(null);
   const [overrideValue, setOverrideValue] = useState("");
+  const [writeChapter, setWriteChapter] = useState<number | null>(null);
 
   useEffect(() => {
     void fetchJson<{ mode?: string }>(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`)
@@ -376,7 +378,7 @@ export function BookDetail({
       : { title: t("book.reviseWith"), message: "Optional revise brief for this run only. Leave blank to use existing focus." };
   };
 
-  if (loading) return (
+  if (loading && !data) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
       <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
       <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
@@ -487,6 +489,15 @@ export function BookDetail({
         </div>
       </div>
 
+      <AuthoringWritePanel
+        key={`${bookId}:${writeChapter ?? data.nextChapter}`}
+        bookId={bookId}
+        chapterNumber={writeChapter ?? data.nextChapter}
+        chapterTitle={data.chapters.find((item) => item.number === (writeChapter ?? data.nextChapter))?.title}
+        isZh={isZh}
+        onChanged={() => refetch()}
+      />
+
       <SerialCockpitStrip
         bookId={bookId}
         isZh={isZh}
@@ -594,6 +605,13 @@ export function BookDetail({
                           {t("book.approve")}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="btn-ghost h-8 px-2 text-[13px]"
+                        onClick={() => setWriteChapter(ch.number)}
+                      >
+                        {isZh ? "打磨" : "Polish"}
+                      </button>
                       <DropdownMenu>
                         <DropdownMenuTrigger
                           data-testid={`chapter-more-${ch.number}`}

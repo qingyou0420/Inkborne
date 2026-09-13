@@ -1,0 +1,58 @@
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createLightweightBook } from "../authoring/book-create.js";
+import { isBookFoundationComplete } from "../utils/outline-paths.js";
+import { isBookPresent, isLightweightAuthoringBook } from "../authoring/context.js";
+
+describe("lightweight book create", () => {
+  let root = "";
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+    root = "";
+  });
+
+  it("creates a readable book without calling ground or weave artifacts", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-book-"));
+    const first = await createLightweightBook({
+      projectRoot: root,
+      draftId: "draft-1",
+      canon: {
+        title: "夜港账本",
+        genre: "现实",
+        oneLine: "一个会计要找回失踪的账本。",
+        proposition: "记忆有代价",
+        protagonist: "沈砚想赎回自己",
+        conflict: "救人还是自保",
+        voice: "限制视角",
+        boundaries: "开放结局",
+        direction: "从港口开始",
+        openQuestions: ["结局是否公开真相"],
+      },
+    });
+    expect(first.created).toBe(true);
+    expect(await isBookPresent(first.bookDir)).toBe(true);
+    expect(await isLightweightAuthoringBook(first.bookDir)).toBe(true);
+    expect(await isBookFoundationComplete(first.bookDir)).toBe(false);
+    const canon = await readFile(join(first.bookDir, "story", "canon.md"), "utf-8");
+    expect(canon).toContain("沈砚想赎回自己");
+    await access(join(first.bookDir, "chapters", "index.json"));
+    const second = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港账本",
+        oneLine: "重复点击",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    expect(second.created).toBe(false);
+    expect(second.bookId).toBe(first.bookId);
+  });
+});

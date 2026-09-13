@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const require = createRequire(import.meta.url);
 const {
   defaultProjectRoot,
+  resolveSavedProjectRoot,
   isAbsoluteRoot,
   ensureProjectLayout,
   writeSecrets,
@@ -16,6 +17,7 @@ const {
   customServiceId,
 } = require("../lib/project.cjs") as {
   defaultProjectRoot: (documentsDir?: string) => string;
+  resolveSavedProjectRoot: (savedRoot?: string) => string;
   isAbsoluteRoot: (root: string) => boolean;
   ensureProjectLayout: (root: string) => string;
   writeSecrets: (root: string, service: string, apiKey: string) => string;
@@ -49,6 +51,22 @@ describe("defaultProjectRoot", () => {
     const root = defaultProjectRoot("/Users/me/Documents");
     expect(root).toBe(join("/Users/me/Documents", "幻想作家"));
     expect(root).not.toBe(process.cwd());
+  });
+});
+
+describe("resolveSavedProjectRoot", () => {
+  it("returns empty when the saved folder has no inkos.json", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-missing-inkos-"));
+    temps.push(dir);
+    expect(resolveSavedProjectRoot(dir)).toBe("");
+    expect(resolveSavedProjectRoot("relative")).toBe("");
+  });
+
+  it("returns the folder when inkos.json exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-has-inkos-"));
+    temps.push(dir);
+    writeFileSync(join(dir, "inkos.json"), "{\"name\":\"x\"}\n", "utf8");
+    expect(resolveSavedProjectRoot(dir)).toBe(dir);
   });
 });
 

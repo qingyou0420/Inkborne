@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, Bot, FileText, FolderUp, Globe, MessageSquare, Radar, RotateCcw, Search, Plus, Trash2 } from "lucide-react";
+import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
@@ -459,6 +460,8 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           </div>
         </div>
       </SettingsCard>
+
+      <AuthoringRolesPanel isZh={isZh} />
 
       {/* Model routing — per-agent model overrides */}
       <SettingsCard title={t("settings.modelOverrides")} description={t("settings.modelOverridesHint")} icon={<Bot size={18} />}>

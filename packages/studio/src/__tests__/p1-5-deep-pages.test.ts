@@ -58,7 +58,9 @@ describe("P1-5 研墨 / 织卷 / 章页", () => {
   it("shows 已定稿 state and splits 终局 / 伏笔", () => {
     const ground = read("src/pages/BookGround.tsx");
     expect(ground).toMatch(/ground-confirmed-stamp/);
-    expect(ground).toMatch(/重新定稿/);
+    expect(ground).toMatch(/AuthoringGroundPanel/);
+    expect(ground).not.toMatch(/研墨定稿/);
+    expect(ground).not.toMatch(/foundation\/revise/);
     expect(ground).toMatch(/终局/);
     expect(ground).toMatch(/伏笔清单/);
     expect(ground).toMatch(/ground-editor-hooks/);

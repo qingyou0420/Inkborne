@@ -141,6 +141,7 @@ export interface AgentSessionConfig {
    * agent can answer progress questions instead of claiming nothing is running.
    * Changing this value evicts the cached Agent so the prompt stays current.
    */
+  extraSystemPrompt?: string;
   backgroundTaskContext?: string;
   /**
    * Remove book/artifact-mutating production tools from this turn's tool table
@@ -196,6 +197,7 @@ interface CachedAgent {
   modelIdentity: string;
   apiKey: string | undefined;
   allowSystemFileRead: boolean;
+  extraSystemPrompt: string | undefined;
   backgroundTaskContext: string | undefined;
   suppressProductionTools: boolean;
   currentAttachmentPaths: string[];
@@ -1114,6 +1116,7 @@ async function runAgentSessionUnlocked(
     const apiKeyChanged = cached.apiKey !== config.apiKey;
     const readPermissionChanged = cached.allowSystemFileRead !== allowSystemFileRead;
     const playWorldChanged = cached.playWorldExists !== playWorldExists;
+    const extraSystemPromptChanged = cached.extraSystemPrompt !== config.extraSystemPrompt;
     const backgroundTaskContextChanged = cached.backgroundTaskContext !== config.backgroundTaskContext;
     const suppressProductionToolsChanged = cached.suppressProductionTools !== suppressProductionTools;
     const transcriptChanged = cached.lastCommittedSeq !== currentCommittedSeq;
@@ -1131,6 +1134,7 @@ async function runAgentSessionUnlocked(
       apiKeyChanged ||
       readPermissionChanged ||
       playWorldChanged ||
+      extraSystemPromptChanged ||
       backgroundTaskContextChanged ||
       suppressProductionToolsChanged ||
       transcriptChanged
@@ -1218,9 +1222,11 @@ async function runAgentSessionUnlocked(
     const agent = new Agent({
       initialState: {
         model,
-        systemPrompt: config.backgroundTaskContext
-          ? `${baseSystemPrompt}\n\n${config.backgroundTaskContext}`
-          : baseSystemPrompt,
+        systemPrompt: [
+          baseSystemPrompt,
+          config.extraSystemPrompt,
+          config.backgroundTaskContext,
+        ].filter(Boolean).join("\n\n"),
         tools: suppressProductionTools
           ? agentTools.filter((tool) => !PRODUCTION_MUTATION_TOOL_NAMES.has(tool.name))
           : agentTools,
@@ -1269,6 +1275,7 @@ async function runAgentSessionUnlocked(
       modelIdentity: requestedModelIdentity,
       apiKey: config.apiKey,
       allowSystemFileRead,
+      extraSystemPrompt: config.extraSystemPrompt,
       backgroundTaskContext: config.backgroundTaskContext,
       suppressProductionTools,
       currentAttachmentPaths: (config.attachments ?? [])

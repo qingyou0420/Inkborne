@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AuthoringRolesSchema } from "../authoring/types.js";
 
 // C1 (v2.0.0 breaking): `maxTokens` 字段已被 providers bank 接管；zod 用 strip mode 静默丢弃老配置里的 `maxTokens`。
 const LLMServiceEntrySchema = z.object({
@@ -143,6 +144,7 @@ export const ProjectConfigSchema = z.object({
   }),
   researchSearch: ResearchSearchConfigSchema,
   modelOverrides: z.record(z.string(), ModelOverrideValueSchema).optional(),
+  authoringRoles: AuthoringRolesSchema.optional(),
   daemon: z.object({
     schedule: z.object({
       radarCron: z.string().default("0 */6 * * *"),

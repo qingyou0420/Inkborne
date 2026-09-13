@@ -98,17 +98,13 @@ describe("2.1.9 Windows installer contract", () => {
     expect(main.match(/process\.platform === "win32" \? "icon\.ico" : "icon\.png"/g)?.length).toBe(3);
   });
 
-  it("brands first-run and the Electron window as 墨生万象, not InkOS", () => {
-    const firstRun = readFileSync(join(desktopDir, "first-run.html"), "utf8");
+  it("brands the Electron window as 墨生万象, not InkOS, and skips the setup wizard", () => {
     const main = readFileSync(join(desktopDir, "main.cjs"), "utf8");
-    expect(firstRun).toMatch(/<h1>墨生万象<\/h1>/);
-    expect(firstRun).toMatch(/src="icon\.png"/);
-    expect(firstRun).toMatch(/id="serviceName"/);
-    expect(firstRun).toMatch(/name: \$\("serviceName"\)\.value/);
-    expect(firstRun).not.toMatch(/InkOS Studio|InkosLogo|>InkOS</);
     expect(main).toMatch(/title: "墨生万象 \/ Inkborne"/);
     expect(main).toMatch(/process\.platform === "win32" \? "icon\.ico" : "icon\.png"/);
     expect(main).not.toMatch(/title: "InkOS/);
+    expect(main).not.toMatch(/createWindow\(firstRunFileUrl\(\)\)/);
+    expect(main).toMatch(/provisionProjectRoot/);
   });
 });
 

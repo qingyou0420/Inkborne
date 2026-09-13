@@ -1,23 +1,22 @@
 /**
- * 研墨: seven-section vertical editor + 研墨定稿 + AI 铺细节 via TruthProposal gate.
+ * 研墨: catalog authoring panel + optional seven-section file editor.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 import { useEffect, useState } from "react";
 import { AskStoryCard } from "../components/AskStoryCard";
+import { AuthoringGroundPanel } from "../components/AuthoringGroundPanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
 import { TruthProposalCard, type PendingTruthProposal } from "../components/TruthProposalCard";
-import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { fetchJson, putApi, useApi } from "../hooks/use-api";
 import { invalidateBookStage, useBookStage } from "../hooks/use-book-stage";
 import type { TFunction } from "../hooks/use-i18n";
 import type { Theme } from "../hooks/use-theme";
-import { storyFrameHasFourSections } from "../lib/book-stage";
 import { GROUND_PLATFORM_VALUES, platformLabel } from "../lib/copy-map";
-import { GROUND_REEDIT_WARNING, validateGroundConfirm } from "../lib/ground-confirm";
+import { GROUND_REEDIT_WARNING } from "../lib/ground-confirm";
 import {
   addOpenQuestion,
   CONTINUE_WITH_OPEN_MARK,
@@ -124,8 +123,6 @@ export function BookGround({
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [roleText, setRoleText] = useState("");
   const [saving, setSaving] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [revising, setRevising] = useState(false);
   const [editingBasics, setEditingBasics] = useState(false);
   const [platformDraft, setPlatformDraft] = useState("other");
   const [genreDraft, setGenreDraft] = useState("");
@@ -169,12 +166,6 @@ export function BookGround({
     setRoleText(roleFile?.content ?? "");
   }, [roleFile?.content, selectedRole]);
 
-  const frameReady = storyFrameHasFourSections(frameText);
-  const validation = validateGroundConfirm({
-    storyFrameFourSections: frameReady,
-    majorRoleCount: roleFiles.length,
-    openQuestions: openDoc,
-  }, isZh);
   const zoneReady: Record<GroundSectionId, boolean> = {
     basics: Boolean((book?.targetChapters ?? 0) > 0 && (book?.chapterWordCount ?? 0) > 0 && book?.genre?.trim()),
     summary: storyCardReady(card),
@@ -237,34 +228,6 @@ export function BookGround({
       showToast(error instanceof Error ? error.message : t("common.error"), "error");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const confirmGround = async () => {
-    try {
-      await postApi(`/books/${bookId}/ground/confirm`, { continueWithOpen: openDoc.continueWithOpen });
-      setConfirmOpen(false);
-      refreshStage();
-      showToast(isZh ? "研墨已定稿" : "Ground confirmed", "success");
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : t("common.error"), "error");
-    }
-  };
-
-  const reviseFoundation = async () => {
-    setRevising(true);
-    try {
-      await postApi(`/books/${bookId}/foundation/revise`, {
-        feedback: isZh
-          ? "请根据现有故事卡与设定，把世界规则、人物、关系与主线、结局与伏笔铺开。不要直接改文件，产出待确认的正典变更。"
-          : "Expand world, characters, conflict, and ending from the story card. Do not write files directly — emit canon proposals.",
-      });
-      await refetchProposals();
-      showToast(isZh ? "正典变更待确认" : "Canon proposals ready", "info");
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : t("common.error"), "error");
-    } finally {
-      setRevising(false);
     }
   };
 
@@ -340,7 +303,6 @@ export function BookGround({
       : "",
     book?.genre?.trim() ?? "",
   ].filter(Boolean);
-  const missingSummary = validation.missing.join(" · ");
 
   return (
     <div className="space-y-6 fade-in" data-testid="book-ground-page">
@@ -349,7 +311,7 @@ export function BookGround({
           <p className="eyebrow text-[13px] font-medium text-muted-foreground">{isZh ? `《${title}》` : title}</p>
           <h1 className="font-serif text-[32px] font-medium leading-10">{isZh ? "研墨" : "Ground"}</h1>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            {isZh ? "把世界与人磨实，定稿后开始织卷。" : "Settle the world and people, then start weaving."}
+            {isZh ? "按本书需要生成并采用设定，再去织卷。" : "Generate and adopt the settings this book needs, then weave."}
           </p>
         </div>
         {confirmed && (
@@ -358,6 +320,8 @@ export function BookGround({
           </p>
         )}
       </header>
+
+      <AuthoringGroundPanel bookId={bookId} isZh={isZh} />
 
       <nav
         className="sticky top-0 z-10 flex flex-wrap gap-2 bg-background/85 py-2 backdrop-blur"
@@ -583,9 +547,7 @@ export function BookGround({
             {allRoleFiles.length === 0 ? (
               <LiteraryEmpty
                 title={isZh ? "还没有人物" : "No characters yet"}
-                subtitle={isZh ? "让 AI 铺细节，或先在原始文件里写下主角。" : "Ask AI to expand, or add a protagonist file."}
-                action={isZh ? "让 AI 铺细节" : "Ask AI to expand"}
-                onAction={() => void reviseFoundation()}
+                subtitle={isZh ? "用上方设定目录生成人物条目，或在这里手写主角。" : "Generate people from the catalog above, or write the protagonist here."}
                 testId="ground-characters-empty"
               />
             ) : allRoleFiles.map((file) => (
@@ -717,52 +679,6 @@ export function BookGround({
         </section>
       </div>
 
-      <div
-        className="sticky bottom-0 z-10 flex items-center justify-between gap-4 border-t border-border/40 bg-background/90 px-1 py-3 backdrop-blur"
-        data-testid="ground-confirm-bar"
-      >
-        {!validation.ok ? (
-          <p className="min-w-0 truncate text-sm text-muted-foreground" data-testid="ground-missing" title={missingSummary}>
-            {isZh ? `还差 ${validation.missing.length} 项：${missingSummary}` : `${validation.missing.length} missing: ${missingSummary}`}
-          </p>
-        ) : confirmed ? (
-          <span />
-        ) : (
-          <p className="text-sm text-muted-foreground">{isZh ? "七段齐备，可以定稿" : "Seven sections ready"}</p>
-        )}
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            data-testid="ground-ai-expand"
-            disabled={revising}
-            onClick={() => void reviseFoundation()}
-            className="btn-secondary"
-          >
-            {revising ? (isZh ? "铺开中…" : "Expanding…") : (isZh ? "让 AI 铺细节" : "Ask AI to expand")}
-          </button>
-          <button
-            type="button"
-            data-testid="ground-confirm"
-            disabled={!validation.ok}
-            onClick={() => setConfirmOpen(true)}
-            className={confirmed ? "btn-secondary" : "btn-primary"}
-          >
-            {confirmed
-              ? (isZh ? "重新定稿" : "Reconfirm ground")
-              : (isZh ? "研墨定稿" : "Confirm ground")}
-          </button>
-        </div>
-      </div>
-
-      <ConfirmDialog
-        open={confirmOpen}
-        title={isZh ? "研墨定稿" : "Confirm ground"}
-        message={isZh ? "定稿后织卷将以此为据。之后仍可修改，但会提示影响。" : "Weaving will use this ground. Later edits will warn about impact."}
-        confirmLabel={isZh ? "确认定稿" : "Confirm"}
-        cancelLabel={isZh ? "再改改" : "Keep editing"}
-        onCancel={() => setConfirmOpen(false)}
-        onConfirm={() => void confirmGround()}
-      />
     </div>
   );
 }

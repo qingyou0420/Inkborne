@@ -415,8 +415,18 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     };
 
     const loadServiceConfig = (markLoaded: boolean) => {
-      void fetchJson<ServiceConfigPayload>("/services/config")
-        .then(applyPayload)
+      const askMode = mode === "book" || mode === "book-create";
+      const request = askMode
+        ? fetchJson<{ roles?: Record<string, { modelId?: string; serviceRef?: string }> }>("/authoring/roles")
+          .then((payload) => {
+            const role = payload.roles?.["ask.main"];
+            applyPayload({
+              service: role?.serviceRef ?? null,
+              defaultModel: role?.modelId ?? null,
+            });
+          })
+        : fetchJson<ServiceConfigPayload>("/services/config").then(applyPayload);
+      void request
         .catch(() => {
           if (!cancelled && markLoaded) setConfiguredModelSelection(null);
         })
@@ -439,11 +449,15 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       window.removeEventListener("focus", refreshIfVisible);
       document.removeEventListener("visibilitychange", refreshIfVisible);
     };
-  }, []);
+  }, [mode]);
 
   const persistStudioDefaultModel = (model: string, service: string) => {
     setSelectedModel(model, service);
     setConfiguredModelSelection({ model, service });
+    if (mode === "book" || mode === "book-create") {
+      void putApi("/authoring/roles/ask.main", { modelId: model, serviceRef: service }).catch(() => undefined);
+      return;
+    }
     void putApi("/project/default-model", { defaultModel: model, service }).catch(() => undefined);
   };
 

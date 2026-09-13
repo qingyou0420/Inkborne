@@ -8,10 +8,12 @@ import { useApi } from "../hooks/use-api";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
+import { AskCanonPanel } from "../components/AskCanonPanel";
 import { ChatPage } from "./ChatPage";
 
 interface Nav {
   readonly toDashboard: () => void;
+  readonly toBook: (id: string) => void;
   readonly toServices: () => void;
   readonly toFilm: (projectId: string) => void;
   readonly toFilmStudio: (projectId: string) => void;
@@ -44,6 +46,7 @@ export function BookAskPage({
         t={t}
         sse={sse}
       />
+      <AskCanonPanel bookId={bookId} isZh={t("settings.title") === "项目设置"} />
     </div>
   );
 }

@@ -83,7 +83,7 @@ describe("P1-2 落笔", () => {
 
 describe("P1-3 织卷", () => {
   it("keeps a single weave CTA and sends chapters to 落笔", () => {
-    const weave = read("src/pages/OutlineWorkspace.tsx");
+    const weave = read("src/pages/OutlineWorkspace.tsx") + read("src/components/AuthoringWeavePanel.tsx");
     expect(weave).toMatch(/outline-weave/);
     expect(weave).toMatch(/outline-go-write/);
     expect(weave).toMatch(/去落笔/);
@@ -95,6 +95,7 @@ describe("P1-3 织卷", () => {
     expect(weave).toMatch(/整理卷纲/);
     expect(weave).toMatch(/outline-volume-detail/);
     expect(weave).toMatch(/outline-ungrounded/);
+    expect(weave).not.toMatch(/\/books\/\$\{bookId\}\/outline\/weave/);
     expect((weave.match(/data-testid="outline-weave"/g) ?? []).length).toBe(1);
   });
 

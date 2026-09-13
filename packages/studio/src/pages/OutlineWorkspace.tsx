@@ -1,14 +1,15 @@
 /**
- * 织卷: one tree + volume/chapter detail + a single weave CTA.
+ * 织卷: authoring full-book outline + tree editor. Old batch-10 weave CTA removed.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { buildApiUrl, fetchJson, useApi } from "../hooks/use-api";
+import { fetchJson, useApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState } from "react";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
+import { AuthoringWeavePanel } from "../components/AuthoringWeavePanel";
 import {
   applyOutlineWorkspaceSave,
   applyVolumeMapNodeEdit,
@@ -28,22 +29,15 @@ import {
   type VolumeMapNoteNode,
 } from "../lib/volume-map-tree";
 import {
-  applyOutlineWeaveSseEvent,
-  formatOutlineWeaveProgress,
   outlineTreeVolumeLabel,
-  outlineWeaveButtonLabel,
-  readOutlineWeaveErrorBody,
-  resolveOutlineWeaveAction,
-  type OutlineWeaveProgress,
 } from "../lib/outline-weave";
 import { formatVolumeArriveCopy } from "../lib/copy-map";
 import { weaveGuideWhenUngrounded } from "../lib/stage-copy";
 import { useBookStage } from "../hooks/use-book-stage";
-import { TruthProposalCard, type PendingTruthProposal } from "../components/TruthProposalCard";
 import { StageDot } from "../components/StageDot";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
-import { Feather } from "lucide-react";
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,7 +91,7 @@ export function OutlineWorkspace({
   nav,
   theme: _theme,
   t,
-  sse,
+  sse: _sse,
 }: {
   bookId: string;
   nav: Nav;
@@ -113,11 +107,7 @@ export function OutlineWorkspace({
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
-  const [weaving, setWeaving] = useState(false);
-  const [weaveStartedAt, setWeaveStartedAt] = useState<number | null>(null);
-  const [weaveNow, setWeaveNow] = useState(0);
-  const [weaveProgress, setWeaveProgress] = useState<OutlineWeaveProgress | null>(null);
-  const [weaveProposal, setWeaveProposal] = useState<PendingTruthProposal | null>(null);
+
   const stage = useBookStage(bookId);
   const [pageError, setPageError] = useState<string | null>(null);
   const [splitHint, setSplitHint] = useState(false);
@@ -134,9 +124,13 @@ export function OutlineWorkspace({
   );
 
   useEffect(() => {
-    void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
-      .then((body) => setVolumeMap(body.content ?? ""))
-      .catch(() => setVolumeMap(""));
+    void Promise.all([
+      fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`).catch(() => ({ content: "" })),
+      fetchJson<{ candidateWeave?: { body?: string } }>(`/authoring/workspace?bookId=${encodeURIComponent(bookId)}`).catch(() => ({ candidateWeave: undefined })),
+    ]).then(([file, workspace]) => {
+      const adopted = file.content ?? "";
+      setVolumeMap(adopted.trim() ? adopted : (workspace.candidateWeave?.body ?? ""));
+    }).catch(() => setVolumeMap(""));
   }, [bookId]);
 
   useEffect(() => {
@@ -168,7 +162,6 @@ export function OutlineWorkspace({
   const targetChapters = data?.book.targetChapters && data.book.targetChapters > 0
     ? data.book.targetChapters
     : Math.max(tree.chapterCount, 1);
-  const weaveAction = resolveOutlineWeaveAction(tree, targetChapters, volumeMap);
   const lockedVolumes = lockedNamedVolumeCount(tree);
   const plannedChapters = tree.chapterCount;
 
@@ -177,23 +170,6 @@ export function OutlineWorkspace({
       .then((body) => setVolumeMap(body.content ?? ""))
       .catch(() => setVolumeMap(""));
   };
-
-  useEffect(() => {
-    if (!weaving || weaveStartedAt == null) return;
-    setWeaveNow(Date.now());
-    const timer = window.setInterval(() => setWeaveNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [weaving, weaveStartedAt]);
-
-  useEffect(() => {
-    if (!weaving || !sse?.messages.length || weaveStartedAt == null) return;
-    const latest = [...sse.messages].reverse().find((message) =>
-      applyOutlineWeaveSseEvent(bookId, message.event, message.data, weaveStartedAt),
-    );
-    if (!latest) return;
-    const next = applyOutlineWeaveSseEvent(bookId, latest.event, latest.data, weaveStartedAt);
-    if (next) setWeaveProgress(next);
-  }, [bookId, sse?.messages, weaveStartedAt, weaving]);
 
   const persistMap = async (next: string) => {
     await fetchJson(`/books/${bookId}/truth/outline/volume_map.md`, {
@@ -204,66 +180,8 @@ export function OutlineWorkspace({
     setVolumeMap(next);
   };
 
-  const openWeave = async () => {
-    if (!groundDone) return;
-    const action = resolveOutlineWeaveAction(tree, targetChapters, volumeMap);
-    if (action.disabled) return;
-    const startedAt = Date.now();
-    setWeaving(true);
-    setWeaveStartedAt(startedAt);
-    setWeaveNow(startedAt);
-    setPageError(null);
-    setWeaveProgress({
-      bookId,
-      phase: action.step === "volumes" ? "start" : "chunk",
-      talkingToModel: action.step === "batch",
-      chapterStart: action.chapterStart,
-      chapterEnd: action.chapterEnd,
-      elapsedMs: 0,
-      message: action.step === "volumes"
-        ? (isZh ? "正在锁定卷纲…" : "Locking volume split…")
-        : (isZh
-          ? `第${action.chapterStart}–${action.chapterEnd}章 · 正在请求模型`
-          : `Ch. ${action.chapterStart}–${action.chapterEnd} · talking to the model`),
-    });
-    try {
-      const url = buildApiUrl(`/books/${bookId}/outline/weave`);
-      if (!url) throw new Error("织卷 failed");
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: action.mode }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const parsed = readOutlineWeaveErrorBody(body);
-        if (parsed.proposal?.id && parsed.proposal.fileName) {
-          setWeaveProposal({
-            id: parsed.proposal.id,
-            fileName: parsed.proposal.fileName,
-            unifiedDiff: parsed.proposal.unifiedDiff ?? "",
-          });
-        }
-        throw new Error(parsed.message);
-      }
-      const result = body as { proposal?: PendingTruthProposal };
-      if (result.proposal) {
-        setWeaveProposal(result.proposal);
-        return;
-      }
-      setWeaveProposal(null);
-      reloadVolumeMap();
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "织卷 failed");
-    } finally {
-      setWeaving(false);
-      setWeaveStartedAt(null);
-      setWeaveProgress(null);
-    }
-  };
-
   const saveSelected = async (persistSplit = false) => {
-    if (!selected || !groundDone) return;
+    if (!selected) return;
     const language = isZh ? "zh" : "en";
     let nextTitle = titleDraft;
     let nextSummary = summaryDraft;
@@ -308,7 +226,6 @@ export function OutlineWorkspace({
   };
 
   const addFirstChapter = async () => {
-    if (!groundDone) return;
     const next = insertChapterStub(volumeMap, data?.nextChapter ?? 1);
     setSaving(true);
     setPageError(null);
@@ -323,7 +240,6 @@ export function OutlineWorkspace({
   };
 
   const tidyOutline = async (deep = false) => {
-    if (!groundDone) return;
     const language = isZh ? "zh" : "en";
     const next = deep
       ? tidyVolumeMapMarkdown(volumeMap, language)
@@ -356,7 +272,6 @@ export function OutlineWorkspace({
   const empty = tree.volumeCount === 0 && tree.chapterCount === 0;
   const ungrounded = stage !== null && !groundDone;
   const guide = weaveGuideWhenUngrounded(isZh);
-  const treeReadOnly = ungrounded || !groundDone;
 
   return (
     <div className="space-y-5 fade-in" data-testid="outline-workspace">
@@ -371,50 +286,34 @@ export function OutlineWorkspace({
             ? `已排 ${plannedChapters} / 目标 ${targetChapters} 章 · 已锁 ${lockedVolumes} / ${tree.volumeCount} 卷`
             : `${plannedChapters} / ${targetChapters} outlined · ${lockedVolumes} / ${tree.volumeCount} locked volumes`}
         </div>
-        <button
-          type="button"
-          data-testid="outline-weave"
-          onClick={() => void openWeave()}
-          disabled={weaving || weaveAction.disabled || treeReadOnly}
-          className="btn-primary disabled:opacity-40"
-        >
-          <Feather size={14} />
-          {weaving ? (isZh ? "织卷中…" : "Weaving…") : outlineWeaveButtonLabel(weaveAction, isZh)}
-        </button>
       </div>
 
-      {weaving && (
-        <div
-          className="rounded-xl border border-primary/30 bg-primary/[0.06] px-3 py-2 text-sm text-foreground"
-          data-testid="outline-weave-progress"
-        >
-          {formatOutlineWeaveProgress({
-            phase: weaveProgress?.phase ?? "start",
-            talkingToModel: weaveProgress?.talkingToModel ?? true,
-            volumeNumber: weaveProgress?.volumeNumber,
-            volumeCount: weaveProgress?.volumeCount,
-            volumeTitle: weaveProgress?.volumeTitle,
-            chapterStart: weaveProgress?.chapterStart,
-            chapterEnd: weaveProgress?.chapterEnd,
-            completedChapters: weaveProgress?.completedChapters,
-            targetChapters: weaveProgress?.targetChapters,
-            elapsedMs: weaveStartedAt != null ? Math.max(0, weaveNow - weaveStartedAt) : (weaveProgress?.elapsedMs ?? 0),
-            message: weaveProgress?.message
-              ?? (isZh ? "织卷中，正在请求模型…" : "Weaving, talking to the model…"),
-          }, isZh)}
-        </div>
-      )}
+      <AuthoringWeavePanel
+        bookId={bookId}
+        targetChapters={targetChapters}
+        isZh={isZh}
+        onAdopted={() => {
+          void reloadVolumeMap();
+          (nav.toWrite ?? nav.toBookSettings)?.(bookId);
+        }}
+      />
 
       {ungrounded ? (
-        <LiteraryEmpty
-          title={guide.title}
-          subtitle={guide.subtitle}
-          action={guide.action}
-          onAction={() => (nav.toGround ?? nav.toTruth ?? nav.toBook)(bookId)}
-          testId="outline-ungrounded"
-        />
-      ) : (
-        <>
+        <div
+          className="rounded-xl border border-border/50 bg-secondary/30 px-3 py-2 text-sm text-muted-foreground"
+          data-testid="outline-ungrounded"
+        >
+          {guide.subtitle}
+          <button
+            type="button"
+            className="ml-2 underline"
+            onClick={() => (nav.toGround ?? nav.toTruth ?? nav.toBook)(bookId)}
+          >
+            {guide.action}
+          </button>
+        </div>
+      ) : null}
+
           <div className="flex flex-wrap items-center gap-2">
             <input
               value={query}
@@ -457,24 +356,10 @@ export function OutlineWorkspace({
             </DropdownMenu>
           </div>
 
-          {weaveProposal && (
-            <TruthProposalCard
-              bookId={bookId}
-              proposal={weaveProposal}
-              isZh={isZh}
-              onResolved={() => {
-                setWeaveProposal(null);
-                reloadVolumeMap();
-              }}
-            />
-          )}
-
           {empty ? (
             <LiteraryEmpty
               title={isZh ? "还没有卷纲" : "No volume outline yet"}
-              subtitle={isZh ? "先定卷，再每次排十章。" : "Lock volumes, then weave ten chapters at a time."}
-              action={weaving ? (isZh ? "织卷中…" : "Weaving…") : outlineWeaveButtonLabel(weaveAction, isZh)}
-              onAction={() => void openWeave()}
+              subtitle={isZh ? "用上方「规划全书每章概要」生成，或在下面手动加章。" : "Use “plan every chapter” above, or add a chapter by hand."}
               testId="outline-empty"
             />
           ) : (
@@ -542,7 +427,7 @@ export function OutlineWorkspace({
                     type="button"
                     data-testid="outline-add-chapter"
                     onClick={() => void addFirstChapter()}
-                    disabled={treeReadOnly}
+                    
                     className="btn-ghost h-8 px-1 text-[13px] underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal disabled:opacity-40"
                   >
                     {isZh ? "新增一章" : "Add chapter"}
@@ -552,7 +437,7 @@ export function OutlineWorkspace({
                     data-testid="outline-tidy"
                     title={isZh ? "只整理超长短题。按住 ⌥ 深度整理卷头与备注。" : "Normalize long titles. Hold ⌥ for a deep tidy."}
                     onClick={(event) => void tidyOutline(event.altKey)}
-                    disabled={treeReadOnly}
+                    
                     className="btn-ghost h-8 px-1 text-[13px] underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal disabled:opacity-40"
                   >
                     {isZh ? "整理卷纲" : "Tidy volumes"}
@@ -561,7 +446,7 @@ export function OutlineWorkspace({
                     type="button"
                     data-testid="outline-tidy-deep"
                     onClick={() => void tidyOutline(true)}
-                    disabled={treeReadOnly}
+                    
                     className="btn-ghost h-8 px-1 text-[13px] text-muted-foreground underline decoration-[color-mix(in_oklch,var(--foreground)_25%,transparent)] hover:decoration-seal disabled:opacity-40"
                   >
                     {isZh ? "深度整理" : "Deep tidy"}
@@ -581,14 +466,14 @@ export function OutlineWorkspace({
                       value={titleDraft}
                       onChange={(event) => setTitleDraft(event.target.value)}
                       onBlur={() => void saveSelected()}
-                      disabled={treeReadOnly}
+                      
                       className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 font-serif text-xl outline-none focus:border-primary/50"
                     />
                     <textarea
                       value={summaryDraft}
                       onChange={(event) => setSummaryDraft(event.target.value)}
                       rows={8}
-                      disabled={treeReadOnly}
+                      
                       className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 text-sm leading-6 outline-none focus:border-primary/50"
                     />
                   </>
@@ -607,7 +492,7 @@ export function OutlineWorkspace({
                           maxLength={selected.kind === "range" ? undefined : (isZh ? HARD_CHAPTER_TITLE_CHARS : HARD_CHAPTER_TITLE_CHARS * 2)}
                           onChange={(event) => setTitleDraft(event.target.value)}
                           onBlur={() => void saveSelected(false)}
-                          disabled={treeReadOnly}
+                          
                           className="w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 pr-14 font-serif text-xl outline-none focus:ring-1 focus:ring-ring"
                         />
                         {selected.kind !== "range" && (
@@ -632,7 +517,7 @@ export function OutlineWorkspace({
                         value={summaryDraft}
                         onChange={(event) => setSummaryDraft(event.target.value)}
                         rows={8}
-                        disabled={treeReadOnly}
+                        
                         className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 text-sm leading-6 outline-none focus:border-primary/50"
                       />
                     </label>
@@ -643,7 +528,7 @@ export function OutlineWorkspace({
                       <button
                         type="button"
                         onClick={() => void saveSelected(true)}
-                        disabled={saving || treeReadOnly}
+                        disabled={saving}
                         className="btn-secondary disabled:opacity-50"
                       >
                         {saving
@@ -668,8 +553,6 @@ export function OutlineWorkspace({
               </div>
             </div>
           )}
-        </>
-      )}
 
       {pageError && <p className="text-sm text-destructive">{pageError}</p>}
     </div>

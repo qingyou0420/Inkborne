@@ -5,6 +5,8 @@
  */
 
 import { fetchJson, useApi } from "../hooks/use-api";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
 import { useEffect, useMemo, useState } from "react";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { StageDot } from "../components/StageDot";
@@ -107,6 +109,7 @@ export function BookStudy({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
+  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
@@ -233,6 +236,14 @@ export function BookStudy({
         ? `正典变更 ${snapshot.pendingProposalCount} 处 → 查看`
         : `${snapshot.pendingProposalCount} canon changes → view`,
       onClick: () => setCanonOpen((open) => !open),
+    });
+  }
+  for (const watch of authoring?.manifest?.watches ?? []) {
+    if (watch.acknowledged) continue;
+    attentionItems.push({
+      key: `watch-${watch.id}`,
+      label: watch.label,
+      onClick: () => goStage(nav, bookId, watch.stage === "ground" || watch.stage === "weave" || watch.stage === "write" || watch.stage === "ask" ? watch.stage : "ground"),
     });
   }
   for (const hook of snapshot?.overdueHooks ?? []) {
@@ -458,14 +469,22 @@ export function BookStudy({
           <StepLine
             state={stage?.steps.ground}
             label={isZh ? "研墨" : "Ground"}
-            status={stepCopy.ground}
+            status={
+              authoring?.manifest?.coverage?.settingsTarget
+                ? `${stepCopy.ground} · ${isZh ? "已采用" : "adopted"} ${authoring.manifest.coverage.settingsAdopted ?? 0}/${authoring.manifest.coverage.settingsTarget}`
+                : stepCopy.ground
+            }
             onClick={() => goStage(nav, bookId, "ground")}
             testId="study-step-ground"
           />
           <StepLine
             state={stage?.steps.weave}
             label={isZh ? "织卷" : "Weave"}
-            status={stepCopy.weave}
+            status={
+              authoring?.manifest?.coverage?.chaptersTarget
+                ? `${stepCopy.weave} · ${isZh ? "已生成" : "generated"} ${authoring.manifest.coverage.chaptersGenerated ?? 0}/${authoring.manifest.coverage.chaptersTarget}`
+                : stepCopy.weave
+            }
             onClick={() => goStage(nav, bookId, "weave")}
             testId="study-step-weave"
           />

@@ -12,6 +12,7 @@ import { AuthorPage } from "./pages/AuthorPage";
 import { OutlineWorkspace } from "./pages/OutlineWorkspace";
 import { BookGround } from "./pages/BookGround";
 import { AskCreateRail } from "./components/AskCreateRail";
+import { AskCanonPanel } from "./components/AskCanonPanel";
 import { BookAskPage } from "./pages/BookAskPage";
 import { ToastHost } from "./components/ToastHost";
 import { ChapterReader } from "./pages/ChapterReader";
@@ -320,6 +321,7 @@ export function App() {
                 sse={sse}
               />
               <AskCreateRail isZh={currentLang !== "en"} />
+              <AskCanonPanel isZh={currentLang !== "en"} onAdopted={(id) => nav.toAsk(id)} />
             </div>
           )}
           {route.page === "chat" && (

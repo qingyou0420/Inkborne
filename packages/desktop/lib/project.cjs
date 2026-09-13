@@ -13,6 +13,19 @@ function defaultProjectRoot(documentsDir) {
   return path.join(documents, DEFAULT_FOLDER);
 }
 
+/** Return a saved root only when inkos.json is already there. */
+function resolveSavedProjectRoot(savedRoot) {
+  const saved = String(savedRoot || "").trim();
+  if (!isAbsoluteRoot(saved)) return "";
+  const resolved = path.resolve(saved);
+  try {
+    if (fs.existsSync(path.join(resolved, "inkos.json"))) return resolved;
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 function isAbsoluteRoot(root) {
   const value = String(root || "").trim();
   if (!value) return false;
@@ -212,6 +225,7 @@ module.exports = {
   DEFAULT_FOLDER,
   DEFAULT_CUSTOM_SERVICE_NAME,
   defaultProjectRoot,
+  resolveSavedProjectRoot,
   isAbsoluteRoot,
   ensureProjectLayout,
   customServiceName,
