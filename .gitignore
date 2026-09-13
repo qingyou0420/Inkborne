@@ -37,3 +37,6 @@ yarn-error.log*
 .pnpm-debug.log*
 .vercel
 next-env.d.ts
+
+# local review / audit evidence (large, never commit)
+/迭代与审查/
