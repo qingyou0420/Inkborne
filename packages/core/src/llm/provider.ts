@@ -500,7 +500,8 @@ function resolvePiApi(
   apiFormat: LLMConfig["apiFormat"] | undefined,
   presetApi: PiApi | undefined,
 ): PiApi {
-  if (serviceName === "custom") {
+  const customFamily = serviceName === "custom" || serviceName.startsWith("custom:");
+  if (customFamily) {
     return apiFormat === "responses" ? "openai-responses" : "openai-completions";
   }
   return (presetApi ?? "openai-completions") as PiApi;

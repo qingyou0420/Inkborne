@@ -30,7 +30,7 @@ export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
   const [pending, setPending] = useState(false);
 
   const proposed = useMemo(() => {
-    const execs = activeSession?.toolExecutions ?? [];
+    const execs = messages.flatMap((message) => message.toolExecutions ?? []);
     for (let i = execs.length - 1; i >= 0; i -= 1) {
       const details = getProposedActionDetails(execs[i]!);
       if (details?.action === "create_book") {
@@ -45,7 +45,7 @@ export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
       }
     }
     return null;
-  }, [activeSession?.toolExecutions]);
+  }, [messages]);
 
   const card = extractStoryCardDraft({
     messages: messages.map((message) => ({ role: message.role, content: message.content })),

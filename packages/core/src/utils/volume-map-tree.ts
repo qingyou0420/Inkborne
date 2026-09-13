@@ -395,10 +395,20 @@ export function parseVolumeMapTree(markdown: string): VolumeMapTree {
   };
 }
 
+export function findExactChapterNode(
+  tree: VolumeMapTree,
+  chapterNumber: number,
+): VolumeMapChapterNode | undefined {
+  const nodes = [...tree.volumes.flatMap((volume) => volume.chapters), ...tree.orphanChapters];
+  return nodes.find((node) => node.kind === "chapter" && node.chapterNumber === chapterNumber);
+}
+
 export function findChapterNode(
   tree: VolumeMapTree,
   chapterNumber: number,
 ): VolumeMapChapterNode | undefined {
+  const exact = findExactChapterNode(tree, chapterNumber);
+  if (exact) return exact;
   const nodes = [...tree.volumes.flatMap((volume) => volume.chapters), ...tree.orphanChapters];
   return nodes.find((node) => {
     if (node.kind === "range" && node.endChapter) {
@@ -408,29 +418,45 @@ export function findChapterNode(
   });
 }
 
+export function findMatchingVolumeForChapter(
+  tree: VolumeMapTree,
+  chapterNumber: number,
+): VolumeMapVolumeNode | undefined {
+  const exact = tree.volumes.find((volume) => volume.chapters.some((node) => (
+    node.kind === "chapter" && node.chapterNumber === chapterNumber
+  )));
+  if (exact) return exact;
+  const declared = tree.volumes.find((volume) => (
+    volume.startChapter != null
+    && volume.endChapter != null
+    && chapterNumber >= volume.startChapter
+    && chapterNumber <= volume.endChapter
+  ));
+  if (declared) return declared;
+  return tree.volumes.find((volume) => volume.chapters.some((node) => (
+    node.kind === "range"
+    && node.endChapter != null
+    && chapterNumber >= node.chapterNumber
+    && chapterNumber <= node.endChapter
+  )));
+}
+
 export function findVolumeForChapter(
   tree: VolumeMapTree,
   chapterNumber: number,
 ): VolumeMapVolumeNode | undefined {
-  for (const volume of tree.volumes) {
-    if (volume.chapters.some((node) => {
-      if (node.kind === "range" && node.endChapter) {
-        return chapterNumber >= node.chapterNumber && chapterNumber <= node.endChapter;
-      }
-      return node.chapterNumber === chapterNumber;
-    })) {
-      return volume;
-    }
-    if (
-      volume.startChapter != null
-      && volume.endChapter != null
-      && chapterNumber >= volume.startChapter
-      && chapterNumber <= volume.endChapter
-    ) {
-      return volume;
-    }
-  }
-  return tree.volumes[0];
+  return findMatchingVolumeForChapter(tree, chapterNumber) ?? tree.volumes[0];
+}
+
+export function findVolumeOwningNode(
+  tree: VolumeMapTree,
+  nodeId: string,
+): VolumeMapVolumeNode | undefined {
+  return tree.volumes.find((volume) =>
+    volume.id === nodeId
+    || volume.chapters.some((chapter) => chapter.id === nodeId)
+    || volume.notes.some((note) => note.id === nodeId)
+  );
 }
 
 export function recommendedOutlineNodeId(tree: VolumeMapTree, nextChapter: number): string | null {
@@ -584,7 +610,8 @@ export function applyVolumeMapNodeEdit(
       return replaceLineRange(markdown, node.lineStart, node.lineStart, [nextHeader]);
     }
     const firstChapterStart = node.chapters[0]?.lineStart;
-    const bodyUntil = firstChapterStart ?? node.lineEnd + 1;
+    const firstNoteStart = node.notes[0]?.lineStart;
+    const bodyUntil = firstChapterStart ?? firstNoteStart ?? node.lineEnd + 1;
     return [...lines.slice(0, node.lineStart), nextHeader, ...patch.summary.split("\n"), ...lines.slice(bodyUntil)].join("\n");
   }
 
@@ -959,6 +986,40 @@ export function resolveOutlineWeaveStep(
   return nextUnfilledChapterBatch(tree, targetChapters).length > 0 ? "batch" : "done";
 }
 
+function firstVolumeOrChapterLine(tree: VolumeMapTree, lineCount: number): number {
+  const starts = [
+    ...tree.volumes.map((volume) => volume.lineStart),
+    ...tree.orphanChapters.map((chapter) => chapter.lineStart),
+  ];
+  return starts.length > 0 ? Math.min(...starts) : lineCount;
+}
+
+export function volumeMapPreamble(markdown: string): string {
+  const tree = parseVolumeMapTree(markdown);
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const starts = [
+    ...tree.volumes.map((volume) => volume.lineStart),
+    ...tree.orphanChapters.map((chapter) => chapter.lineStart),
+    ...tree.orphanNotes.map((note) => note.lineStart),
+  ];
+  const first = starts.length > 0 ? Math.min(...starts) : lines.length;
+  return lines.slice(0, first).join("\n").trim();
+}
+
+export function volumeMapLeadingNotesMarkdown(markdown: string): string {
+  const tree = parseVolumeMapTree(markdown);
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const firstStructure = firstVolumeOrChapterLine(tree, lines.length);
+  return tree.orphanNotes
+    .filter((note) => note.lineStart < firstStructure)
+    .map((note) => {
+      const heading = (lines[note.lineStart] ?? "").trim() || `## ${note.title}`;
+      return [heading, note.body].filter((part) => part.trim()).join("\n");
+    })
+    .join("\n\n")
+    .trim();
+}
+
 export function leftoverVolumeMapProse(markdown: string): string {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const kept: string[] = [];
@@ -971,12 +1032,14 @@ export function leftoverVolumeMapProse(markdown: string): string {
 
 export function renderVolumeMapMarkdown(
   volumes: ReadonlyArray<AssembledVolume>,
-  options?: { readonly preamble?: string; readonly language?: "zh" | "en" },
+  options?: { readonly preamble?: string; readonly leadingNotes?: string; readonly language?: "zh" | "en" },
 ): string {
   const language = options?.language === "en" ? "en" : "zh";
   const blocks: string[] = [];
   const preamble = options?.preamble?.trim();
+  const leadingNotes = options?.leadingNotes?.trim();
   if (preamble) blocks.push(preamble);
+  if (leadingNotes) blocks.push(leadingNotes);
   for (const volume of volumes) {
     const heading = language === "en"
       ? `## Volume ${volume.volumeNumber} ${volume.title} (${volume.startChapter}-${volume.endChapter})`

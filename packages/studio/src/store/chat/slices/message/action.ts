@@ -583,7 +583,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       if (data.model?.id) {
         const nextService = data.model.service ?? get().selectedService;
         if (data.model.id !== get().selectedModel || nextService !== get().selectedService) {
-          get().setSelectedModel(data.model.id, nextService);
+          if (nextService) get().setSelectedModel(data.model.id, nextService);
         }
       }
       if (data.model?.notice) {

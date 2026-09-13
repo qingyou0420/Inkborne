@@ -14,6 +14,8 @@ import {
   isPlaceholderVolumeTitle,
   volumeMapHasLockedNamedVolumes,
   parseVolumeMapTree,
+  volumeMapPreamble,
+  volumeMapLeadingNotesMarkdown,
   splitOutlineTitleAndSummary,
   tidyVolumeMapMarkdown,
   planVolumeRanges,
@@ -399,5 +401,124 @@ describe("normalizeVolumeMapChapterHeadings", () => {
     const source = outlineEditorSource(node);
     expect(source.split).toBe(true);
     expect(applyOutlineWorkspaceSave(markdown, node.id, source.title, source.summary)).toBe(markdown);
+  });
+
+  it("extracts the same preamble for standard, plain, and bold volume headings (R9-02)", () => {
+    const samples = [
+      ["standard", "## 第1卷 纸城（1-4章）\n卷纲。\n## 第 1 章 来信\n死亡。\n"],
+      ["plain", "第1卷 纸城（1-4章）\n卷纲。\n第 1 章 来信\n死亡。\n"],
+      ["bold", "## **第1卷** 纸城（1-4章）\n卷纲。\n## **第 1 章** 来信\n死亡。\n"],
+    ] as const;
+    for (const [label, structure] of samples) {
+      const markdown = `唯一全书纲 BOOK_OVERVIEW。\n\n${structure}`;
+      const tree = parseVolumeMapTree(markdown);
+      expect(tree.volumeCount, label).toBe(1);
+      expect(tree.chapterCount, label).toBe(1);
+      expect(volumeMapPreamble(markdown), label).toBe("唯一全书纲 BOOK_OVERVIEW。");
+      expect(volumeMapPreamble(markdown), label).not.toContain("死亡");
+      expect(volumeMapPreamble(markdown), label).not.toContain("卷纲");
+    }
+    const mixed = [
+      "叙述里会提到第1章和第2卷，但那不是标题。",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "卷纲。",
+      "## 第 1 章 来信",
+      "死亡。",
+    ].join("\n");
+    expect(volumeMapPreamble(mixed)).toContain("第1章和第2卷");
+    expect(volumeMapPreamble(mixed)).not.toContain("死亡");
+    expect(parseVolumeMapTree(mixed).volumeCount).toBe(1);
+  });
+
+  it("keeps volume-order notes out of the book outline and formats them for rewrite (R10-01)", () => {
+    const samples = [
+      ["## 第1卷·节点A", "作者要求全书坚持限知视角，禁止提前泄露幕后身份。"],
+      ["## 第一卷：人物弧线", "作者要求配角不会背叛主角。"],
+      ["## **第1卷**·节点A", "作者要求保留配角生还线索。"],
+    ] as const;
+    for (const [heading, body] of samples) {
+      const markdown = [
+        "唯一全书纲 BOOK_OVERVIEW。",
+        "",
+        heading,
+        body,
+        "",
+        "## 第1卷 纸城（1-4章）",
+        "卷纲。",
+        "## 第 1 章 来信",
+        "死亡。",
+      ].join("\n");
+      const tree = parseVolumeMapTree(markdown);
+      expect(tree.orphanNotes.length).toBe(1);
+      expect(volumeMapPreamble(markdown)).toBe("唯一全书纲 BOOK_OVERVIEW。");
+      expect(volumeMapPreamble(markdown)).not.toContain(body);
+      const notes = volumeMapLeadingNotesMarkdown(markdown);
+      expect(notes).toContain(heading);
+      expect(notes).toContain(body);
+    }
+    const ordinary = [
+      "BOOK_OVERVIEW。",
+      "## 写作方向",
+      "限知视角。",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "卷纲。",
+      "## 第 1 章 来信",
+      "死亡。",
+    ].join("\n");
+    expect(parseVolumeMapTree(ordinary).orphanNotes).toHaveLength(0);
+    expect(volumeMapPreamble(ordinary)).toContain("写作方向");
+    expect(volumeMapPreamble(ordinary)).toContain("限知视角");
+    expect(volumeMapLeadingNotesMarkdown(ordinary)).toBe("");
+  });
+
+  it("saves an empty volume summary without deleting later notes (R11-02)", () => {
+    const source = [
+      "# 全书",
+      "BOOK_OVERVIEW",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "EMPTY_VOLUME_BODY",
+      "",
+      "## 第1卷·节点A",
+      "EMPTY_VOLUME_NOTE",
+      "",
+      "## 第2卷 南岸（5-5章）",
+      "VOL2_BODY",
+      "",
+      "## 第 5 章 渡口",
+      "CH5_SUMMARY",
+      "",
+    ].join("\n");
+    const tree = parseVolumeMapTree(source);
+    const volume = tree.volumes[0]!;
+    expect(volume.notes.some((note) => note.body.includes("EMPTY_VOLUME_NOTE"))).toBe(true);
+    const sourceEdit = outlineEditorSource(volume);
+    expect(applyOutlineWorkspaceSave(source, volume.id, sourceEdit.title, sourceEdit.summary)).toBe(source);
+    const next = applyOutlineWorkspaceSave(
+      source,
+      volume.id,
+      sourceEdit.title,
+      `${sourceEdit.summary}\nUSER_ADDED_ONE_LINE`,
+    );
+    expect(next).toContain("USER_ADDED_ONE_LINE");
+    expect(next).toContain("EMPTY_VOLUME_NOTE");
+    expect(next).toContain("VOL2_BODY");
+    expect(next).toContain("CH5_SUMMARY");
+    const twoNotes = source.replace(
+      "EMPTY_VOLUME_NOTE",
+      "EMPTY_VOLUME_NOTE\n\n## 第1卷·节点B\nSECOND_NOTE",
+    );
+    const twoTree = parseVolumeMapTree(twoNotes);
+    const editedTwo = applyOutlineWorkspaceSave(
+      twoNotes,
+      twoTree.volumes[0]!.id,
+      outlineEditorSource(twoTree.volumes[0]!).title,
+      `${outlineEditorSource(twoTree.volumes[0]!).summary}\nUSER_ADDED_ONE_LINE`,
+    );
+    expect(editedTwo).toContain("EMPTY_VOLUME_NOTE");
+    expect(editedTwo).toContain("SECOND_NOTE");
+    expect(editedTwo).toContain("VOL2_BODY");
   });
 });
