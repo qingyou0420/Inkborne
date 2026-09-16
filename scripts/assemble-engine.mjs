@@ -20,7 +20,8 @@ function run(command, args, cwd = repoRoot) {
     const child = spawn(command, args, {
       cwd,
       stdio: "inherit",
-      shell: process.platform === "win32",
+      // Keep executable/script paths with spaces intact for Node subprocesses.
+      shell: process.platform === "win32" && command !== process.execPath,
       env: process.env,
     });
     child.on("exit", (code) => {
