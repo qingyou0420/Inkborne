@@ -1,306 +1,246 @@
-/**
- * 问心 right rail: editable canon candidate, review, adopt.
- *
- * SPDX-License-Identifier: AGPL-3.0-only
- */
-
-import { useEffect, useMemo, useRef, useState } from "react";
-import { postApi, putApi, useApi } from "../hooks/use-api";
+/** 问心: conversation-led canon reading, explicit editing and adoption.
+ * SPDX-License-Identifier: AGPL-3.0-only */
+import { useEffect, useRef, useState } from "react";
+import { Check, FileCheck2, MoreHorizontal, PanelRightClose, PanelRightOpen, PencilLine, Save } from "lucide-react";
+import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { showToast } from "../lib/toast";
+import { registerNavigationGuard } from "../lib/edit-navigation";
 import { chatSelectors, useChatStore } from "../store/chat";
-import type { AuthoringWorkspace } from "../lib/authoring-workspace";
-import { reportForArtifact, resolveAdoptArtifactId } from "../lib/authoring-workspace";
+import type { SessionRuntime } from "../store/chat/types";
+import type { AuthoringArtifact, AuthoringWorkspace } from "../lib/authoring-workspace";
+import { resolveAdoptArtifactId } from "../lib/authoring-workspace";
+import { askCanonScopeKey, askConversation, askReportState, createAskCanonEditor, isAskSession } from "./ask-canon-state";
+import { canonFieldNames, readCanonFields, updateCanonField, updateCanonText, validateCanonFields } from "./ask-canon-fields";
+import { ManuscriptView } from "./ManuscriptView";
+import { RegenerateDialog } from "./RegenerateDialog";
+import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
 import { Drawer } from "./ui/drawer";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "./ui/dropdown-menu";
+import "./ask-workspace.css";
 
-interface CanonDoc {
-  readonly title?: string;
-  readonly oneLine?: string;
-  readonly proposition?: string;
-  readonly protagonist?: string;
-  readonly conflict?: string;
-  readonly voice?: string;
-  readonly boundaries?: string;
-  readonly direction?: string;
-  readonly openQuestions?: string[];
-}
-
-export function AskCanonPanel({
-  bookId,
-  isZh,
-  onAdopted,
-}: {
+interface AskCanonProps {
   readonly bookId?: string;
+  readonly resumeSessionId?: string;
   readonly isZh: boolean;
   readonly onAdopted?: (bookId: string) => void;
-}) {
-  const sessionId = useChatStore((state) => state.activeSessionId);
-  const messages = useChatStore(chatSelectors.activeMessages);
-  const [draftId, setDraftId] = useState<string | undefined>(undefined);
-  const query = bookId
-    ? `bookId=${encodeURIComponent(bookId)}`
-    : draftId
-      ? `draftId=${encodeURIComponent(draftId)}`
-      : "";
-  const { data, refetch } = useApi<AuthoringWorkspace>(query ? `/authoring/workspace?${query}` : "");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [reuseStale, setReuseStale] = useState(false);
-  const [editBody, setEditBody] = useState("");
-  const dirtyRef = useRef(false);
-  const lastLoadedId = useRef<string>("");
-  const candidate = data?.candidateAsk;
+}
+interface CanonVersion { readonly meta: AuthoringArtifact; readonly body: string }
+interface RevisionIntent { readonly selectedIssueIds: ReadonlyArray<string>; readonly reuseStale?: boolean; readonly reportId: string }
+
+// Scope remounts isolate responses. Session-only editing buffers survive navigation.
+export function AskCanonPanel(props: AskCanonProps) {
+  const activeSession = useChatStore(chatSelectors.activeSession);
+  const session = isAskSession(activeSession, props.bookId) && (!props.resumeSessionId || activeSession?.sessionId === props.resumeSessionId) ? activeSession : null;
+  return <CanonEditor key={props.bookId ? `book:${props.bookId}` : `draft:${session?.sessionId ?? "pending"}`} {...props} session={session} />;
+}
+
+function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { readonly session: SessionRuntime | null }) {
+  const [draftId, setDraftId] = useState<string>();
+  const [draftError, setDraftError] = useState<string>();
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const query = bookId ? `bookId=${encodeURIComponent(bookId)}` : draftId ? `draftId=${encodeURIComponent(draftId)}` : "";
+  const { data, loading, error, refetch } = useApi<AuthoringWorkspace>(query ? `/authoring/workspace?${query}` : "");
+  const adoptedOnlyId = !data?.candidateAsk ? data?.adoptedAskId : undefined;
+  const adoptedCopy = useApi<CanonVersion>(adoptedOnlyId ? `/authoring/artifacts/${encodeURIComponent(adoptedOnlyId)}?${query}` : "");
+  const candidate = data?.candidateAsk ?? (adoptedCopy.data && adoptedCopy.data.meta.artifactId === adoptedOnlyId
+    ? { artifactId: adoptedCopy.data.meta.artifactId, version: adoptedCopy.data.meta.version, body: adoptedCopy.data.body, status: "adopted" } : undefined);
   const adopted = data?.canon;
-  const report = reportForArtifact(data?.reports, candidate?.artifactId) ?? data?.reports?.[0];
-  const preview = candidate?.canon ?? (candidate ? undefined : adopted);
+  const editor = useRef(createAskCanonEditor(askCanonScopeKey(bookId, session?.sessionId)));
+  const [editState, setEditState] = useState(editor.current.snapshot);
+  const { body: editBody, dirty, editBaseId, pendingSavedId } = editState;
+  const [editing, setEditing] = useState(dirty);
+  const [expanded, setExpanded] = useState(dirty);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const navigationDecision = useRef<((allow: boolean) => void) | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const [actionError, setActionError] = useState<string>();
+  const [reportOpen, setReportOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItem, setHistoryItem] = useState<CanonVersion>();
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string>();
+  const historyRequest = useRef(0);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generationIssueIds, setGenerationIssueIds] = useState<string[]>([]);
+  const [revision, setRevision] = useState<RevisionIntent>();
+  const currentArtifactId = pendingSavedId ?? editBaseId ?? candidate?.artifactId;
+  const { report, stale } = askReportState(data?.reports, currentArtifactId, dirty);
+  const artifacts = (data?.artifacts ?? []).filter((item) => item.stage === "ask").slice().reverse();
+  const editingVersion = artifacts.find((item) => item.artifactId === currentArtifactId)?.version ?? (currentArtifactId === candidate?.artifactId ? candidate?.version : undefined);
+  const adoptedVersion = artifacts.find((item) => item.artifactId === data?.adoptedAskId)?.version;
+  const conversation = askConversation(session, bookId);
+  const scope = { bookId, draftId: bookId ? undefined : draftId };
+  const awaitingNewBody = Boolean(pendingSavedId && pendingSavedId !== editBaseId && pendingSavedId !== candidate?.artifactId);
+  const ready = Boolean(query && data && !loading && !error && !adoptedCopy.loading && !awaitingNewBody);
+  const hasManuscript = Boolean(candidate || editBaseId || adopted);
+  const isAdopted = Boolean(!dirty && currentArtifactId && currentArtifactId === data?.adoptedAskId);
+  const fields = readCanonFields(editBody);
 
-  useEffect(() => {
-    if (bookId) return;
-    let cancelled = false;
-    void postApi<{ draftId: string }>("/authoring/drafts/ensure", { sessionId: sessionId ?? undefined })
-      .then((draft) => {
-        if (!cancelled) setDraftId(draft.draftId);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [bookId, sessionId]);
-
-  useEffect(() => {
-    const loadKey = candidate?.artifactId ?? "empty";
-    if (dirtyRef.current && lastLoadedId.current === loadKey) return;
-    setEditBody(candidate?.body ?? "");
-    dirtyRef.current = false;
-    lastLoadedId.current = loadKey;
-  }, [candidate?.artifactId, candidate?.body]);
-
-  const conversation = useMemo(
-    () => messages.map((message) => `${message.role}: ${message.content}`).join("\n"),
-    [messages],
-  );
-
-  const run = async (label: string, fn: () => Promise<unknown>) => {
-    setBusy(label);
+  const ensureDraft = async () => {
+    if (bookId || !session) return;
+    setDraftError(undefined);
     try {
-      await fn();
-      await refetch();
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
+      const draft = await postApi<{ draftId: string }>("/authoring/drafts/ensure", { sessionId: session.sessionId });
+      if (mounted.current) setDraftId(draft.draftId);
+    } catch (failure) { if (mounted.current) setDraftError(failure instanceof Error ? failure.message : String(failure)); }
   };
-
-  const body = {
-    bookId,
-    draftId: bookId ? undefined : draftId,
-  };
-
-  const persistIfDirty = async (): Promise<string | undefined> => {
-    if (!candidate) return undefined;
-    if (!dirtyRef.current) return candidate.artifactId;
-    const saved = await putApi<{ artifactId?: string }>(`/authoring/artifacts/${candidate.artifactId}`, {
-      ...body,
-      body: editBody,
+  useEffect(() => { void ensureDraft(); }, [bookId, session?.sessionId]);
+  useEffect(() => {
+    if (data && editor.current.load(candidate, busyRef.current)) setEditState(editor.current.snapshot);
+  }, [data, candidate?.artifactId, candidate?.body, busy, dirty]);
+  useEffect(() => { if (hasManuscript) setExpanded(true); }, [candidate?.artifactId, Boolean(adopted)]);
+  useEffect(() => {
+    if (!dirty) return;
+    return registerNavigationGuard(() => {
+      if (busyRef.current) return false;
+      return new Promise<boolean>((resolve) => { navigationDecision.current = resolve; setCancelOpen(true); });
     });
-    dirtyRef.current = false;
-    await refetch();
-    return saved.artifactId ?? candidate.artifactId;
+  }, [dirty]);
+  useEffect(() => () => { navigationDecision.current?.(false); navigationDecision.current = null; }, []);
+  const answerNavigation = (allow: boolean) => {
+    navigationDecision.current?.(allow); navigationDecision.current = null;
   };
 
-  const historical = Boolean(report && candidate && !report.targetRefs.includes(candidate.artifactId));
+  const run = async (label: string, action: () => Promise<unknown>): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true; setBusy(label); setActionError(undefined);
+    try { await action(); return true; }
+    catch (failure) {
+      const message = failure instanceof Error ? failure.message : String(failure);
+      if (mounted.current) setActionError(message);
+      showToast(message, "error"); return false;
+    } finally { await refetch(); busyRef.current = false; if (mounted.current) setBusy(null); }
+  };
+  const persistIfDirty = async (): Promise<string | undefined> => {
+    const fieldError = validateCanonFields(editor.current.snapshot.body, isZh);
+    if (fieldError) throw new Error(fieldError);
+    const artifactId = await editor.current.save((baseId, body) => putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(baseId)}`, { ...scope, body }));
+    if (mounted.current) setEditState(editor.current.snapshot);
+    return artifactId;
+  };
+  const save = async () => {
+    const saved = await run("save", async () => {
+      await persistIfDirty();
+      if (!mounted.current) return;
+      setEditing(false); setCancelOpen(false);
+      showToast(isZh ? "候选已保存，已采用正典未变" : "Candidate saved; adopted canon unchanged", "success");
+    });
+    answerNavigation(saved);
+    return saved;
+  };
+  const changeBody = (body: string) => {
+    if (busyRef.current || !ready || !editing) return;
+    editor.current.change(body); setEditState(editor.current.snapshot);
+  };
+  const cancelEditing = () => {
+    if (dirty) setCancelOpen(true);
+    else { setEditing(false); setActionError(undefined); }
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || event.altKey || !editing) return;
+      event.preventDefault();
+      if (editBaseId && dirty && ready && !busyRef.current && !historyOpen && !generateOpen && !revision) void save();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  const loadVersion = async (artifactId: string) => {
+    const request = ++historyRequest.current;
+    setHistoryLoading(true); setHistoryError(undefined); setHistoryItem(undefined);
+    try {
+      const item = await fetchJson<CanonVersion>(`/authoring/artifacts/${encodeURIComponent(artifactId)}?${query}`);
+      if (mounted.current && request === historyRequest.current) setHistoryItem(item);
+    } catch (failure) { if (mounted.current && request === historyRequest.current) setHistoryError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { if (mounted.current && request === historyRequest.current) setHistoryLoading(false); }
+  };
+  const openHistory = (id?: string) => { setReportOpen(false); setHistoryOpen(true); if (id) void loadVersion(id); };
+  const review = () => {
+    setReportOpen(true); setExpanded(true);
+    void run("review", async () => {
+      await postApi("/authoring/ask/review", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), conversation });
+    });
+  };
+  const regenerate = (requirements: string) => run(revision ? "revise" : "generate", async () => {
+    const generated = revision
+      ? await postApi<{ artifactId: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, requirements, extraRequirement: requirements })
+      : await postApi<{ artifactId: string }>("/authoring/ask/generate", { ...scope, conversation, requirements });
+    editor.current.expectCandidate(generated.artifactId);
+    if (mounted.current) { setEditState(editor.current.snapshot); setExpanded(true); setReportOpen(false); }
+  });
+  const busyLabels: Record<string, string> = { save: isZh ? "保存中…" : "Saving…", generate: isZh ? "整理正典中…" : "Generating…", review: isZh ? "审查中…" : "Reviewing…", adopt: isZh ? "采用中…" : "Adopting…", revise: isZh ? "修订中…" : "Revising…", restore: isZh ? "恢复为候选中…" : "Restoring candidate…" };
+  const status = busy ? busyLabels[busy] : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : isAdopted ? (isZh ? "已采用" : "Adopted") : candidate ? (isZh ? "候选已保存" : "Candidate saved") : "";
+  const labels: Record<typeof canonFieldNames[number], string> = isZh
+    ? { title: "书名", genre: "类型", targetChapters: "预计章节", chapterWordCount: "每章字数" }
+    : { title: "Title", genre: "Genre", targetChapters: "Chapters", chapterWordCount: "Words per chapter" };
 
   return (
-    <aside className="flex h-full min-h-0 w-full max-w-[480px] flex-col border-l border-border bg-card/60">
-      <div className="border-b border-border px-5 py-4">
-        <h2 className="font-serif text-[26px] leading-tight">{isZh ? "故事正典" : "Canon"}</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {candidate
-            ? (isZh ? `候选 v${candidate.version} · ${candidate.status}` : `Candidate v${candidate.version} · ${candidate.status}`)
-            : (isZh ? "还没有故事正典" : "No canon yet")}
-          {data?.adoptedAskId && candidate && data.adoptedAskId !== candidate.artifactId
-            ? (isZh ? " · 正式版尚未采用此稿" : " · adopted copy unchanged")
-            : ""}
-        </p>
+    <aside className="canon-sheet ask-canon-editor" data-expanded={expanded && hasManuscript} data-review-open={reportOpen} aria-label={isZh ? "故事正典" : "Story canon"} aria-busy={Boolean(busy)}>
+      {hasManuscript && !expanded ? <button type="button" className="ask-open-canon" onClick={() => setExpanded(true)}><PanelRightOpen size={16} />{isZh ? "展开正典" : "Open canon"}</button> : null}
+      <header className="ask-canon-heading" hidden={!expanded || !hasManuscript}>
+        <div className="ask-canon-title"><h2>{isZh ? "故事正典" : "Story canon"}</h2><button type="button" onClick={() => { setExpanded(false); setReportOpen(false); }} disabled={editing} aria-label={isZh ? "收起正典" : "Collapse canon"} title={editing ? (isZh ? "完成编辑后可收起" : "Finish editing to collapse") : undefined}><PanelRightClose size={17} /></button></div>
+        <div className="ask-canon-meta"><span>{editingVersion ? (isZh ? `${isAdopted ? "已采用" : "候选"} v${editingVersion}` : `${isAdopted ? "Adopted" : "Candidate"} v${editingVersion}`) : (isZh ? "故事文稿" : "Story manuscript")}</span>{!isAdopted && adoptedVersion ? <span>{isZh ? `正式稿 v${adoptedVersion}` : `Adopted v${adoptedVersion}`}</span> : null}</div>
+      </header>
+      <div className="ask-canon-scroll" hidden={!expanded || !hasManuscript}>
+        {dirty && candidate && editBaseId !== candidate.artifactId ? <p role="status" className="text-xs text-muted-foreground">{isZh ? "候选已有新版本。手改已保留，保存会从原稿另存为新候选。" : "A newer candidate exists. Your retained changes save as a new candidate."}</p> : null}
+        {candidate || editBaseId ? editing ? <div className="ask-canon-form">
+          <div className="ask-canon-fields">{canonFieldNames.map((key) => <label key={key}><span>{labels[key]}</span><input aria-label={labels[key]} type={key === "targetChapters" || key === "chapterWordCount" ? "number" : "text"} min={key === "chapterWordCount" ? 100 : 1} step={1} value={fields.fields[key]} disabled={Boolean(busy) || !ready} onChange={(event) => changeBody(updateCanonField(editBody, key, event.target.value))} /></label>)}</div>
+          <label className="ask-canon-label"><span className="sr-only">{isZh ? "候选正文（编辑中）" : "Candidate text (editing)"}</span><textarea className="prose-body ask-canon-body" value={fields.text} readOnly={Boolean(busy) || !ready} spellCheck={false} onChange={(event) => changeBody(updateCanonText(editBody, event.target.value))} data-testid="ask-candidate-body" /></label>
+        </div> : <ManuscriptView body={editBody} parseFrontmatter className="ask-canon-reading" /> : adopted ? <CanonPreview canon={adopted} isZh={isZh} /> : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 text-[15px] leading-7">
-        {preview || editBody ? (
-          <>
-            {preview ? <CanonPreview canon={preview} /> : null}
-            <label className="mt-4 block text-xs font-semibold text-muted-foreground">
-              {isZh ? "候选正文（可改）" : "Candidate (editable)"}
-              <textarea
-                className="mt-1 min-h-[180px] w-full rounded-md border border-border bg-background px-3 py-2 font-serif text-sm leading-6"
-                value={editBody}
-                onChange={(event) => {
-                  dirtyRef.current = true;
-                  setEditBody(event.target.value);
-                }}
-                data-testid="ask-candidate-body"
-              />
-            </label>
-            {candidate ? (
-              <button
-                type="button"
-                className="mt-2 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
-                disabled={Boolean(busy) || editBody === candidate.body}
-                onClick={() => void run("save", () => putApi(`/authoring/artifacts/${candidate.artifactId}`, {
-                  ...body,
-                  body: editBody,
-                }))}
-              >
-                {isZh ? "保存手改" : "Save edits"}
-              </button>
-            ) : null}
-            {adopted && candidate && data?.adoptedAskId !== candidate.artifactId ? (
-              <p className="mt-3 text-xs text-muted-foreground">
-                {isZh ? `已采用正典仍是《${adopted.title ?? "未命名"}》` : `Adopted canon remains “${adopted.title ?? "untitled"}”`}
-              </p>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {isZh ? "还没有故事正典。先说一句你想写的故事，也可以粘贴已有构思。" : "Start with one sentence, or paste an existing premise."}
-          </p>
-        )}
-      </div>
-      <div className="space-y-2 border-t border-border px-5 py-4">
-        <button
-          type="button"
-          className="w-full rounded-lg bg-primary px-3 py-[9px] text-sm text-primary-foreground disabled:opacity-40"
-          disabled={Boolean(busy) || (!bookId && !draftId)}
-          onClick={() => void run("generate", async () => {
-            await persistIfDirty();
-            await postApi("/authoring/ask/generate", { ...body, conversation });
-          })}
-        >
-          {busy === "generate" ? (isZh ? "生成中…" : "Generating…") : (preview ? (isZh ? "更新正典" : "Update canon") : (isZh ? "生成故事正典" : "Generate canon"))}
-        </button>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="flex-1 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-            disabled={!candidate || Boolean(busy)}
-            onClick={() => void run("review", async () => {
-              const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-              await postApi("/authoring/ask/review", { ...body, artifactId, conversation });
-              setReportOpen(true);
-            })}
-          >
-            {isZh ? "审查正典" : "Review"}
-          </button>
-          <button
-            type="button"
-            className="flex-1 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-            disabled={!candidate || Boolean(busy)}
-            onClick={() => void run("adopt", async () => {
-              const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-              const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", {
-                ...body,
-                artifactId,
-              });
-              showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"));
-              if (result.bookId && !bookId) onAdopted?.(result.bookId);
-            })}
-          >
-            {bookId ? (isZh ? "采用正典" : "Adopt canon") : (isZh ? "采用正典并建书" : "Adopt and create")}
-          </button>
+      <footer className="ask-canon-toolbar" data-testid="ask-canon-toolbar">
+        <div className="ask-canon-workstate" role="status" aria-live="polite"><span>{status}</span>
+          {report && !busy ? <span>{report.incomplete ? (isZh ? "审查未完成" : "Review incomplete") : stale ? (isZh ? "审查对应旧稿" : "Review is outdated") : (isZh ? "已有审查意见" : "Review available")}</span> : null}
+          {error || draftError || adoptedCopy.error ? <span role="alert">{error ?? draftError ?? adoptedCopy.error}<button type="button" onClick={() => void (draftError ? ensureDraft() : adoptedCopy.error ? adoptedCopy.refetch() : refetch())}>{isZh ? "重试加载" : "Retry loading"}</button></span> : null}
+          {actionError ? <span role="alert" className="ask-canon-error">{actionError}</span> : null}
         </div>
-      </div>
-
-      <Drawer
-        open={reportOpen}
-        title={isZh ? "问心审查" : "Ask review"}
-        onClose={() => setReportOpen(false)}
-      >
-        {report ? (
-          <div className="space-y-3">
-            <p className="text-sm">{report.summary}</p>
-            <p className="text-xs text-muted-foreground">
-              {report.actualReviewModel}
-              {report.incomplete ? (isZh ? " · 结果不完整" : " · incomplete") : ""}
-              {report.stale || historical ? (isZh ? " · 报告对应旧稿" : " · historical report") : ""}
-            </p>
-            {report.incomplete ? (
-              <p className="text-sm text-mark-text">{isZh ? "本次审查结果不完整，请重试。" : "This review is incomplete. Retry."}</p>
-            ) : null}
-            {(historical || report.stale) ? (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={reuseStale} onChange={(event) => setReuseStale(event.target.checked)} />
-                {isZh ? "沿用这些建议修改当前稿" : "Reuse these notes on the current draft"}
-              </label>
-            ) : null}
-            {report.issues.map((issue) => (
-              <label key={issue.issueId} className="flex gap-2 rounded-lg border border-border p-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(issue.issueId)}
-                  onChange={(event) => {
-                    setSelected((prev) => event.target.checked
-                      ? [...prev, issue.issueId]
-                      : prev.filter((id) => id !== issue.issueId));
-                  }}
-                />
-                <span>
-                  <strong>{issue.title}</strong>
-                  {issue.suggestion ? <span className="block text-muted-foreground">{issue.suggestion}</span> : null}
-                </span>
-              </label>
-            ))}
-            <button
-              type="button"
-              className="w-full rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-              disabled={!candidate || selected.length === 0 || !report || report.incomplete || ((historical || report.stale) && !reuseStale)}
-              onClick={() => void run("revise", async () => {
-                const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-                await postApi("/authoring/ask/revise", {
-                  ...body,
-                  artifactId,
-                  reportId: report.reportId,
-                  selectedIssueIds: selected,
-                  reuseStale,
-                });
-              })}
-            >
-              {isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`}
-            </button>
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">{isZh ? "还没有审查报告。" : "No report yet."}</p>
-        )}
+        <div className="ask-canon-actions">{editing ? <>
+          <button type="button" className="ask-canon-primary" disabled={!editBaseId || !dirty || Boolean(busy) || !ready} onClick={() => void save()}><Save size={15} />{isZh ? "保存" : "Save"}</button><button type="button" disabled={Boolean(busy)} onClick={cancelEditing}>{isZh ? "取消" : "Cancel"}</button>
+        </> : hasManuscript ? <>
+          <button type="button" disabled={!candidate || Boolean(busy) || !ready} onClick={() => { setEditing(true); setExpanded(true); setActionError(undefined); }}><PencilLine size={15} />{isZh ? "编辑" : "Edit"}</button>
+          <button type="button" disabled={!candidate || Boolean(busy) || !ready || session?.isChatStreaming} onClick={report && !reportOpen ? () => { setReportOpen(true); setExpanded(true); } : review}><FileCheck2 size={15} />{isZh ? "审查" : "Review"}</button>
+          <button type="button" className="ask-canon-primary" disabled={!candidate || Boolean(busy) || !ready || isAdopted} onClick={() => void run("adopt", async () => {
+            const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId) });
+            showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"));
+            if (mounted.current && result.bookId && !bookId) onAdopted?.(result.bookId);
+          })}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
+          <DropdownMenu><DropdownMenuTrigger className="ask-canon-menu-trigger" disabled={Boolean(busy)} aria-label={isZh ? "正典操作" : "Canon actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" side="top">
+            <DropdownMenuItem disabled={!ready || Boolean(session?.isChatStreaming)} onClick={() => { setActionError(undefined); setGenerationIssueIds(report && !stale && !report.incomplete ? report.issues.map((issue) => issue.issueId) : []); setGenerateOpen(true); }}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!artifacts.length} onClick={() => openHistory(currentArtifactId)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!data?.adoptedAskId} onClick={() => openHistory(data?.adoptedAskId)}>{isZh ? "查看已采用" : "View adopted"}</DropdownMenuItem>
+          </DropdownMenuContent></DropdownMenu>
+        </> : <button type="button" className="ask-canon-primary" disabled={Boolean(busy) || !ready || !conversation.trim() || session?.isChatStreaming} title={!conversation.trim() ? (isZh ? "先在问心对话中描述故事" : "Describe your story first") : undefined} onClick={() => void regenerate("")}><PencilLine size={15} />{isZh ? "整理正典" : "Create canon"}</button>}</div>
+      </footer>
+      <Drawer open={historyOpen} title={isZh ? "正典版本" : "Canon versions"} onClose={() => setHistoryOpen(false)}>
+        <div className="ask-version-list">{artifacts.map((item) => <button type="button" key={item.artifactId} aria-pressed={historyItem?.meta.artifactId === item.artifactId} onClick={() => void loadVersion(item.artifactId)}><span>v{item.version}</span><span>{item.artifactId === data?.adoptedAskId ? (isZh ? "已采用" : "Adopted") : item.artifactId === candidate?.artifactId ? (isZh ? "当前候选" : "Current candidate") : (isZh ? "历史稿" : "Historical")}</span></button>)}</div>
+        {historyLoading ? <p role="status">{isZh ? "正在读取版本…" : "Loading version…"}</p> : null}{historyError ? <p role="alert">{historyError}</p> : null}
+        {historyItem ? <><h3 className="mt-5 mb-3 font-medium">{isZh ? `版本 v${historyItem.meta.version}` : `Version ${historyItem.meta.version}`}</h3><ManuscriptView body={historyItem.body} parseFrontmatter className="ask-version-body" /><button type="button" className="ask-history-restore" disabled={Boolean(busy) || !ready || dirty || historyItem.meta.artifactId === candidate?.artifactId} onClick={() => void run("restore", async () => {
+          const restored = await putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(currentArtifactId ?? historyItem.meta.artifactId)}`, { ...scope, body: historyItem.body });
+          editor.current.expectCandidate(restored.artifactId); setEditState(editor.current.snapshot); setHistoryOpen(false);
+          showToast(isZh ? "历史稿已另存为新候选，尚未采用" : "Historical copy restored as an unadopted candidate");
+        })}>{isZh ? "另存为当前候选" : "Restore as current candidate"}</button></> : null}
       </Drawer>
+      <AuthoringReviewDrawer open={reportOpen} title={isZh ? "问心审查" : "Ask review"} report={report ? { ...report, stale } : null} currentArtifactId={currentArtifactId} isZh={isZh} busy={busy === "review"} reviseDisabled={editing || Boolean(busy) || !ready} error={actionError} onRetry={() => { if (!editing && !busyRef.current) review(); }} onClose={() => setReportOpen(false)} onRevise={(selectedIssueIds, reuseStale) => { if (!report || editing) return; setActionError(undefined); setRevision({ selectedIssueIds, reuseStale, reportId: report.reportId }); }} />
+      <RegenerateDialog open={generateOpen || Boolean(revision)} title={isZh ? "重新整理正典" : "Regenerate canon"} scopeLabel={isZh ? "当前作品 · 整份故事正典" : "Current book · Entire story canon"} isZh={isZh} busy={Boolean(busy)} error={actionError} reportSummary={report && !report.incomplete && (revision?.reuseStale || !stale) ? [report.summary, ...(revision ? report.issues.filter((issue) => revision.selectedIssueIds.includes(issue.issueId)).map((issue) => `${issue.title}：${issue.suggestion ?? issue.evidence ?? ""}`) : [])].join("\n") : undefined} onClose={() => { if (!busyRef.current) { setGenerateOpen(false); setRevision(undefined); } }} onConfirm={async (requirements) => {
+        const chosen = report?.issues.filter((issue) => generationIssueIds.includes(issue.issueId)) ?? [];
+        const applicable = report && !report.incomplete && !stale && !revision && chosen.length ? [report.summary, ...chosen.map((issue) => `${issue.title}：${issue.suggestion ?? issue.evidence ?? ""}`)].join("\n") : "";
+        return regenerate([requirements, applicable ? `${isZh ? "当前稿审查意见" : "Current review"}：\n${applicable}` : ""].filter(Boolean).join("\n\n"));
+      }}>
+        {generateOpen && report && (stale || report.incomplete) ? <p className="text-sm text-muted-foreground">{isZh ? "已有报告对应旧稿或未完成，本次不会自动带入。" : "The previous review is outdated or incomplete and will not be included."}</p> : null}
+        {generateOpen && report && !stale && !report.incomplete && report.issues.length ? <fieldset className="ask-regenerate-issues"><legend>{isZh ? "带入哪些审查意见" : "Include review notes"}</legend>{report.issues.map((issue) => <label key={issue.issueId}><input type="checkbox" checked={generationIssueIds.includes(issue.issueId)} disabled={Boolean(busy)} onChange={(event) => setGenerationIssueIds((ids) => event.target.checked ? [...ids, issue.issueId] : ids.filter((id) => id !== issue.issueId))} /><span>{issue.title}{issue.suggestion ? <small>{issue.suggestion}</small> : null}</span></label>)}</fieldset> : null}
+      </RegenerateDialog>
+      <Drawer open={cancelOpen} placement="center" title={isZh ? "保留这次修改？" : "Keep your changes?"} onClose={() => { if (!busyRef.current) { setCancelOpen(false); answerNavigation(false); } }}><p className="text-sm leading-7 text-muted-foreground">{isZh ? "保存为候选，或放弃本次未保存的修改。" : "Save a candidate, or discard only these unsaved changes."}</p>{actionError ? <p role="alert" className="text-destructive text-sm">{actionError}</p> : null}<div className="ask-cancel-actions">
+        <button type="button" disabled={Boolean(busy)} onClick={() => { setCancelOpen(false); answerNavigation(false); }}>{isZh ? "继续编辑" : "Continue editing"}</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => { editor.current.discard(); setEditState(editor.current.snapshot); setEditing(false); setCancelOpen(false); setActionError(undefined); answerNavigation(true); }}>{isZh ? "放弃修改" : "Discard changes"}</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void save()}>{isZh ? "保存" : "Save"}</button>
+      </div></Drawer>
     </aside>
   );
 }
 
-function CanonPreview({ canon }: { readonly canon: CanonDoc }) {
-  const rows: Array<[string, string]> = [
-    ["一句话故事", canon.oneLine ?? ""],
-    ["核心命题", canon.proposition ?? ""],
-    ["主角与核心欲望", canon.protagonist ?? ""],
-    ["主要冲突", canon.conflict ?? ""],
-    ["叙事视角与文风", canon.voice ?? ""],
-    ["故事边界", canon.boundaries ?? ""],
-    ["初始方向", canon.direction ?? ""],
-  ];
-  return (
-    <div className="space-y-4">
-      <h3 className="font-serif text-xl">{canon.title}</h3>
-      {rows.filter(([, value]) => value).map(([label, value]) => (
-        <section key={label}>
-          <h4 className="text-xs font-semibold text-muted-foreground">{label}</h4>
-          <p className="whitespace-pre-wrap">{value}</p>
-        </section>
-      ))}
-      {canon.openQuestions && canon.openQuestions.length > 0 ? (
-        <section>
-          <h4 className="text-xs font-semibold text-muted-foreground">待定项</h4>
-          <ul className="list-disc pl-5">
-            {canon.openQuestions.map((item) => <li key={item}>{item}</li>)}
-          </ul>
-        </section>
-      ) : null}
-    </div>
-  );
+function CanonPreview({ canon, isZh }: { readonly canon: NonNullable<AuthoringWorkspace["canon"]>; readonly isZh: boolean }) {
+  const rows = [[isZh ? "一句话故事" : "Premise", canon.oneLine], [isZh ? "核心命题" : "Theme", canon.proposition], [isZh ? "主角与核心欲望" : "Protagonist", canon.protagonist], [isZh ? "主要冲突" : "Conflict", canon.conflict], [isZh ? "叙事视角与文风" : "Voice", canon.voice], [isZh ? "故事边界" : "Boundaries", canon.boundaries], [isZh ? "初始方向" : "Direction", canon.direction]];
+  return <div className="ask-adopted-preview prose-body"><h3>{canon.title}</h3>{rows.filter(([, value]) => value).map(([label, value]) => <section key={label}><h4>{label}</h4><p>{value}</p></section>)}{canon.openQuestions?.length ? <section><h4>{isZh ? "待定项" : "Open questions"}</h4><ul>{canon.openQuestions.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}</div>;
 }

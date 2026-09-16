@@ -32,13 +32,15 @@ describe("P0-6 copy", () => {
   it("keeps book-mode ask chips to 重新推敲前提 only", () => {
     const chat = read("src/pages/ChatPage.tsx");
     expect(chat).toMatch(/mode !== "book"/);
-    expect(chat).toMatch(/和它聊聊这本书/);
+    expect(chat).toMatch(/说说那个让你想动笔的念头/);
     expect(chat).toMatch(/重新推敲前提/);
   });
 
-  it("renames the home card write entry to 落笔", () => {
+  it("uses one cover continuation entry without a second write button", () => {
     const dashboard = read("src/pages/Dashboard.tsx");
-    expect(dashboard).toMatch(/home\.toWrite/);
+    expect(dashboard).toMatch(/goBookStage\(nav, book.id, stage\)/);
+    expect(dashboard).toMatch(/bookResumeStage/);
+    expect(dashboard).not.toMatch(/home\.toWrite/);
     expect(dashboard).not.toMatch(/t\("book\.settings"\)/);
   });
 });

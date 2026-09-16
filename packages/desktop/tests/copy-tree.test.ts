@@ -26,7 +26,7 @@ describe("copyTree dereference", () => {
     writeFileSync(join(store, "index.js"), "export const n = 1\n");
     const src = join(root, "src");
     mkdirSync(join(src, "node_modules"), { recursive: true });
-    symlinkSync(store, join(src, "node_modules", "pkg"));
+    symlinkSync(store, join(src, "node_modules", "pkg"), process.platform === "win32" ? "junction" : "dir");
     const dest = join(root, "dest");
     copyTree(src, dest);
     expect(readFileSync(join(dest, "node_modules", "pkg", "index.js"), "utf8")).toContain("export const n");

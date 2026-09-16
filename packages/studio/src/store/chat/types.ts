@@ -50,6 +50,8 @@ export interface Message {
   readonly thinking?: string;
   readonly thinkingStreaming?: boolean;
   readonly timestamp: number;
+  // Client request identity; timestamps remain wall-clock ordering, not stream keys.
+  readonly streamRequestId?: string;
   readonly toolCall?: ToolCall;
   readonly toolExecutions?: ToolExecution[];
   readonly parts?: MessagePart[];              // chronological parts for interleaved rendering
@@ -217,18 +219,18 @@ export interface MessageActions {
   activateSession: (sessionId: string | null) => void;
   setInput: (text: string) => void;
   addUserMessage: (sessionId: string, content: string) => void;
-  appendStreamChunk: (sessionId: string, text: string, streamTs: number) => void;
-  finalizeStream: (sessionId: string, streamTs: number, content: string, toolCall?: ToolCall) => void;
-  replaceStreamWithError: (sessionId: string, streamTs: number, errorMsg: string) => void;
+  appendStreamChunk: (sessionId: string, text: string, streamTs: number, streamRequestId?: string) => void;
+  finalizeStream: (sessionId: string, streamTs: number, content: string, toolCall?: ToolCall, streamRequestId?: string) => void;
+  replaceStreamWithError: (sessionId: string, streamTs: number, errorMsg: string, streamRequestId?: string) => void;
   addErrorMessage: (sessionId: string, errorMsg: string) => void;
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
-  loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
+  loadSessionList: (bookId: string | null, strict?: boolean) => Promise<ReadonlyArray<SessionSummary>>;
   createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => Promise<string>;
   createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => string;
   setSessionPlayMode: (sessionId: string, playMode: PlayMode) => void;
-  renameSession: (sessionId: string, title: string) => Promise<void>;
-  deleteSession: (sessionId: string) => Promise<void>;
-  loadSessionDetail: (sessionId: string) => Promise<void>;
+  renameSession: (sessionId: string, title: string, strict?: boolean) => Promise<void>;
+  deleteSession: (sessionId: string, strict?: boolean) => Promise<void>;
+  loadSessionDetail: (sessionId: string, strict?: boolean) => Promise<void>;
   sendMessage: (sessionId: string, text: string, options?: SendMessageOptions) => Promise<void>;
   // 用 lastFailedSend 记录的原样参数重发上一条失败的消息；无记录或聊天轮流式中时不做任何事。
   retryLastSend: (sessionId: string) => Promise<void>;

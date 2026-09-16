@@ -1,17 +1,19 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { BookWorkspaceNav, type BookWorkspaceTab } from "./components/BookWorkspaceNav";
-import { Sidebar } from "./components/Sidebar";
 import { BrandMark } from "./components/BrandMark";
-import { Dashboard } from "./pages/Dashboard";
+import { StudioHeader } from "./components/StudioHeader";
+import { Dashboard, type HomeBookSummary } from "./pages/Dashboard";
+import { NewBookIntro } from "./components/NewBookIntro";
+import { isStartupHomeHash, startupBookRoute } from "./lib/home-navigation";
+import "./ink-home.css";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
 import { BookStudy } from "./pages/BookStudy";
 import { AuthorPage } from "./pages/AuthorPage";
 import { OutlineWorkspace } from "./pages/OutlineWorkspace";
 import { BookGround } from "./pages/BookGround";
-import { AskCreateRail } from "./components/AskCreateRail";
 import { AskCanonPanel } from "./components/AskCanonPanel";
 import { BookAskPage } from "./pages/BookAskPage";
 import { ToastHost } from "./components/ToastHost";
@@ -45,9 +47,10 @@ import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
 import { invalidateApiPaths, invalidationPathsForChapterMutationSse, postApi, useApi } from "./hooks/use-api";
-import { Sun, Moon } from "lucide-react";
-import { House } from "lucide-react";
+import { X } from "lucide-react";
 import { useChatStore } from "./store/chat";
+import { applyAppearanceToDocument } from "./lib/appearance";
+import { usePreferencesStore } from "./store/preferences";
 
 const PAGE_SHELL = "mx-auto w-full max-w-[880px] px-8 pt-10 pb-16 fade-in";
 const PAGE_SHELL_WIDE = "mx-auto w-full max-w-[1200px] px-8 pt-10 pb-16 fade-in";
@@ -94,13 +97,55 @@ export function deriveStartupGate(input: {
 }
 
 export function App() {
-  const { route, setRoute } = useHashRoute();
+  const { route, setRoute: setHashRoute } = useHashRoute();
+  const startupResumeAllowed = useRef(isStartupHomeHash(window.location.hash));
+  const [startupResumePending, setStartupResumePending] = useState(startupResumeAllowed.current);
+  const setRoute = useCallback((nextRoute: HashRoute, onAccepted?: () => void) => {
+    // Explicit navigation wins, including a return to the bookshelf while loading.
+    startupResumeAllowed.current = false;
+    setStartupResumePending(false);
+    setHashRoute(nextRoute, onAccepted);
+  }, [setHashRoute]);
   const sse = useSSE();
   const { theme, setTheme } = useTheme();
   const { t, lang: currentLang } = useI18n();
+  const uiFont = usePreferencesStore((s) => s.uiFont);
+  const proseFont = usePreferencesStore((s) => s.proseFont);
+  const proseSize = usePreferencesStore((s) => s.proseSize);
+  const proseLeading = usePreferencesStore((s) => s.proseLeading);
+  const showStudioImage = usePreferencesStore((s) => s.showStudioImage);
+  const paperTone = usePreferencesStore((s) => s.paperTone);
+  const lastStages = usePreferencesStore((s) => s.lastStages);
+  const lastChapters = usePreferencesStore((s) => s.lastChapters);
+  const setLastChapter = usePreferencesStore((s) => s.setLastChapter);
+  const currentBookIdPref = usePreferencesStore((s) => s.currentBookId);
+  const setCurrentBookId = usePreferencesStore((s) => s.setCurrentBookId);
+  const setLastStage = usePreferencesStore((s) => s.setLastStage);
   const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [ready, setReady] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const { data: startupBooks, error: startupBooksError } = useApi<{ books: ReadonlyArray<HomeBookSummary> }>(ready && startupResumePending ? "/books" : "");
+
+  useEffect(() => {
+    if (!startupResumePending) return;
+    if (route.page !== "dashboard" || !startupResumeAllowed.current) {
+      startupResumeAllowed.current = false;
+      setStartupResumePending(false);
+      return;
+    }
+    if (!ready || showLanguageSelector) return;
+    if (startupBooksError) {
+      startupResumeAllowed.current = false;
+      setStartupResumePending(false);
+      return;
+    }
+    if (!startupBooks) return;
+    startupResumeAllowed.current = false;
+    setStartupResumePending(false);
+    const target = startupBookRoute(startupBooks.books, lastStages);
+    if (target) setHashRoute(target);
+  }, [startupResumePending, route.page, ready, showLanguageSelector, startupBooks, startupBooksError, lastStages, setHashRoute]);
 
   const isDark = theme === "dark";
 
@@ -116,7 +161,22 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
+    document.documentElement.dataset.theme = isDark ? "dark" : "light";
   }, [isDark]);
+
+  useEffect(() => {
+    applyAppearanceToDocument({
+      uiFont,
+      proseFont,
+      proseSize,
+      proseLeading,
+      showStudioImage,
+      paperTone,
+      currentBookId: currentBookIdPref,
+      lastStages,
+      lastChapters,
+    });
+  }, [uiFont, proseFont, proseSize, proseLeading, showStudioImage, paperTone, currentBookIdPref, lastStages, lastChapters]);
 
   useEffect(() => {
     if (project) {
@@ -133,20 +193,21 @@ export function App() {
   const nav = {
     toDashboard: () => setRoute({ page: "dashboard" }),
     toAuthor: () => setRoute({ page: "author" }),
-    toChat: () => setRoute({ page: "chat" }),
+    toChat: (onAccepted?: () => void) => setRoute({ page: "chat" }, onAccepted),
     toBook: (bookId: string) => setRoute({ page: "book", bookId }),
-    toAsk: (bookId: string) => setRoute({ page: "book-ask", bookId }),
+    toAsk: (bookId: string, sessionId?: string) => setRoute({ page: "book-ask", bookId, ...(sessionId ? { sessionId } : {}) }),
     toGround: (bookId: string) => setRoute({ page: "book-ground", bookId }),
     toWeave: (bookId: string) => setRoute({ page: "book-weave", bookId }),
     toWrite: (bookId: string) => setRoute({ page: "book-write", bookId }),
     toOutline: (bookId: string) => setRoute({ page: "book-weave", bookId }),
     toBookSettings: (bookId: string) => setRoute({ page: "book-write", bookId }),
-    toBookCreate: () => setRoute({ page: "book-create" }),
+    toBookCreate: (sessionId?: string) => setRoute({ page: "book-create", ...(sessionId ? { sessionId } : {}) }),
+    toBookIntro: () => setRoute({ page: "book-intro" }),
     toChapter: (bookId: string, chapterNumber: number) =>
       setRoute({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId: string) => setRoute({ page: "analytics", bookId }),
     toServices: () => setRoute({ page: "services" }),
-    toProjectSettings: () => setRoute({ page: "project-settings" }),
+    toProjectSettings: (section?: "advanced") => setRoute({ page: "project-settings", ...(section ? { section } : {}) }),
     toServiceDetail: (id: string) => setRoute({ page: "service-detail", serviceId: id }),
     toTruth: (bookId: string) => setRoute({ page: "truth", bookId }),
     toDaemon: () => setRoute({ page: "daemon" }),
@@ -172,6 +233,31 @@ export function App() {
   const bookChromeTab = deriveBookChromeTab(route);
   const showBookChrome = Boolean(activeBookId && bookChromeTab);
 
+  useEffect(() => {
+    if (activeBookId) setCurrentBookId(activeBookId);
+    if (route.page === "chapter") setLastChapter(route.bookId, route.chapterNumber);
+    if (
+      activeBookId
+      && (bookChromeTab === "ask" || bookChromeTab === "ground" || bookChromeTab === "weave" || bookChromeTab === "write")
+    ) {
+      setLastStage(activeBookId, bookChromeTab);
+    }
+  }, [activeBookId, bookChromeTab, route, setCurrentBookId, setLastStage, setLastChapter]);
+
+  useEffect(() => {
+    if (bookChromeTab !== "write") setFocusMode(false);
+  }, [bookChromeTab]);
+
+  useEffect(() => {
+    if (!focusMode) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || document.querySelector('[role="dialog"]')) return;
+      if (event.key === "Escape") setFocusMode(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusMode]);
+
   const onStageSse = useCallback((message: { event: string; data: unknown }) => {
     const chapterPaths = invalidationPathsForChapterMutationSse(message);
     if (chapterPaths.length) invalidateApiPaths(chapterPaths);
@@ -181,15 +267,6 @@ export function App() {
     bumpBookDataVersion();
   }, [activeBookId, bumpBookDataVersion]);
   useNewSSEMessages(sse.messages, onStageSse);
-
-  const activePage =
-    activeBookId
-      ? `book:${activeBookId}`
-      : route.page === "short" || route.page === "short-settings" || route.page === "short-analytics"
-        ? `short:${route.storyId}`
-        : route.page === "service-detail"
-          ? "services"
-          : route.page;
 
   const startupGate = deriveStartupGate({ ready, projectError });
 
@@ -242,55 +319,49 @@ export function App() {
   }
 
   return (
-    <div className="h-screen bg-background text-foreground flex overflow-hidden font-sans">
-      {/* Left Sidebar */}
-      <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
-
-      {/* Center Content */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">
-        {/* Header Strip */}
-        <header className="h-14 shrink-0 flex items-center justify-between gap-3 px-8 border-b border-border/40">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-             <button
-               onClick={nav.toDashboard}
-               className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
-             >
-               <House size={18} />
-               <span>{t("bread.home")}</span>
-             </button>
-             {showBookChrome && activeBookId && bookChromeTab ? (
-               <>
-                 <span className="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
-                 <div className="min-w-0 flex-1">
-                   <BookWorkspaceNav
-                     bookId={activeBookId}
-                     active={bookChromeTab}
-                     nav={nav}
-                     isZh={currentLang !== "en"}
-                     t={t}
-                   />
-                 </div>
-               </>
-             ) : null}
+    <div className={`h-screen bg-background text-foreground flex overflow-hidden font-sans ${showBookChrome ? "in-book" : ""} ${focusMode ? "focus-mode" : ""}`}>
+      <div className="flex-1 flex flex-col min-w-0 bg-background">
+        <StudioHeader
+          nav={nav}
+          t={t}
+          isZh={currentLang !== "en"}
+          isDark={isDark}
+          onToggleTheme={() => setTheme(isDark ? "light" : "dark")}
+          studyCurrent={route.page === "dashboard"}
+          sse={sse}
+          currentBookId={activeBookId}
+        />
+        {showBookChrome && activeBookId && bookChromeTab ? (
+          <div className="book-chrome-strip flex items-center justify-between">
+            <BookWorkspaceNav
+              bookId={activeBookId}
+              active={bookChromeTab}
+              nav={nav}
+              isZh={currentLang !== "en"}
+              t={t}
+              onFocusMode={() => setFocusMode(true)}
+            />
           </div>
-
-          <div className="flex shrink-0 items-center gap-3">
-            <button
-              onClick={() => setTheme(isDark ? "light" : "dark")}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {isDark ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
-          </div>
-        </header>
+        ) : null}
+        {focusMode ? (
+          <button
+            type="button"
+            className="focus-mode-exit"
+            onClick={() => setFocusMode(false)}
+          >
+            <X size={14} />
+            {t("nav.exitFocus")}
+          </button>
+        ) : null}
 
         {/* Main Content Area */}
-        <main className="flex-1 relative overflow-y-auto scroll-smooth">
+        <main className="ink-main flex-1 relative overflow-y-auto scroll-smooth">
           {route.page === "dashboard" && (
-            <div className="mx-auto w-full max-w-6xl px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
+            <div className="one-page fade-in">
+              {startupResumePending ? <div className="ink-home-loading" role="status">{t("common.loading")}</div> : <Dashboard nav={nav} sse={sse} theme={theme} t={t} />}
             </div>
           )}
+          {route.page === "book-intro" && <div className="one-page fade-in"><NewBookIntro isZh={currentLang !== "en"} onEnterAsk={nav.toBookCreate} /></div>}
           {route.page === "author" && (
             <div className={PAGE_SHELL}>
               <AuthorPage nav={nav} t={t} isZh={currentLang !== "en"} />
@@ -312,16 +383,16 @@ export function App() {
             </div>
           )}
           {isBookCreateChatRoute(route) && (
-            <div className="absolute inset-0 flex min-w-0" data-testid="book-create-ask">
+            <div className="ask-workspace h-full min-h-0 min-w-0" data-testid="book-create-ask">
               <ChatPage
                 mode="book-create"
+                resumeSessionId={route.page === "book-create" ? route.sessionId : undefined}
                 nav={nav}
                 theme={theme}
                 t={t}
                 sse={sse}
               />
-              <AskCreateRail isZh={currentLang !== "en"} />
-              <AskCanonPanel isZh={currentLang !== "en"} onAdopted={(id) => nav.toAsk(id)} />
+              <AskCanonPanel isZh={currentLang !== "en"} resumeSessionId={route.page === "book-create" ? route.sessionId : undefined} onAdopted={(id) => nav.toAsk(id)} />
             </div>
           )}
           {route.page === "chat" && (
@@ -336,7 +407,7 @@ export function App() {
             </div>
           )}
           {route.page === "book" && (
-            <div className={PAGE_SHELL}>
+            <div className="one-book-page fade-in">
               <BookStudy bookId={route.bookId} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
@@ -344,6 +415,7 @@ export function App() {
             <div className="absolute inset-0 flex min-w-0 flex-col" data-testid="book-ask-page">
               <BookAskPage
                 bookId={route.bookId}
+                resumeSessionId={route.sessionId}
                 nav={nav}
                 theme={theme}
                 t={t}
@@ -352,22 +424,22 @@ export function App() {
             </div>
           )}
           {route.page === "book-ground" && (
-            <div className={PAGE_SHELL}>
+            <div className="one-book-page fade-in">
               <BookGround bookId={route.bookId} nav={nav} theme={theme} t={t} isZh={currentLang !== "en"} />
             </div>
           )}
           {(route.page === "book-outline" || route.page === "book-weave") && (
-            <div className={PAGE_SHELL_WIDE}>
+            <div className="one-book-page fade-in">
               <OutlineWorkspace bookId={route.bookId} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
           {(route.page === "book-settings" || route.page === "book-write") && (
-            <div className={PAGE_SHELL}>
+            <div className="one-book-page fade-in">
               <BookDetail bookId={route.bookId} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
           {route.page === "chapter" && (
-            <div className={PAGE_SHELL_WIDE}>
+            <div className="one-book-page fade-in">
               <ChapterReader bookId={route.bookId} chapterNumber={route.chapterNumber} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
@@ -383,7 +455,7 @@ export function App() {
           )}
           {route.page === "project-settings" && (
             <div className={PAGE_SHELL}>
-              <ProjectSettings nav={nav} theme={theme} t={t} />
+              <ProjectSettings nav={nav} theme={theme} t={t} setTheme={setTheme} section={route.section} />
             </div>
           )}
           {route.page === "service-detail" && (

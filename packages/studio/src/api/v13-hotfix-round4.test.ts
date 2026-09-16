@@ -13,7 +13,7 @@ import { access } from "node:fs/promises";
 
 // ---------------------------------------------------------------------------
 // Mock — we need isNewLayoutBook to actually work (it stats the filesystem),
-// so we re-export the real implementation while mocking the rest of core.
+// so preserve filesystem behavior and locks while replacing generation services.
 // ---------------------------------------------------------------------------
 
 const loadProjectConfigMock = vi.fn();
@@ -27,14 +27,6 @@ const logger = {
 vi.mock("@actalk/inkos-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@actalk/inkos-core")>();
 
-  class MockStateManager {
-    constructor(private readonly root: string) {}
-    async listBooks(): Promise<string[]> { return []; }
-    async loadBookConfig(): Promise<never> { throw new Error("not implemented"); }
-    async loadChapterIndex(): Promise<[]> { return []; }
-    async getNextChapterNumber(): Promise<number> { return 1; }
-    bookDir(id: string): string { return join(this.root, "books", id); }
-  }
   class MockPipelineRunner {
     constructor(_config: unknown) {}
     initBook = vi.fn();
@@ -60,7 +52,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   }
 
   return {
-    StateManager: MockStateManager,
+    ...actual,
     PipelineRunner: MockPipelineRunner,
     Scheduler: MockScheduler,
     isNewLayoutBook,

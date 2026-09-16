@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Bot, FileText, FolderUp, Globe, MessageSquare, Radar, RotateCcw, Search, Plus, Trash2 } from "lucide-react";
+import { Bell, Bot, FileText, FolderUp, Globe, MessageSquare, Palette, Radar, RotateCcw, Search, Plus, Trash2, CircleHelp } from "lucide-react";
+import { Drawer } from "../components/ui/drawer";
+import {
+  PROSE_LEADING_OPTIONS,
+  PROSE_SIZE_OPTIONS,
+  STUDIO_FONT_LABELS,
+  type StudioFontId,
+} from "../lib/appearance";
 import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
+import { SettingsTabs } from "../components/SettingsTabs";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
@@ -30,6 +38,7 @@ import {
 interface Nav {
   toDashboard: () => void;
   toServices: () => void;
+  toProjectSettings?: (section?: "advanced") => void;
 }
 
 type NoticeTone = "success" | "error" | "info";
@@ -75,23 +84,25 @@ function SettingsCard({
   icon: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   return (
-    <section className="rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm space-y-4">
+    <section className="border-b border-border pb-8 space-y-4">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 rounded-xl bg-primary/10 p-2 text-primary">{icon}</div>
-        <div>
-          <h2 className="text-base font-bold">{title}</h2>
-          <p className="mt-1 text-sm text-muted-foreground leading-relaxed">{description}</p>
-        </div>
+        <span className="mt-0.5 text-muted-foreground" aria-hidden="true">{icon}</span>
+        <h2 className="text-base font-medium">{title}</h2>
+        <button type="button" className="ml-auto rounded p-1 text-muted-foreground hover:text-foreground" aria-label={`${title} · ?`} onClick={() => setHelpOpen(true)}><CircleHelp size={17} /></button>
       </div>
       {children}
+      <Drawer open={helpOpen} onClose={() => setHelpOpen(false)} title={title}>
+        <p className="text-sm leading-7 text-muted-foreground">{description}</p>
+      </Drawer>
     </section>
   );
 }
 
 const fieldClass = "w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm outline-none focus:border-primary/50";
 
-export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
+export function ProjectSettings({ nav, theme, t, setTheme, section }: { nav: Nav; theme: Theme; t: TFunction; setTheme?: (next: Theme) => void; section?: "advanced" }) {
   const c = useColors(theme);
   const { lang } = useI18n();
   const isZh = lang !== "en";
@@ -116,6 +127,13 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const skillFolderInputRef = useRef<HTMLInputElement>(null);
   const toolDetailsDefaultOpen = usePreferencesStore((s) => s.toolDetailsDefaultOpen);
   const setToolDetailsDefaultOpen = usePreferencesStore((s) => s.setToolDetailsDefaultOpen);
+  const uiFont = usePreferencesStore((s) => s.uiFont);
+  const proseFont = usePreferencesStore((s) => s.proseFont);
+  const proseSize = usePreferencesStore((s) => s.proseSize);
+  const proseLeading = usePreferencesStore((s) => s.proseLeading);
+  const showStudioImage = usePreferencesStore((s) => s.showStudioImage);
+  const paperTone = usePreferencesStore((s) => s.paperTone);
+  const setAppearance = usePreferencesStore((s) => s.setAppearance);
   const skills = skillsData?.skills ?? [];
   const promptGroups = groupPromptPacksForDisplay(promptPacksData ?? { packs: [], prompts: [] });
   const promptList = promptPacksData?.prompts ?? [];
@@ -199,12 +217,19 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   };
 
   return (
-    <div className="space-y-8">
+    <div className="settings-layout">
+      <SettingsTabs
+        active={section === "advanced" ? "advanced" : "appearance"}
+        t={t}
+        onModels={nav.toServices}
+        onAppearance={() => nav.toProjectSettings?.()}
+        onAdvanced={() => nav.toProjectSettings?.("advanced")}
+      />
+      <div className="space-y-8 min-w-0">
       <div className="space-y-2">
-        <h1 className="font-serif text-[32px] font-medium leading-10">
-          {t("settings.title")}
+        <h1 className="text-[32px] font-medium leading-10">
+          {section === "advanced" ? t("settings.advancedTab") : t("settings.appearanceTab")}
         </h1>
-        <p className="text-sm text-muted-foreground">{t("settings.subtitle")}</p>
       </div>
 
       {notice && (
@@ -221,6 +246,128 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
         </div>
       )}
 
+      <div hidden={section === "advanced"}>
+      <SettingsCard title={t("settings.appearance")} description={t("settings.appearanceHint")} icon={<Palette size={18} />}>
+      <div id="settings-appearance" />
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <span className="text-sm">{isZh ? "日间纸色" : "Day paper"}</span>
+          <div className="segmented" aria-label={isZh ? "日间纸色" : "Day paper"}>
+            {(["white", "warm", "mist"] as const).map((tone) => <button key={tone} type="button" className={paperTone === tone ? "active" : ""} aria-pressed={paperTone === tone} onClick={() => setAppearance({ paperTone: tone })}>{isZh ? {white:"素白",warm:"暖纸",mist:"雾灰"}[tone] : {white:"White",warm:"Warm",mist:"Mist"}[tone]}</button>)}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.theme")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-theme">
+            {(["light", "dark"] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={theme === item ? "active" : ""}
+                aria-pressed={theme === item}
+                onClick={() => setTheme?.(item)}
+              >
+                {item === "light" ? t("settings.themeLight") : t("settings.themeDark")}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.uiFont")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-ui-font">
+            {(Object.keys(STUDIO_FONT_LABELS) as StudioFontId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={uiFont === id ? "active" : ""}
+                aria-pressed={uiFont === id}
+                onClick={() => setAppearance({ uiFont: id })}
+              >
+                {isZh ? STUDIO_FONT_LABELS[id].zh : STUDIO_FONT_LABELS[id].en}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.proseFont")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-prose-font">
+            {(Object.keys(STUDIO_FONT_LABELS) as StudioFontId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={proseFont === id ? "active" : ""}
+                aria-pressed={proseFont === id}
+                onClick={() => setAppearance({ proseFont: id })}
+              >
+                {isZh ? STUDIO_FONT_LABELS[id].zh : STUDIO_FONT_LABELS[id].en}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.proseSize")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-prose-size">
+            {PROSE_SIZE_OPTIONS.map((size) => (
+              <button
+                key={size}
+                type="button"
+                className={proseSize === size ? "active" : ""}
+                aria-pressed={proseSize === size}
+                onClick={() => setAppearance({ proseSize: size })}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.proseLeading")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-prose-leading">
+            {PROSE_LEADING_OPTIONS.map((leading) => (
+              <button
+                key={leading}
+                type="button"
+                className={proseLeading === leading ? "active" : ""}
+                aria-pressed={proseLeading === leading}
+                onClick={() => setAppearance({ proseLeading: leading })}
+              >
+                {leading.toFixed(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{isZh ? "留白中的水墨点缀" : "Ink ornament"}</label>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-label={isZh ? "留白中的水墨点缀" : "Ink ornament"}
+            aria-checked={showStudioImage}
+            data-testid="settings-studio-image"
+            onClick={() => setAppearance({ showStudioImage: !showStudioImage })}
+            className={`relative h-[25px] w-[43px] shrink-0 rounded-full ${showStudioImage ? "bg-seal" : "bg-border-strong"}`}
+          >
+            <span className={`absolute top-[3px] left-[3px] h-[19px] w-[19px] rounded-full bg-background transition-transform ${showStudioImage ? "translate-x-[18px]" : ""}`} />
+          </button>
+        </div>
+        <div className="font-specimen" data-testid="settings-font-specimen">
+          <h3>{t("settings.fontSpecimenTitle")}</h3>
+          <p>{t("settings.fontSpecimenBody")}</p>
+        </div>
+      </SettingsCard>
+      </div>
+      <div id="settings-advanced" hidden={section !== "advanced"} className="space-y-8">
       <SettingsCard title={t("settings.writingLanguage")} description={t("settings.writingLanguageHint")} icon={<Globe size={18} />}>
         <div className="flex flex-wrap gap-2" data-testid="settings-writing-language">
           {(["zh", "en"] as const).map((lang) => (
@@ -753,6 +900,8 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           {saving === "detection" ? t("config.saving") : t("config.save")}
         </button>
       </SettingsCard>
+      </div>
+      </div>
     </div>
   );
 }

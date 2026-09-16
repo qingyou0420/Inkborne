@@ -59,7 +59,10 @@ export async function generateChapterDraft(input: WriteRuntime & {
   const previous = input.chapterNumber > 1
     ? await loadChapterText(input.root, input.chapterNumber - 1)
     : "";
-  const existing = await loadChapterText(input.root, input.chapterNumber);
+  const currentManifest = await loadManifest(input.root);
+  const priorId = currentManifest.candidates.write?.[String(input.chapterNumber)];
+  const prior = priorId ? await loadArtifact(input.root, priorId) : null;
+  const existing = prior?.body ?? await loadChapterText(input.root, input.chapterNumber);
   const located = await findChapterRelativePath(
     join(input.root.projectRoot, "books", input.root.bookId),
     input.chapterNumber,

@@ -454,6 +454,7 @@ function holesInRange(collected: ReadonlyMap<number, WeaveChapterBeat>, start: n
 }
 
 export async function generateWeaveRange(input: WeaveRuntime & {
+  readonly requirements?: string;
   readonly startChapter: number;
   readonly endChapter: number;
   readonly targetChapters?: number;
@@ -495,6 +496,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
     title: stripVolumeOrdinalPrefix(volume.title),
   }));
   const resume = input.resumeRunId ? await loadRun(input.root, input.resumeRunId) : undefined;
+  const requirements = input.requirements ?? resume?.checkpoint?.requirements;
   const fillHolesFrom = (beats: readonly WeaveChapterBeat[], nextOutline?: string, nextVolumes?: AssembledVolume[]) => {
     for (const beat of beats) {
       if (!isFilledBeat(beat) || isFilledBeat(existingMap.get(beat.chapterNumber))) continue;
@@ -571,6 +573,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
     modelSnapshot: resolved.snapshot,
     producedArtifactIds: artifactId ? [artifactId] : [],
     checkpoint: {
+      requirements,
       requestedStart,
       requestedEnd,
       missingChapters: missing,
@@ -607,6 +610,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: artifactId ? [artifactId] : [],
       checkpoint: {
+        requirements,
         requestedStart,
         requestedEnd,
         missingChapters: remaining,
@@ -662,6 +666,8 @@ export async function generateWeaveRange(input: WeaveRuntime & {
         "只输出 JSON：{ bookOutline, volumes: [{ volumeNumber, title, startChapter, endChapter, body }], chapters: [{ chapterNumber, title, summary }] }。",
         "chapters 只含本批章。volumes 覆盖全书，按篇幅自然分卷，不要把全部章硬塞进第一卷。",
         "summary 须含视角、地点、目标、冲突、转折、结尾衔接、伏笔。",
+        requirements ? `作者本次要求：\n${requirements}` : "",
+        requirements && seedMarkdown ? `当前规划（请按要求保留或调整本次范围）：\n${seedMarkdown}` : "",
         serializeCanonBrief(canon),
         ctx.text,
         leadingNotes && `当前作者备注：\n${leadingNotes}`,
@@ -754,6 +760,7 @@ export async function adoptWeave(input: WeaveRuntime & { readonly artifactId: st
 }
 
 export async function reviseWeave(input: WeaveRuntime & {
+  readonly requirements?: string;
   readonly artifactId: string;
   readonly reportId: string;
   readonly selectedIssueIds: readonly string[];
@@ -772,6 +779,7 @@ export async function reviseWeave(input: WeaveRuntime & {
     `只改第 ${input.startChapter}-${input.endChapter} 章概要。输出 JSON：{ chapters: [{ chapterNumber, title, summary }] }。`,
     "不要改范围外的章节。",
     ...selected.map((issue) => `- ${issue.title}: ${issue.suggestion ?? ""}`),
+    input.requirements ? `作者本次要求：\n${input.requirements}` : "",
     ctx.text,
     loaded.body,
   ].join("\n"), input.llm);

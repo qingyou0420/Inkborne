@@ -1,0 +1,97 @@
+/* 墨生万象 · 水墨书房. Shared tokens and manuscript layout. */
+@font-face {
+  font-family: InkCalligraphy;
+  src: url('/fonts/ma-shan-zheng.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  --background: #fafaf7;
+  --background-radial: var(--background);
+  --foreground: #292b29;
+  --card: #fdfdfa;
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --muted-foreground: #626a64;
+  --secondary: #f0f1eb;
+  --secondary-foreground: var(--foreground);
+  --muted: var(--secondary);
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+  --border: #dfe2da;
+  --primary: #303a33;
+  --primary-hover: #222b25;
+  --primary-foreground: #fff;
+  --ink-review-width: 380px;
+  --ink-shell-height: 141px;
+}
+:root[data-paper-tone='warm']:not(.dark) { --background:#f6f2e9; --card:#fcf8f0; --secondary:#eee9de; --border:#dcd7cb; }
+:root[data-paper-tone='mist']:not(.dark) { --background:#edf0ed; --card:#f6f8f5; --secondary:#e5e9e4; --border:#d4dcd4; }
+:root.dark {
+  --background: #292c2b;
+  --background-radial: var(--background);
+  --foreground: #e6e5df;
+  --card: #303432;
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --muted-foreground: #adb4ae;
+  --secondary: #353a36;
+  --secondary-foreground: var(--foreground);
+  --muted: var(--secondary);
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+  --border: #4e5750;
+  --primary: #dce7dc;
+  --primary-hover: #c4d3c5;
+  --primary-foreground: #29332b;
+}
+body, .dark body { color: var(--foreground); }
+.ink-calligraphy, h1.ink-calligraphy, .ink-stage-strip .ink-calligraphy { font-family: InkCalligraphy, InkWenkai, KaiTi, serif; font-weight: 400; }
+.ink-manuscript {
+  font-family: var(--prose, InkSerif, serif);
+  font-size: var(--prose-size, 19px);
+  line-height: var(--leading, 2);
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  word-break: normal;
+  min-width: 0;
+}
+.ink-manuscript h1, .ink-manuscript h2, .ink-manuscript h3 { font-family: inherit; font-weight: 500; line-height: 1.6; }
+.ink-manuscript h1 { font-size: 1.55em; margin-block: 0 1.3em; }
+.ink-manuscript h2 { font-size: 1.2em; margin-block: 1.8em .7em; }
+.ink-manuscript h3 { font-size: 1.08em; margin-block: 1.5em .6em; }
+.ink-manuscript p { margin-block: 0 1.1em; }
+.ink-manuscript li { margin-block: .3em; }
+.ink-manuscript blockquote { border-left: 2px solid var(--border-strong); padding-left: 1.1em; margin: 1.2em 0; color: var(--muted-foreground); }
+.ink-manuscript [data-streamdown='table-wrapper'] { max-width: 100%; overflow: auto; }
+.ink-manuscript-meta { display:flex; flex-wrap:wrap; gap:16px 28px; margin:0 0 32px; padding-bottom:22px; border-bottom:1px solid var(--border); font-family:var(--ui); font-size:13px; }
+.ink-manuscript-meta dt { color:var(--muted-foreground); font-size:12px; margin-bottom:4px; }
+.ink-manuscript-meta dd { margin:0; }
+.ink-task-input { display:block; width:100%; margin-top:10px; padding:12px 14px; border:1px solid var(--input); border-radius:4px; background:var(--background); color:var(--foreground); line-height:1.75; resize:vertical; }
+.ink-task-input::placeholder { color:var(--muted-foreground); }
+.ink-review-pane { position:fixed; top:var(--ink-shell-height); right:0; bottom:0; width:var(--ink-review-width); z-index:40; display:flex; flex-direction:column; border-left:1px solid var(--border); background:var(--card); color:var(--foreground); }
+.ink-review-heading { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:22px 24px 18px; border-bottom:1px solid var(--border); }
+.ink-review-heading h2 { font-family:var(--prose); font-size:20px; font-weight:500; }
+.ink-review-content { min-height:0; overflow:auto; padding:24px; overscroll-behavior:contain; }
+html[data-ink-review-open='true'] .ink-main { margin-right:var(--ink-review-width); }
+html[data-ink-review-open='true'] .manuscript-actions { right:var(--ink-review-width); }
+html:has(.focus-mode) { --ink-shell-height:0px; }
+html:has(.ask-workspace):not(:has(.in-book)) { --ink-shell-height:83px; }
+.manuscript-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:12px; padding-block:16px; border-top:1px solid var(--border); }
+.manuscript-action-buttons { display:flex; align-items:center; gap:10px; }
+.manuscript-actions button { min-height:38px; }
+.ink-main { min-width:0; }
+@media (max-width:1250px) {
+  :root { --ink-review-width:340px; }
+  html[data-ink-review-open='true'] .one-workspace { grid-template-columns:minmax(0,1fr); }
+  html[data-ink-review-open='true'] .one-workspace > .one-directory { display:none; }
+}
+@media (max-width:760px) {
+  :root { --ink-review-width: min(92vw, 380px); --ink-shell-height:110px; }
+  html[data-ink-review-open='true'] .ink-main { margin-right:0; }
+  html[data-ink-review-open='true'] .manuscript-actions { right:0; }
+}
+@media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; scroll-behavior:auto !important; } }

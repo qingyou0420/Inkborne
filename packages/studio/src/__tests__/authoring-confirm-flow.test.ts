@@ -9,7 +9,14 @@ const INKOS_CONFIG = JSON.stringify({
   name: "test-project",
   version: "0.1.0",
   language: "zh",
-  llm: { model: "test-model", provider: "anthropic" },
+  llm: {
+    model: "test-model",
+    defaultModel: "test-model",
+    provider: "custom",
+    service: "custom:fixture",
+    configSource: "studio",
+    services: [{ service: "custom", name: "fixture", baseUrl: "https://example.invalid/v1", models: ["test-model"] }],
+  },
   notify: [],
 });
 
@@ -24,6 +31,10 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-confirm-"));
     await writeFile(join(root, "inkos.json"), INKOS_CONFIG, "utf-8");
+    // Exercise the current service binding contract with an isolated fake secret.
+    // INKOS_AGENT_LLM_STUB handles completion; this URL must never be contacted.
+    await mkdir(join(root, ".inkos"), { recursive: true });
+    await writeFile(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:fixture": { apiKey: "test-only" } } }));
     await mkdir(join(root, "interactive-films", "p"), { recursive: true });
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -48,7 +59,7 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(propose.status).toBe(200);
+    expect(propose.status, await propose.clone().text()).toBe(200);
 
     // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
     // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"
@@ -65,7 +76,7 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(confirm.status).toBe(200);
+    expect(confirm.status, await confirm.clone().text()).toBe(200);
 
     // Assert the story graph was created with at least 4 nodes
     const graph = await loadStoryGraph(root, bookId);

@@ -1434,6 +1434,47 @@ describe("chat message actions", () => {
     expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
   });
 
+  it("does not mistake a same-millisecond user message for an assistant stream", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession("book-a", "book");
+    store.getState().setSelectedModel("model-a", "service-a");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_001).mockReturnValueOnce(1_000);
+    try {
+      fetchJson
+        .mockResolvedValueOnce({ session: { sessionId, bookId: "book-a", sessionKind: "book" } })
+        .mockResolvedValueOnce({ response: "完整回复" });
+      await store.getState().sendMessage(sessionId, "继续");
+      const messages = store.getState().sessions[sessionId]?.messages ?? [];
+      expect(messages).toContainEqual(expect.objectContaining({ role: "user", content: "继续", timestamp: 1_001 }));
+      expect(messages.filter((message) => message.content === "完整回复")).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([false, true])("keeps a rebound notice separate when its timestamp matches the request stream (SSE=%s)", async (withStream) => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession("book-a", "book");
+    store.getState().setSelectedModel("old-model", "service-a");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      fetchJson
+        .mockResolvedValueOnce({ session: { sessionId, bookId: "book-a", sessionKind: "book" } })
+        .mockImplementationOnce(async () => {
+          if (withStream) fakeEventSources[0]?.emit("thinking:start", { sessionId });
+          now.mockReturnValue(1_001);
+          return { response: "完整回复", model: { id: "new-model", service: "service-a", notice: "本会话已改用 new-model" } };
+        });
+      await store.getState().sendMessage(sessionId, "继续");
+      const messages = store.getState().sessions[sessionId]?.messages ?? [];
+      expect(messages.filter((message) => message.content.includes("本会话已改用 new-model"))).toHaveLength(1);
+      expect(messages.filter((message) => message.content === "完整回复")).toHaveLength(1);
+      expect(messages.find((message) => message.content.includes("本会话已改用 new-model"))?.timestamp).toBe(1_001);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("does not record a failed send when the user stops the round themselves", async () => {
     const store = createTestStore();
     const sessionId = store.getState().createDraftSession(null, "chat");

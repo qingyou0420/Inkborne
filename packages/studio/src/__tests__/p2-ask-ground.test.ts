@@ -58,7 +58,8 @@ describe("P2-2 研墨", () => {
     expect(ground).toMatch(/待定项/);
     expect(ground).toMatch(/基础设定/);
     expect(ground).toMatch(/故事概要/);
-    expect(ground).toMatch(/ground-toc/);
+    expect(read("src/components/AuthoringGroundPanel.tsx")).toMatch(/ground-toc/);
+    expect(ground).toMatch(/legacySections=/);
     expect(ground).toMatch(/AuthoringGroundPanel/);
     expect(ground).toMatch(/\/books\/\$\{bookId\}\/story-card/);
     expect(ground).not.toMatch(/ground-nav/);
@@ -76,18 +77,19 @@ describe("P2-2 研墨", () => {
 });
 
 describe("P2-3 visual", () => {
-  it("uses local 墨/宣/朱 tokens and no Google Fonts CDN", () => {
+  it("uses local ONE reading tokens and no Google Fonts CDN", () => {
     const css = read("src/index.css");
     expect(css).not.toMatch(/fonts\.googleapis\.com/);
+    expect(css).toMatch(/noto-sans-sc\.ttf/);
     expect(css).toMatch(/lxgw-wenkai-subset\.woff2/);
     expect(css).toMatch(/instrument-serif-regular\.woff2/);
-    expect(css).toMatch(/oklch\(0\.27 0\.014 260\)/);
-    expect(css).toMatch(/--seal: oklch\(0\.58 0\.17 32\)/);
+    expect(css).toMatch(/--background: #ffffff/);
+    expect(css).toMatch(/--seal: #386254/);
     expect(css).not.toMatch(/oklch\(0\.36 0\.07 160\)/);
     expect(css).not.toMatch(/oklch\(0\.70 0\.09 82\)/);
-    expect(css).toMatch(/paper-grain\.svg/);
     expect(existsSync(join(studioRoot, "public/paper-grain.svg"))).toBe(true);
     expect(existsSync(join(studioRoot, "public/fonts/lxgw-wenkai-subset.woff2"))).toBe(true);
+    expect(existsSync(join(studioRoot, "public/fonts/noto-sans-sc.ttf"))).toBe(true);
     expect(readFileSync(join(studioRoot, "public/paper-grain.svg")).byteLength).toBeLessThan(3072);
     const src = [
       read("src/pages/Dashboard.tsx"),

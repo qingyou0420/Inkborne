@@ -261,7 +261,7 @@ export function attachSessionStreamListeners({
   const textDeltaBatcher = createStreamTextDeltaBatcher((deltas) => {
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (runtime) => {
-        const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
+        const [messages, stream] = getOrCreateStream(runtime.messages, streamTs, sourceRequestId);
         const parts = applyStreamTextDeltas(stream.parts ?? [], deltas);
         const flat = deriveFlat(parts);
         return { messages: replaceLast(messages, { ...stream, ...flat, parts }) };
@@ -399,7 +399,7 @@ export function attachSessionStreamListeners({
       flushTextDeltas();
       set((state) => ({
         sessions: updateSession(state.sessions, sessionId, (runtime) => {
-          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
+          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs, sourceRequestId);
           const parts = [...(stream.parts ?? []), { type: "thinking" as const, content: "", streaming: true }];
           const flat = deriveFlat(parts);
           return { messages: replaceLast(messages, { ...stream, ...flat, parts }) };
@@ -427,7 +427,7 @@ export function attachSessionStreamListeners({
       flushTextDeltas();
       set((state) => ({
         sessions: updateSession(state.sessions, sessionId, (runtime) => {
-          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
+          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs, sourceRequestId);
           const parts = [...(stream.parts ?? [])];
           const last = parts[parts.length - 1];
           if (last?.type === "thinking") {
@@ -478,7 +478,7 @@ export function attachSessionStreamListeners({
               ? { isChatStreaming: false }
               : {};
           }
-          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
+          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs, sourceRequestId);
           const parts = [...(stream.parts ?? [])];
 
           if (data.tool === "sub_agent") {
@@ -674,7 +674,7 @@ export function attachSessionStreamListeners({
             );
             return messages ? { messages } : {};
           }
-          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
+          const [messages, stream] = getOrCreateStream(runtime.messages, streamTs, sourceRequestId);
           const parts = [...(stream.parts ?? [])];
           applyContextCompressionToParts(parts, category, phase, data);
           const flat = deriveFlat(parts);

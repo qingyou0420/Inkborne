@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.ground-legacy-document section[hidden] { display: none; }
+.ground-directory .ground-legacy-directory { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 6px; }
+.ground-directory button:disabled { cursor: wait; opacity: .55; }
+@media (min-width: 781px) {
+  .ground-directory { max-height: calc(100dvh - 320px); }
+}
+@media (max-width: 780px) {
+  .ground-directory .ground-legacy-directory { display: flex; gap: 16px; border-top: 0; border-left: 1px solid var(--border); margin-top: 0; padding: 0 0 0 16px; }
+}

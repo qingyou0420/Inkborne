@@ -18,7 +18,7 @@ const SECTION_MAP: ReadonlyArray<{ key: keyof CanonDocument; heading: string }> 
 
 function yamlEscape(value: string): string {
   if (!value) return '""';
-  if (/[:#[\]{}&*?]|^\s|\s$/.test(value)) return JSON.stringify(value);
+  if (/[:#[\]{}&*?"'\\\r\n]|^\s|\s$/.test(value)) return JSON.stringify(value);
   return value;
 }
 
@@ -58,7 +58,14 @@ export function parseCanon(markdown: string): CanonDocument {
       for (const line of yaml.split(/\r?\n/)) {
         const eq = line.indexOf(":");
         if (eq <= 0) continue;
-        meta[line.slice(0, eq).trim()] = line.slice(eq + 1).trim().replace(/^"|"$/g, "");
+        const raw = line.slice(eq + 1).trim();
+        let value = raw;
+        if (raw.startsWith('"') && raw.endsWith('"')) {
+          try { value = String(JSON.parse(raw)); } catch { value = raw.slice(1, -1); }
+        } else if (raw.startsWith("'") && raw.endsWith("'")) {
+          value = raw.slice(1, -1).replace(/''/g, "'");
+        }
+        meta[line.slice(0, eq).trim()] = value;
       }
     }
   }

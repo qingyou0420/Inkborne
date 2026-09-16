@@ -33,9 +33,11 @@ describe("P1-1 sidebar + author", () => {
     expect(sidebar.indexOf("sidebar-create-list")).toBeLessThan(sidebar.indexOf("sidebar-sessions"));
     expect(sidebar).not.toMatch(/projectTalks|projectChatExpanded|SessionKindIcon/);
     expect(sidebar).not.toMatch(/新书与短篇/);
-    expect(home).toMatch(/nav\.signYourName/);
-    expect(home).toMatch(/isInProgressBookStatus/);
-    expect(home).toMatch(/home-edit-author/);
+    const intro = read("src/components/NewBookIntro.tsx");
+    expect(intro).toMatch(/署上你的名字/);
+    expect(intro).toMatch(/\/author\/avatar/);
+    expect(home).toMatch(/ink-shelf-author/);
+    expect(read("src/components/AppMoreMenu.tsx")).toMatch(/onClick=\{nav.toAuthor\}/);
     const author = read("src/pages/AuthorPage.tsx");
     expect(author).not.toMatch(/useApi.*\/books/);
     expect(author).not.toMatch(/author\.myBooks/);
@@ -56,7 +58,7 @@ describe("P1-2 落笔", () => {
     const write = read("src/pages/BookDetail.tsx");
     const settings = read("src/components/BookSettingsDrawer.tsx");
     const tools = read("src/components/BookToolsDrawer.tsx");
-    expect(write).toMatch(/落笔/);
+    expect(write + read("src/components/AuthoringWritePanel.tsx")).toMatch(/落笔/);
     expect(write).toMatch(/write-next-primary/);
     expect(write).toMatch(/book\.exportMenu/);
     expect(write).toMatch(/book\.draftOnly/);

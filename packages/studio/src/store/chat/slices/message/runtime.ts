@@ -96,15 +96,22 @@ export function extractToolError(result: unknown): string {
   return localizeKnownRuntimeMessage(String(result)).slice(0, 500);
 }
 
+export function isRequestStreamMessage(message: Message, streamTs: number, streamRequestId?: string): boolean {
+  return message.role === "assistant" && (streamRequestId
+    ? message.streamRequestId === streamRequestId
+    : message.timestamp === streamTs);
+}
+
 export function getOrCreateStream(
   messages: ReadonlyArray<Message>,
   streamTs: number,
+  streamRequestId?: string,
 ): [ReadonlyArray<Message>, Message] {
   const last = messages[messages.length - 1];
-  if (last?.timestamp === streamTs && last.role === "assistant") {
+  if (last && isRequestStreamMessage(last, streamTs, streamRequestId)) {
     return [messages, last];
   }
-  const message: Message = { role: "assistant", content: "", timestamp: streamTs, parts: [] };
+  const message: Message = { role: "assistant", content: "", timestamp: streamTs, parts: [], ...(streamRequestId ? { streamRequestId } : {}) };
   return [[...messages, message], message];
 }
 

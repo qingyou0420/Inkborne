@@ -56,9 +56,14 @@ describe("P0-7 chrome lift", () => {
     }
     expect(read("src/pages/ProjectSettings.tsx")).not.toMatch(/Settings2/);
     expect(read("src/pages/CheckUpdate.tsx")).not.toMatch(/RefreshCw size=\{28\}/);
-    expect(read("src/pages/BookGround.tsx")).toMatch(/text-\[32px\]/);
+    const groundPage = read("src/pages/BookGround.tsx");
+    expect(groundPage).toMatch(/AuthoringGroundPanel/);
+    expect(groundPage).not.toMatch(/text-\[32px\]/);
     expect(read("src/pages/BookStudy.tsx")).toMatch(/text-\[32px\]/);
-    expect(read("src/pages/BookDetail.tsx")).toMatch(/text-\[32px\]/);
+    const writePage = read("src/pages/BookDetail.tsx");
+    expect(writePage).not.toMatch(/text-\[32px\]/);
+    expect(writePage).toMatch(/AuthoringWritePanel/);
+    expect(writePage.indexOf("<AuthoringWritePanel")).toBeLessThan(writePage.indexOf('<details className="write-legacy"'));
   });
 });
 

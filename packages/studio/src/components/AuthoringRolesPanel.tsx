@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { postApi, putApi, useApi } from "../hooks/use-api";
 import { Drawer } from "./ui/drawer";
 import type { AuthoringRoleId } from "../lib/authoring-roles";
@@ -31,20 +32,54 @@ const STAGES = [
   { id: "write", zh: "落笔", en: "Write" },
 ] as const;
 
-export function AuthoringRolesPanel({ isZh }: { readonly isZh: boolean }) {
-  const { data, refetch } = useApi<RolesResponse>("/authoring/roles");
+export function AuthoringRolesPanel({
+  isZh,
+  startRole,
+  compact,
+  onEditorClose,
+}: {
+  readonly isZh: boolean;
+  readonly startRole?: AuthoringRoleId | null;
+  readonly compact?: boolean;
+  readonly onEditorClose?: () => void;
+}) {
+  const { data, loading, error, refetch } = useApi<RolesResponse>("/authoring/roles");
   const [editing, setEditing] = useState<AuthoringRoleId | null>(null);
   const [draft, setDraft] = useState<RoleConfig>({});
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [testFailed, setTestFailed] = useState(false);
+  const initializedRole = useRef<AuthoringRoleId | null>(null);
+  const busyRef = useRef(false);
+  const mounted = useRef(true);
+  const startRoleRef = useRef(startRole);
+  startRoleRef.current = startRole;
+  const busy = saving || testing || filling;
+  const ready = Boolean(data && !loading && !error);
   const roles = data?.roles ?? {};
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { setTestResult(null); setTestFailed(false); setSaveError(null); }, [draft]);
 
   const open = (roleId: AuthoringRoleId) => {
+    if (!ready || busyRef.current) return;
     setEditing(roleId);
     setDraft(roles[roleId] ?? {});
     setTestResult(null);
+    setSaveError(null);
   };
+
+  useEffect(() => {
+    if (!startRole) { initializedRole.current = null; return; }
+    if (!ready || busyRef.current || initializedRole.current === startRole) return;
+    initializedRole.current = startRole;
+    setEditing(startRole);
+    setDraft((data?.roles ?? {})[startRole] ?? {});
+    setTestResult(null);
+    setSaveError(null);
+  }, [startRole, data, ready, busy]);
 
   const payload = () => ({
     ...draft,
@@ -52,77 +87,141 @@ export function AuthoringRolesPanel({ isZh }: { readonly isZh: boolean }) {
   });
 
   const testCurrent = async () => {
-    if (!editing) return;
+    if (!editing || !ready || busyRef.current) return;
+    const requestedRole = startRole;
+    busyRef.current = true;
     setTesting(true);
+    setTestResult(null);
+    setTestFailed(false);
     try {
       const result = await postApi<{ ok: boolean; error?: string; modelId?: string; serviceRef?: string }>(
         `/authoring/roles/${editing}/test`,
         payload(),
       );
+      if (!mounted.current || startRoleRef.current !== requestedRole) return;
+      setTestFailed(!result.ok);
       setTestResult(result.ok
         ? (isZh ? `通过 · ${result.modelId ?? ""} @ ${result.serviceRef ?? ""}` : `OK · ${result.modelId ?? ""} @ ${result.serviceRef ?? ""}`)
         : (result.error || (isZh ? "测试失败" : "Failed")));
     } catch (error) {
+      if (!mounted.current || startRoleRef.current !== requestedRole) return;
+      setTestFailed(true);
       setTestResult(error instanceof Error ? error.message : String(error));
     } finally {
-      setTesting(false);
+      busyRef.current = false;
+      if (mounted.current) setTesting(false);
     }
   };
 
   const save = async () => {
-    if (!editing) return;
+    if (!editing || !ready || busyRef.current) return;
+    const requestedRole = startRole;
+    busyRef.current = true;
     setSaving(true);
+    setSaveError(null);
     try {
       await putApi(`/authoring/roles/${editing}`, payload());
       await refetch();
+      if (!mounted.current || startRoleRef.current !== requestedRole) return;
       setEditing(null);
+      onEditorClose?.();
+    } catch (error) {
+      if (mounted.current && startRoleRef.current === requestedRole) setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
-      setSaving(false);
+      busyRef.current = false;
+      if (mounted.current) setSaving(false);
     }
   };
 
   const fillMissing = async () => {
-    await postApi("/authoring/roles/fill-missing", {});
-    await refetch();
+    if (!ready || busyRef.current) return;
+    busyRef.current = true;
+    setFilling(true);
+    setSaveError(null);
+    try {
+      await postApi("/authoring/roles/fill-missing", {});
+      await refetch();
+    } catch (error) {
+      if (mounted.current) setSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      busyRef.current = false;
+      if (mounted.current) setFilling(false);
+    }
   };
 
   const title = editing && data?.meta[editing]
     ? (isZh ? data.meta[editing]!.zh : data.meta[editing]!.en)
-    : "";
+    : (isZh ? "模型配置" : "Model configuration");
+
+  const closeEditor = () => {
+    if (busyRef.current) return;
+    setEditing(null);
+    setSaveError(null);
+    onEditorClose?.();
+  };
 
   return (
-    <section className="space-y-4 rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm">
-      <div>
-        <h2 className="font-serif text-lg">{isZh ? "四步八角色" : "Eight authoring roles"}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {isZh
-            ? "每一步的创作与审查分开保存。可以共用连接，改一个角色不会改另外七个。"
-            : "Main and review for each stage are saved separately. Shared connections do not couple roles."}
-        </p>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {STAGES.map((stage) => {
-          const main = `${stage.id}.main` as AuthoringRoleId;
-          const review = `${stage.id}.review` as AuthoringRoleId;
-          return (
-            <div key={stage.id} className="space-y-2 rounded-xl border border-border/60 bg-secondary/20 p-3">
-              <div className="text-sm font-semibold">{isZh ? stage.zh : stage.en}</div>
-              <RoleCard isZh={isZh} kind="main" role={roles[main]} onEdit={() => open(main)} />
-              <RoleCard isZh={isZh} kind="review" role={roles[review]} onEdit={() => open(review)} />
+    <section className={compact ? "" : "space-y-5"} data-testid="authoring-roles-panel">
+      {!compact && (error || saveError) ? <p role="alert" className="text-sm text-destructive">{saveError || error}<button type="button" className="btn-ghost ml-2" disabled={loading || busy} onClick={() => void refetch()}>{isZh ? "重新读取" : "Retry"}</button></p> : null}
+      {compact ? null : (
+        <>
+          <div>
+            <h2 className="text-[23px] font-medium">{isZh ? "四位执笔者，四位审读者。" : "Four writers, four readers."}</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {isZh
+                ? "每一步的创作与审查分开保存。可以共用连接，改一个角色不会改另外七个。"
+                : "Main and review for each stage are saved separately. Shared connections do not couple roles."}
+            </p>
+          </div>
+          <div className="role-grid">
+            <div>
+              {STAGES.map((stage) => {
+                const main = `${stage.id}.main` as AuthoringRoleId;
+                return (
+                  <RoleSlot
+                    key={main}
+                    glyph={(isZh ? stage.zh : stage.en).slice(0, 1)}
+                    title={isZh ? `${stage.zh} · 创作` : `${stage.en} · Write`}
+                    role={roles[main]}
+                    kind="main"
+                    isZh={isZh}
+                    onEdit={() => open(main)}
+                  />
+                );
+              })}
             </div>
-          );
-        })}
-      </div>
-      <button
-        type="button"
-        onClick={() => void fillMissing()}
-        className="rounded-lg border border-border px-3 py-2 text-sm"
-      >
-        {isZh ? "从现有配置填充缺失项" : "Fill missing from current config"}
-      </button>
+            <div>
+              {STAGES.map((stage) => {
+                const review = `${stage.id}.review` as AuthoringRoleId;
+                return (
+                  <RoleSlot
+                    key={review}
+                    glyph={(isZh ? stage.zh : stage.en).slice(0, 1)}
+                    title={isZh ? `${stage.zh} · 审查` : `${stage.en} · Review`}
+                    role={roles[review]}
+                    kind="review"
+                    isZh={isZh}
+                    onEdit={() => open(review)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void fillMissing()}
+            disabled={busy || !ready}
+            className="btn-ghost"
+          >
+            {isZh ? "从现有配置填充缺失项" : "Fill missing from current config"}
+          </button>
+        </>
+      )}
 
-      <Drawer open={Boolean(editing)} title={title} onClose={() => setEditing(null)}>
-        <div className="space-y-3">
+      <Drawer open={Boolean(editing || startRole)} title={title} onClose={closeEditor}>
+        {error || !data ? <p role={error ? "alert" : "status"} className="text-sm">{error || (isZh ? "正在读取模型配置…" : "Loading model configuration…")}{error ? <button type="button" className="btn-ghost ml-2" disabled={loading || busy} onClick={() => void refetch()}>{isZh ? "重试" : "Retry"}</button> : null}</p> : null}
+        {saveError ? <RoleConfigError message={saveError} operation="save" serviceRef={draft.serviceRef} isZh={isZh} /> : null}
+        <fieldset disabled={busy || !ready || !editing} className="space-y-3">
           <label className="block text-sm">
             {isZh ? "服务连接" : "Service"}
             <input
@@ -158,9 +257,27 @@ export function AuthoringRolesPanel({ isZh }: { readonly isZh: boolean }) {
           <label className="block text-sm">
             {isZh ? "模型" : "Model"}
             <input
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-[9px] font-mono"
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-[9px] font-mono break-all"
               value={draft.modelId ?? ""}
               onChange={(event) => setDraft((prev) => ({ ...prev, modelId: event.target.value }))}
+            />
+          </label>
+          <label className="block text-sm">
+            {isZh ? "温度" : "Temperature"}
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-[9px]"
+              value={draft.temperature ?? ""}
+              onChange={(event) => {
+                const value = event.target.value;
+                setDraft((prev) => ({
+                  ...prev,
+                  temperature: value === "" ? undefined : Number(value),
+                }));
+              }}
             />
           </label>
           <label className="block text-sm">
@@ -179,15 +296,18 @@ export function AuthoringRolesPanel({ isZh }: { readonly isZh: boolean }) {
             />
             {isZh ? "流式输出" : "Streaming"}
           </label>
-          {testResult ? <p className="text-sm text-muted-foreground">{testResult}</p> : null}
+          {testResult ? testFailed
+            ? <RoleConfigError message={testResult} operation="test" serviceRef={draft.serviceRef} isZh={isZh} />
+            : <p role="status" className="text-sm text-muted-foreground">{testResult}</p>
+            : null}
           <div className="flex flex-wrap justify-end gap-2 pt-2">
-            <button type="button" className="rounded-lg px-3 py-2 text-sm" onClick={() => setEditing(null)}>
+            <button type="button" className="rounded-lg px-3 py-2 text-sm" onClick={closeEditor}>
               {isZh ? "取消" : "Cancel"}
             </button>
             <button
               type="button"
               className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-              disabled={testing}
+              disabled={busy || !ready}
               onClick={() => void testCurrent()}
             >
               {testing ? (isZh ? "测试中…" : "Testing…") : (isZh ? "测试此配置" : "Test this config")}
@@ -195,41 +315,71 @@ export function AuthoringRolesPanel({ isZh }: { readonly isZh: boolean }) {
             <button
               type="button"
               className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-              disabled={saving}
+              disabled={busy || !ready}
               onClick={() => void save()}
             >
               {saving ? (isZh ? "保存中…" : "Saving") : (isZh ? "保存配置" : "Save")}
             </button>
           </div>
-        </div>
+        </fieldset>
       </Drawer>
     </section>
   );
 }
 
-function RoleCard({
-  isZh,
-  kind,
+function RoleConfigError({ message, operation, serviceRef, isZh }: {
+  readonly message: string;
+  readonly operation: "save" | "test";
+  readonly serviceRef?: string;
+  readonly isZh: boolean;
+}) {
+  // Compatible connections may report the protocol provider (e.g. openai),
+  // which is not necessarily the service the user selected.
+  const missingKey = /no api key\b|missing api[-_ ]?key|api[-_ ]?key.*(?:missing|required|not (?:set|configured))/i.test(message);
+  const connection = serviceRef?.trim();
+  const summary = missingKey
+    ? (isZh
+      ? `${connection ? `连接「${connection}」` : "当前连接"}缺少 API Key。请在「模型配置」中打开该连接，补全 API Key 后重试。`
+      : `${connection ? `Connection “${connection}”` : "The selected connection"} has no API key. Open it in Model Config, add its API key, then retry.`)
+    : (isZh
+      ? `${operation === "save" ? "配置未保存" : "测试未通过"}。请检查服务连接与模型配置后重试，具体原因可查看错误详情。`
+      : `${operation === "save" ? "Configuration was not saved" : "The test failed"}. Check the connection and model configuration, then retry. See error details for the reported cause.`);
+  return (
+    <div role="alert" className="text-sm text-destructive">
+      <p>{summary}</p>
+      <details className="mt-2">
+        <summary className="cursor-pointer">{isZh ? "错误详情" : "Error details"}</summary>
+        <pre className="mt-2 whitespace-pre-wrap break-all font-mono text-xs">{message}</pre>
+      </details>
+    </div>
+  );
+}
+
+function RoleSlot({
+  glyph,
+  title,
   role,
+  kind,
+  isZh,
   onEdit,
 }: {
-  readonly isZh: boolean;
-  readonly kind: "main" | "review";
+  readonly glyph: string;
+  readonly title: string;
   readonly role?: RoleConfig;
+  readonly kind: "main" | "review";
+  readonly isZh: boolean;
   readonly onEdit: () => void;
 }) {
-  const label = kind === "main" ? (isZh ? "创作" : "Main") : (isZh ? "审查" : "Review");
+  const model = role?.modelId?.trim()
+    || (kind === "main" ? (isZh ? "未配置创作模型" : "Writing model unset") : (isZh ? "未配置审查模型" : "Review model unset"));
   return (
-    <button
-      type="button"
-      onClick={onEdit}
-      className="flex w-full items-start justify-between rounded-lg bg-background/70 px-3 py-2 text-left"
-    >
-      <div>
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="font-mono text-sm">{role?.modelId || (isZh ? "未配置" : "Unset")}</div>
-      </div>
-      <span className="text-xs text-muted-foreground">{role?.serviceRef}</span>
+    <button type="button" onClick={onEdit} className="role-slot">
+      <span className="role-glyph">{glyph}</span>
+      <span className="min-w-0">
+        <strong>{title}</strong>
+        <small>{model}{role?.serviceRef ? ` · ${role.serviceRef}` : ""}</small>
+      </span>
+      <ChevronRight size={16} className="role-chevron" />
     </button>
   );
 }

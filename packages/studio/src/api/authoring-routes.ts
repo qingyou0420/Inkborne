@@ -308,7 +308,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       reportId: string;
       selectedIssueIds: string[];
       extraRequirement?: string;
-      reuseStale?: boolean;
+      reuseStale?: boolean; requirements?: string;
     }>();
     const project = await deps.loadProject();
     const result = await reviseAskCanon({
@@ -317,7 +317,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       artifactId: body.artifactId,
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
-      extraRequirement: body.extraRequirement,
+      extraRequirement: body.requirements ?? body.extraRequirement,
       reuseStale: body.reuseStale,
     });
     return c.json(result);
@@ -349,13 +349,13 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/ground/generate", async (c) => {
-    const body = await c.req.json<{ bookId: string; entryIds?: string[]; regenerate?: boolean }>();
+    const body = await c.req.json<{ bookId: string; entryIds?: string[]; regenerate?: boolean; requirements?: string }>();
     const project = await deps.loadProject();
     const result = await generateGroundEntries({
       root: storeRoot(deps.root, body),
       project,
       entryIds: body.entryIds,
-      regenerate: body.regenerate,
+      regenerate: body.regenerate, requirements: body.requirements,
     });
     return c.json(result);
   });
@@ -377,13 +377,13 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       entryId?: string;
       reportId: string;
       selectedIssueIds: string[];
-      reuseStale?: boolean;
+      reuseStale?: boolean; requirements?: string;
     }>();
     const project = await deps.loadProject();
     const result = await reviseGroundEntry({
       root: storeRoot(deps.root, body),
       project,
-      entryId: body.entryId,
+      entryId: body.entryId, requirements: body.requirements,
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
       reuseStale: body.reuseStale,
@@ -403,7 +403,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/weave/generate", async (c) => {
-    const body = await c.req.json<{ bookId: string; startChapter: number; endChapter: number; targetChapters?: number; wait?: boolean }>();
+    const body = await c.req.json<{ bookId: string; startChapter: number; endChapter: number; targetChapters?: number; wait?: boolean; requirements?: string }>();
     const project = await deps.loadProject();
     const root = storeRoot(deps.root, body);
     const runId = newRunId();
@@ -421,7 +421,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       progressTotal: end - start + 1,
       progressLabel: `本次 0/${end - start + 1}`,
       modelSnapshot: {},
-      checkpoint: { requestedStart: start, requestedEnd: end, missingChapters: [], producedScope: `chapters:${start}-${end}` },
+      checkpoint: { requestedStart: start, requestedEnd: end, missingChapters: [], producedScope: `chapters:${start}-${end}`, requirements: body.requirements },
       createdAt: now,
       updatedAt: now,
     });
@@ -430,7 +430,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       project,
       startChapter: start,
       endChapter: end,
-      targetChapters: body.targetChapters,
+      targetChapters: body.targetChapters, requirements: body.requirements,
       runId,
     });
     if (body.wait) {
@@ -469,7 +469,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       selectedIssueIds: string[];
       startChapter: number;
       endChapter: number;
-      reuseStale?: boolean;
+      reuseStale?: boolean; requirements?: string;
     }>();
     const project = await deps.loadProject();
     const artifactId = await reviseWeave({
@@ -479,7 +479,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
       startChapter: body.startChapter,
-      endChapter: body.endChapter,
+      endChapter: body.endChapter, requirements: body.requirements,
       reuseStale: body.reuseStale,
     });
     return c.json({ artifactId });
@@ -554,7 +554,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       reportId: string;
       selectedIssueIds: string[];
       extraRequirement?: string;
-      reuseStale?: boolean;
+      reuseStale?: boolean; requirements?: string;
     }>();
     const project = await deps.loadProject();
     const result = await reviseChapterDraft({
@@ -563,7 +563,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       artifactId: body.artifactId,
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
-      extraRequirement: body.extraRequirement,
+      extraRequirement: body.requirements ?? body.extraRequirement,
       reuseStale: body.reuseStale,
     });
     return c.json(result);

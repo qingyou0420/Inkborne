@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-16T01:18:00+08:00",
+  "title": "Design System: 墨生万象 · 水墨书房",
+  "extensions": {
+    "colorMeta": {"ink":{"role":"primary","displayName":"墨色"},"paper":{"role":"neutral","displayName":"素白纸"},"night-paper":{"role":"neutral","displayName":"深炭灰"}},
+    "typographyMeta": {"display":{"displayName":"书法阶段名","purpose":"仅问心、研墨、织卷、落笔"},"body":{"displayName":"宋体文稿","purpose":"可切换字体、字号与行距"}},
+    "breakpoints": [{"name":"review-collapse-directory","value":"1250px"},{"name":"compact-home","value":"1150px"}],
+    "shadows": [],
+    "motion": []
+  },
+  "components": [
+    {"name":"进入问心","kind":"button","refersTo":"button-primary","description":"首页唯一主要动作","html":"<button class=\"ink-btn\">进入问心</button>","css":".ink-btn{min-height:42px;padding:8px 17px;border:1px solid var(--primary,#303a33);border-radius:5px;background:var(--primary,#303a33);color:var(--primary-foreground,#fff);font:500 14px/20px sans-serif;cursor:pointer}.ink-btn:hover{background:var(--primary-hover,#222b25)}.ink-btn:focus-visible{outline:2px solid var(--ring,#386254);outline-offset:3px}"},
+    {"name":"修改要求","kind":"input","refersTo":"task-input","description":"重生前收集简短任务要求","html":"<label>修改重点<textarea placeholder=\"希望这次调整什么\"></textarea></label>","css":"label{display:block;color:var(--foreground,#292b29);font:14px/1.7 sans-serif}textarea{display:block;box-sizing:border-box;width:100%;min-height:90px;margin-top:10px;padding:12px 14px;border:1px solid var(--input,#858c88);border-radius:4px;background:var(--background,#fafaf7);color:var(--foreground,#292b29);font:14px/1.75 sans-serif}textarea:hover{border-color:var(--foreground,#292b29)}textarea:focus-visible{outline:2px solid var(--ring,#386254);outline-offset:2px}"},
+    {"name":"四阶段导航","kind":"nav","description":"以文字和当前页细线识别阶段","html":"<nav><button aria-current=\"page\">问心</button><button>研墨</button><button>织卷</button><button>落笔</button></nav>","css":"nav{display:flex;gap:28px}button{padding:12px 4px;background:none;border:0;border-bottom:2px solid transparent;color:var(--muted-foreground,#626a64);font:29px/1.2 InkCalligraphy,KaiTi,serif;cursor:pointer}button[aria-current]{color:var(--foreground,#292b29);border-bottom-color:currentColor}button:hover{color:var(--foreground,#292b29)}button:focus-visible{outline:2px solid var(--ring,#386254);outline-offset:3px}"}
+  ],
+  "narrative": {
+    "northStar":"水墨书房",
+    "overview":"简洁、安静。墨意只留在空白里，问心、研墨、织卷、落笔围绕创作文稿展开。",
+    "keyCharacteristics":["留白点墨","默认阅读","显式编辑与采用","唯一配置入口"],
+    "rules":[{"name":"装饰留在空白","body":"水墨不压文字，不把小说场景当软件背景。","section":"layout"}],
+    "dos":["保持四阶段清楚","保存和采用分别操作","错误时保留原稿"],
+    "donts":["不新增灵感手记功能","不堆叠重复入口","不把代码测试当视觉终审"]
+  }
+}

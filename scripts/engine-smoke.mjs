@@ -3,7 +3,8 @@
  * non-4567 port, then shut it down. No Next.js 1.x path.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -96,6 +97,28 @@ try {
   if (health.projectRoot !== root) throw new Error(`projectRoot mismatch: ${health.projectRoot}`);
   if (health.instanceToken !== token) throw new Error("instanceToken mismatch");
   if (port === 4567) throw new Error("smoke used 4567");
+  const dist = join(repoRoot, "packages", "studio", "dist");
+  if (existsSync(join(dist, "index.html"))) {
+    const index = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    const assets = [...index.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)].map((match) => match[1]);
+    if (!assets.some((asset) => asset.endsWith(".js"))) throw new Error("built application entry is missing");
+    const css = assets.filter((asset) => asset.endsWith(".css")).map((asset) => readFileSync(join(dist, asset), "utf8")).join("\n");
+    const fonts = [...css.matchAll(/url\(["']?(\/fonts\/[^)"']+)["']?\)/g)].map((match) => match[1]);
+    const entryCode = assets.filter((asset) => asset.endsWith(".js")).map((asset) => readFileSync(join(dist, asset), "utf8")).join("\n");
+    const diagrams = [...entryCode.matchAll(/["'](\/assets\/vendor\/mermaid-[^"']+\.mjs)["']/g)].map((match) => match[1]);
+    const requests = [...new Set([...assets, ...fonts, ...diagrams, "/inkborne-mark.png", "/studio-light.png"])];
+    const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+    for (const asset of requests) {
+      const response = await fetch(`http://127.0.0.1:${port}${asset}`);
+      if (!response.ok || response.headers.get("content-type")?.includes("text/html")) throw new Error(`asset unavailable: ${asset}`);
+      const content = Buffer.from(await response.arrayBuffer());
+      if (hash(content) !== hash(readFileSync(join(dist, asset)))) throw new Error(`asset differs from build: ${asset}`);
+    }
+    for (const missing of ["/assets/smoke-missing.mjs", "/fonts/smoke-missing.ttf"]) {
+      if ((await fetch(`http://127.0.0.1:${port}${missing}`)).status !== 404) throw new Error(`missing asset fell through to SPA: ${missing}`);
+    }
+    console.log(`built asset smoke ok: ${requests.length} exact-byte responses`);
+  }
   await fetch(`http://127.0.0.1:${port}/api/v1/engine/shutdown`, { method: "POST" });
   console.log(`engine smoke ok port=${port} root=${root}`);
 } finally {

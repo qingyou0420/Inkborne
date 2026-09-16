@@ -18,17 +18,17 @@ const { CURRENT_SETUP_PREFIX, setupNamesForVersion } = require("../../../scripts
   setupNamesForVersion: (version: string) => { primary: string; aliases: string[]; legacy: string };
 };
 
-describe("2.1.9 Windows installer contract", () => {
-  it("keeps root and desktop on the same stable 2.1.9", () => {
-    expect(rootPkg.version).toBe("2.1.9");
-    expect(desktopPkg.version).toBe("2.1.9");
+describe("Windows installer contract", () => {
+  it("keeps root and desktop on the same stable version", () => {
+    expect(rootPkg.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(desktopPkg.version).toBe(rootPkg.version);
     expect(desktopPkg.license).toBe("AGPL-3.0-only");
     expect(rootPkg.scripts["dist:win"]).toBe("node scripts/dist-win.mjs");
     expect(rootPkg.scripts["dist:win"]).not.toMatch(/exit 1/);
   });
 
-  it("names the NSIS artifact Inkborne-Setup-2.1.9.exe and keeps appId", () => {
-    expect(setupFileNameForVersion(rootPkg.version)).toBe("Inkborne-Setup-2.1.9.exe");
+  it("names the NSIS artifact for the current version and keeps appId", () => {
+    expect(setupFileNameForVersion(rootPkg.version)).toBe(`Inkborne-Setup-${rootPkg.version}.exe`);
     const yml = readFileSync(join(desktopDir, "electron-builder.yml"), "utf8");
     expect(yml).toMatch(/appId:\s*com\.fantawriter\.app/);
     expect(yml).toMatch(/productName:\s*Inkborne/);

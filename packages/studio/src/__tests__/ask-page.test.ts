@@ -47,7 +47,9 @@ describe("ask page layout", () => {
     expect(app).toMatch(/deriveBookChromeTab/);
     expect(nav).not.toMatch(/onToggleChat/);
     expect(nav).not.toMatch(/talkOpen/);
-    expect(nav).toMatch(/justify-between/);
+    expect(nav).toMatch(/ink-book-nav/);
+    expect(nav).toMatch(/book-stage-strip/);
+    expect(nav).not.toMatch(/<StageTools/);
     expect(nav).toMatch(/nav\.toAsk\(bookId\)/);
   });
 
@@ -57,7 +59,8 @@ describe("ask page layout", () => {
     const ground = read("src/pages/BookGround.tsx");
     const server = read("src/api/server.ts");
     expect(rail).toMatch(/\/books\/\$\{bookId\}\/story-card/);
-    expect(rail).toMatch(/storyCardSettled/);
+    expect(ground).toMatch(/<AskStoryCard[\s\S]*?derivedFromCanon=\{!legacyEditing && cardData\?\.source === "derived"\}/);
+    expect(ground).toMatch(/editable=\{legacyEditing\}/);
     expect(rail).toMatch(/ask-story-card/);
     expect(ground).toMatch(/\/books\/\$\{bookId\}\/story-card/);
     expect(study).not.toMatch(/truth\/story\/story_card/);

@@ -1,0 +1,114 @@
+/* 问心 / manuscript-first ink workspace. SPDX-License-Identifier: AGPL-3.0-only */
+.ask-workspace { position: relative; padding: 16px 40px 90px; overflow: hidden; }
+.ask-workspace .ask-chat { min-height: 0; }
+.ask-workspace .canon-sheet { padding-bottom: 0; }
+.ask-canon-editor { height: 100%; min-height: 0; }
+.ask-canon-heading { padding: 4px 0 15px; flex: none; }
+.ask-canon-heading h2 { font-size: 23px; font-weight: 500; line-height: 1.4; }
+.ask-canon-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; color: var(--muted-foreground); font-size: 12px; }
+.ask-canon-meta button { margin-left: auto; text-underline-offset: 4px; }
+.ask-canon-meta button:hover { text-decoration: underline; color: var(--foreground); }
+.ask-canon-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.ask-canon-label { display: flex; height: 100%; min-height: 160px; }
+.ask-canon-body { display: block; width: 100%; height: 100%; padding: 15px 6px 20px 0; border: 0; border-radius: 0; resize: none; outline: none; background: transparent; color: var(--foreground); font-weight: 400; }
+.ask-canon-body:focus-visible { outline: 1px solid var(--primary); outline-offset: -1px; }
+.ask-canon-body[readonly] { cursor: progress; }
+.ask-canon-empty { padding: 28px 0; font-size: 14px; line-height: 1.9; color: var(--muted-foreground); }
+.ask-canon-error { padding: 12px 0; color: var(--destructive); font-size: 14px; }
+.ask-canon-error button { margin-top: 8px; text-decoration: underline; text-underline-offset: 4px; }
+.ask-canon-toolbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 12; min-height: 74px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 40px; border-top: 1px solid var(--border); background: var(--background); }
+.ask-canon-workstate { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; color: var(--muted-foreground); font-size: 12px; }
+.ask-canon-workstate button { text-decoration: underline; text-underline-offset: 4px; }
+.ask-canon-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ask-canon-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 12px; min-height: 40px; border: 1px solid var(--control-border, var(--border)); border-radius: 5px; background: var(--background); color: var(--foreground); font-size: 13px; }
+.ask-canon-actions button:hover:not(:disabled) { background: var(--secondary); }
+.ask-canon-actions .ask-canon-primary, .ask-history-restore { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.ask-canon-actions .ask-canon-primary:hover:not(:disabled) { background: var(--primary); filter: brightness(.92); }
+.ask-canon-actions button:disabled, .ask-history-restore:disabled { opacity: .45; cursor: not-allowed; }
+.ask-canon-actions button:focus-visible, .ask-canon-meta button:focus-visible, .ask-version-list button:focus-visible, .ask-history-restore:focus-visible, .ask-chat button:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.ask-version-list { display: flex; flex-direction: column; gap: 0; }
+.ask-version-list button { display: flex; gap: 12px; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 14px; text-align: left; }
+.ask-version-list button[aria-pressed="true"] { color: var(--primary); font-weight: 600; }
+.ask-version-body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-prose, inherit); font-size: 15px; line-height: 1.9; }
+.ask-history-restore { display: block; width: 100%; border-radius: 5px; padding: 11px 14px; margin-top: 20px; font-size: 14px; }
+.ask-review-issue { display: flex; align-items: flex-start; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; line-height: 1.8; }
+.ask-review-issue input { margin-top: 6px; accent-color: var(--primary); }
+.ask-review-issue strong { font-weight: 500; }
+.ask-review-issue span span { display: block; color: var(--muted-foreground); margin-top: 4px; }
+.ask-adopted-preview h3 { font-size: 22px; margin: 14px 0 24px; }
+.ask-adopted-preview section { margin-bottom: 24px; }
+.ask-adopted-preview h4 { color: var(--muted-foreground); font-size: 12px; margin-bottom: 8px; }
+.ask-adopted-preview p { white-space: pre-wrap; }
+.ask-chat .chat-message-scroll { padding: 4px 14px 20px 0; }
+.ask-chat .ask-hello { font-size: 25px; line-height: 1.4; margin: 4px 0 28px; }
+.ask-chat .is-user { max-width: 94%; }
+.ask-chat .is-user > div { border-radius: 5px; background: var(--secondary); padding: 14px 18px; }
+.ask-chat .is-user > div > div { font-size: 15px; line-height: 1.9; }
+.ask-chat .is-assistant { max-width: 100%; font-size: 15px; line-height: 1.9; }
+.ask-chat .ask-composer-wrap { padding: 12px 0 0; border-top: 0; }
+.ask-chat .ask-composer { border-radius: 7px; }
+.ask-chat .ask-composer-main { align-items: flex-end; padding: 12px; }
+.ask-chat .ask-input { min-height: 64px; font-size: 15px; line-height: 1.9; }
+.ask-chat .ask-input::placeholder { color: var(--muted-foreground); opacity: 1; }
+.ask-chat .ask-composer-tools { padding: 4px 10px 8px; border-top: 0; }
+.ask-chat .ask-composer-main > button:nth-child(1), .ask-chat .ask-composer-main > button:nth-child(2) { position: absolute; bottom: 8px; left: 10px; border: 0; }
+.ask-chat .ask-composer-main > button:nth-child(2) { left: 45px; }
+.ask-chat .ask-composer-tools { padding-left: 84px; min-height: 44px; }
+.ask-chat .ask-composer-tools > button { font-size: 12px; }
+.ask-chat .ask-composer-tools > button span { max-width: 190px; }
+.ask-chat .ask-composer-tools > button { border: 0; border-radius: 4px; }
+.ask-chat .ask-composer-model { display: flex; min-width: 0; align-items: center; margin-left: auto; }
+.ask-chat .ask-composer-model button { font-size: 12px; padding: 5px; }
+.ask-chat .ask-composer-model span { max-width: 180px; }
+.ask-chat .ask-composer-model svg { width: 13px; height: 13px; }
+
+/* No reserved document rail before there is a canon, or while it is folded. */
+.ask-workspace:has(.ask-canon-editor) { grid-template-columns: minmax(0, 1.05fr) minmax(340px, .95fr); gap: 36px; }
+.ask-workspace:has(.ask-canon-editor[data-expanded="false"]) { grid-template-columns: minmax(0, 1fr); }
+.ask-workspace:has(.ask-canon-editor[data-expanded="false"]) .ask-chat { width: min(100%, 860px); margin-inline: auto; padding-top: 16px; }
+.ask-workspace .ask-canon-editor[data-expanded="false"] { display: contents; }
+.ask-canon-editor > [hidden] { display: none !important; }
+.ask-canon-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ask-canon-title button { color: var(--muted-foreground); padding: 8px; border-radius: 4px; }
+.ask-canon-title button:hover:not(:disabled) { color: var(--foreground); background: var(--secondary); }
+.ask-canon-title button:disabled { opacity: .4; cursor: not-allowed; }
+.ask-open-canon { display: inline-flex; align-items: center; gap: 8px; position: absolute; right: 40px; top: 12px; z-index: 2; padding: 8px 12px; font-size: 13px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); border-radius: 4px; }
+.ask-canon-reading { padding: 8px 8px 28px 0; }
+.ask-canon-form { display: flex; flex-direction: column; min-height: 100%; }
+.ask-canon-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; padding: 8px 8px 20px 0; }
+.ask-canon-fields label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: var(--muted-foreground); }
+.ask-canon-fields input { min-width: 0; width: 100%; padding: 8px 10px; color: var(--foreground); border: 1px solid var(--control-border, var(--border)); border-radius: 4px; background: var(--background); font-family: var(--font-ui, sans-serif); font-size: 14px; }
+.ask-canon-form .ask-canon-label { flex: 1; height: auto; min-height: 380px; }
+.ask-canon-form .ask-canon-body { min-height: 380px; height: auto; resize: vertical; border-top: 1px solid var(--border); padding-top: 20px; }
+.ask-canon-workstate { max-width: min(55%, 650px); min-width: 0; }
+.ask-canon-workstate .ask-canon-error { max-height: 42px; overflow-y: auto; padding: 0; font-size: 12px; overflow-wrap: anywhere; }
+.ask-canon-actions .ask-canon-menu-trigger { padding-inline: 10px; }
+.ask-workspace:has(.ask-canon-editor[data-review-open="true"]) { grid-template-columns: minmax(0, 1fr); }
+.ask-workspace:has(.ask-canon-editor[data-review-open="true"]) > .ask-chat { display: none; }
+.ask-workspace:has(.ask-canon-editor[data-review-open="true"]) > .canon-sheet { width: min(100%, 820px); margin-inline: auto; border-left: 0; padding-left: 0; }
+.ask-chat .ask-chat-options { position: absolute; right: 10px; top: -46px; z-index: 3; }
+.ask-chat .ask-chat-options button { display: inline-flex; padding: 7px; color: var(--muted-foreground); background: var(--background); border-radius: 4px; }
+.ask-canon-title button:focus-visible, .ask-open-canon:focus-visible, .ask-canon-fields input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.ask-cancel-actions { display: flex; justify-content: flex-end; gap: 16px; flex-wrap: wrap; margin-top: 24px; font-size: 14px; }
+.ask-cancel-actions button { padding: 9px 12px; border: 1px solid var(--border); border-radius: 4px; }
+.ask-cancel-actions button:last-child { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.ask-regenerate-issues { max-height: 230px; overflow-y: auto; font-size: 13px; }
+.ask-regenerate-issues legend { margin-bottom: 12px; }
+.ask-regenerate-issues label { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0; line-height: 1.75; }
+.ask-regenerate-issues input { margin-top: 5px; accent-color: var(--primary); }
+.ask-regenerate-issues small { display: block; margin-top: 4px; color: var(--muted-foreground); }
+@media (max-width: 1050px) {
+  .ask-workspace { padding: 14px 24px 110px; }
+  .ask-canon-toolbar { padding: 10px 24px; }
+  .ask-canon-workstate { width: 100%; }
+  .ask-canon-actions { margin-left: auto; }
+}
+@media (max-width: 780px) {
+  .ask-workspace { display: flex; flex-direction: column; height: auto; min-height: 100%; padding: 16px 20px 0; overflow: visible; gap: 20px; }
+  .ask-workspace .ask-chat { height: 460px; flex: none; }
+  .ask-workspace .canon-sheet { height: 560px; flex: none; padding: 20px 0 0; }
+  .ask-canon-toolbar { position: sticky; bottom: 0; margin: 0 -20px; padding: 12px 20px; }
+  .ask-canon-actions { gap: 6px; width: 100%; margin: 0; }
+  .ask-canon-actions button { flex: 1; padding: 9px 7px; font-size: 12px; white-space: nowrap; }
+  .ask-canon-actions button svg { display: none; }
+}

@@ -55,7 +55,7 @@ describe("P1-5 落笔", () => {
 });
 
 describe("P1-5 研墨 / 织卷 / 章页", () => {
-  it("shows 已定稿 state and splits 终局 / 伏笔", () => {
+  it("keeps adopted settings readable and explicitly edits separate ending / hooks", () => {
     const ground = read("src/pages/BookGround.tsx");
     expect(ground).toMatch(/ground-confirmed-stamp/);
     expect(ground).toMatch(/AuthoringGroundPanel/);
@@ -63,13 +63,17 @@ describe("P1-5 研墨 / 织卷 / 章页", () => {
     expect(ground).not.toMatch(/foundation\/revise/);
     expect(ground).toMatch(/终局/);
     expect(ground).toMatch(/伏笔清单/);
-    expect(ground).toMatch(/ground-editor-hooks/);
+    expect(ground).toMatch(/materialInput\("pending_hooks\.md"/);
+    expect(ground).toMatch(/legacyEditing/);
+    expect(ground).toMatch(/<ManuscriptView/);
+    expect(ground).toMatch(/保存已采用资料/);
+    expect(ground).toMatch(/onBeforeLegacyLeave=\{finishLegacy\}/);
     expect(ground).not.toMatch(/font-mono/);
     expect(ground).not.toMatch(/保存人物/);
     expect(ground).not.toMatch(/split\(\/\\n---\\n\/\)/);
   });
 
-  it("moves weave tree actions to bottom links and folds filters", () => {
+  it("keeps outline operations reachable in a menu and defaults its document to reading", () => {
     const weave = read("src/pages/OutlineWorkspace.tsx");
     expect(weave).not.toMatch(/outline-tree-more/);
     expect(weave).toMatch(/outline-add-chapter/);
@@ -77,6 +81,9 @@ describe("P1-5 研墨 / 织卷 / 章页", () => {
     expect(weave).toMatch(/outline-filter/);
     expect(weave).toMatch(/outline-title-count/);
     expect(weave).toMatch(/\/ 12/);
+    expect(weave).toMatch(/!editingSelected/);
+    expect(weave).toMatch(/<ManuscriptView/);
+    expect(weave).toMatch(/保存已采用卷纲/);
   });
 
   it("collapses chapter chrome to 编辑 / 通过 / ⋯ with gated override dialog", () => {

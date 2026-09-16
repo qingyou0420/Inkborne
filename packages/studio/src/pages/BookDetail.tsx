@@ -1,7 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SerialCockpitStrip, startDraft, startWriteNext } from "../components/SerialCockpitStrip";
-import { AuthoringWritePanel } from "../components/AuthoringWritePanel";
+import { AuthoringWritePanel, type WriteLeaveGuard } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
@@ -15,6 +15,7 @@ import { formatReviewIssueCopy, hasPreviousChapterUnapprovedReason, isMustFixSev
 import { formatStudyWords, writeEmptyCopy } from "../lib/stage-copy";
 import type { BookStepState } from "../lib/book-stage";
 import { useBookStage } from "../hooks/use-book-stage";
+import { usePreferencesStore } from "../store/preferences";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,6 +30,7 @@ import {
   Check,
   ChevronDown,
   MoreHorizontal,
+  List,
 } from "lucide-react";
 
 interface ChapterMeta {
@@ -133,6 +135,31 @@ export function BookDetail({
   } | null>(null);
   const [overrideValue, setOverrideValue] = useState("");
   const [writeChapter, setWriteChapter] = useState<number | null>(null);
+  const [directoryOpen, setDirectoryOpen] = useState(true);
+  const writeLeaveGuard = useRef<WriteLeaveGuard | null>(null);
+  const [chapterSwitchPending, setChapterSwitchPending] = useState(false);
+  const registerWriteGuard = useCallback((guard: WriteLeaveGuard | null) => { writeLeaveGuard.current = guard; }, []);
+  const switchWriteChapter = async (chapter: number) => {
+    if (chapterSwitchPending || chapter === writeChapter) return;
+    setChapterSwitchPending(true);
+    try {
+      if (writeLeaveGuard.current && !(await writeLeaveGuard.current())) return;
+      setWriteChapter(chapter);
+      usePreferencesStore.getState().setLastChapter(bookId, chapter);
+    } finally {
+      setChapterSwitchPending(false);
+    }
+  };
+  useEffect(() => { setWriteChapter(null); }, [bookId]);
+  useEffect(() => {
+    if (data?.book.id === bookId && writeChapter === null) {
+      const previous = usePreferencesStore.getState().lastChapters[bookId];
+      const restored = previous && (previous === data.nextChapter || data.chapters.some((chapter) => chapter.number === previous)) ? previous : data.nextChapter;
+      setWriteChapter(restored);
+      usePreferencesStore.getState().setLastChapter(bookId, restored);
+    }
+  }, [bookId, data?.book.id, data?.nextChapter, writeChapter]);
+
 
   useEffect(() => {
     void fetchJson<{ mode?: string }>(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`)
@@ -405,16 +432,179 @@ export function BookDetail({
   const briefDialog = briefPrompt ? briefCopy(briefPrompt.kind) : null;
 
   return (
-    <div className="space-y-8 fade-in">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-2">
-        <div className="space-y-2">
-          <p className="eyebrow text-[13px] font-medium text-muted-foreground">{isZh ? `《${book.title}》` : book.title}</p>
-          <h1 className="font-serif text-[32px] font-medium leading-10">{isZh ? "落笔" : "Write"}</h1>
-          <p className="text-[13px] leading-5 text-muted-foreground">
-            {book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}
-          </p>
-        </div>
+    <div className="write-workspace-page">
 
+
+      {(writing || drafting || activity.lastError || actionMessage || (typeof bookActionPending === "string" && bookActionPending.startsWith("saved:"))) && (
+        <div
+          className={`rounded-2xl border px-4 py-3 text-sm ${
+            activity.lastError
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-border bg-card text-foreground"
+          }`}
+        >
+          {activity.lastError ? (
+            <span>{t("book.pipelineFailed")}: {activity.lastError}</span>
+          ) : writing ? (
+            <span>{t("book.pipelineWriting")}</span>
+          ) : drafting ? (
+            <span>{t("book.pipelineDrafting")}</span>
+          ) : actionMessage ? (
+            <span className="whitespace-pre-wrap">{actionMessage}</span>
+          ) : (
+            <span>{t("common.exportSuccess")}</span>
+          )}
+        </div>
+      )}
+
+      <div className="write-directory-control"><button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{t("write.directory")}</button></div>
+      <div className={`one-workspace ${!directoryOpen ? "directory-collapsed" : ""}`}>
+        <nav className="one-directory" hidden={!directoryOpen} aria-label={t("write.directory")}>
+          {chapters.length > 0 && (
+            chapters.map((ch) => (
+              <div key={ch.number} className="flex items-start gap-1">
+                <button
+                  type="button"
+                  className={`dir-item ${(writeChapter ?? data.nextChapter) === ch.number ? "active" : ""}`}
+                  disabled={chapterSwitchPending}
+                  aria-current={(writeChapter ?? data.nextChapter) === ch.number ? "page" : undefined}
+                  onClick={() => void switchWriteChapter(ch.number)}
+                >
+                  {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
+                  <small className={statusTone(ch.status)}>
+                    <StageDot state={statusDotState(ch.status)} />
+                    {" "}{translateChapterStatus(ch.status, t)} · {(ch.wordCount ?? 0).toLocaleString()} {t("book.words")}
+                  </small>
+                </button>
+                {(writeChapter ?? data.nextChapter) === ch.number ? <DropdownMenu>
+                  <DropdownMenuTrigger
+                    data-testid={`chapter-more-${ch.number}`}
+                    aria-label={isZh ? "当前章节工具" : "Current chapter tools"}
+                    className="btn-ghost inline-flex h-8 w-8 items-center justify-center"
+                  >
+                    <MoreHorizontal size={14} />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-44">
+                    {ch.status === "ready-for-review" ? <DropdownMenuItem data-testid={`chapter-approve-${ch.number}`} onClick={() => void handleApprove(ch.number)}>{t("book.approve")}</DropdownMenuItem> : null}
+                    <DropdownMenuItem onClick={() => nav.toChapter(bookId, ch.number)}>
+                      {t("reader.preview")}
+                    </DropdownMenuItem>
+                    {ch.status === "ready-for-review" && (
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={async () => {
+                          try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
+                          catch (e) { setActionMessage(e instanceof Error ? e.message : "Reject failed"); }
+                        }}
+                      >
+                        {t("book.rollbackChapter")}
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        try {
+                          const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                          setActionMessage(auditResult.passed
+                            ? (isZh ? "审校已通过" : "Audit passed")
+                            : (isZh ? `审校未过：${auditResult.issues?.length ?? 0} 条` : `Audit failed: ${auditResult.issues?.length ?? 0} issues`));
+                          refetch();
+                        } catch (e) {
+                          setActionMessage(e instanceof Error ? e.message : "Audit failed");
+                        }
+                      }}
+                    >
+                      {t("book.audit")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={rewritingChapters.includes(ch.number)}
+                      onClick={() => {
+                        setBriefPrompt({ kind: "rewrite", chapter: ch.number });
+                        setBriefValue("");
+                      }}
+                    >
+                      {t("book.rewrite")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
+                      onClick={() => {
+                        setBriefPrompt({ kind: "sync", chapter: ch.number });
+                        setBriefValue("");
+                      }}
+                    >
+                      {t("book.syncTruth")}
+                    </DropdownMenuItem>
+                    {ch.status === "state-degraded" && (
+                      <DropdownMenuItem
+                        disabled={bookActionPending === `repair-state-${ch.number}`}
+                        onClick={() => void handleRepairState(ch.number)}
+                      >
+                        {t("book.repairState")}
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t("book.reviseWith")}</DropdownMenuLabel>
+                    {([
+                      ["spot-fix", t("book.spotFix")],
+                      ["polish", t("book.polish")],
+                      ["rewrite", t("book.rewrite")],
+                      ["rework", t("book.rework")],
+                      ["anti-detect", t("book.antiDetect")],
+                    ] as const).map(([mode, label]) => (
+                      <DropdownMenuItem
+                        key={mode}
+                        disabled={revisingChapters.includes(ch.number)}
+                        onClick={() => {
+                          setBriefPrompt({ kind: "revise", chapter: ch.number, mode });
+                          setBriefValue("");
+                        }}
+                      >
+                        {label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu> : null}
+              </div>
+            ))
+          )}
+          <div className="write-directory-next">
+            <button type="button" className={`dir-item ${(writeChapter ?? data.nextChapter) === data.nextChapter ? "active" : ""}`} disabled={chapterSwitchPending} onClick={() => void switchWriteChapter(data.nextChapter)}>
+              {isZh ? `第 ${data.nextChapter} 章 · 新章` : `Chapter ${data.nextChapter} · New`}
+            </button>
+          </div>
+        </nav>
+        <div className="one-document">
+          <AuthoringWritePanel
+            key={`${bookId}:${writeChapter ?? data.nextChapter}`}
+            bookId={bookId}
+            chapterNumber={writeChapter ?? data.nextChapter}
+            chapterTitle={data.chapters.find((item) => item.number === (writeChapter ?? data.nextChapter))?.title}
+            isZh={isZh}
+            onChanged={() => refetch()}
+            onRegisterBeforeLeave={registerWriteGuard}
+          />
+          {chapters.length === 0 && (emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip)) && (
+            <LiteraryEmpty
+              title={emptyCopy.title}
+              subtitle={emptyCopy.subtitle}
+              action={emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip) ? emptyCopy.action : undefined}
+              onAction={() => {
+                if (emptyCopy.target === "weave") {
+                  nav.toOutline(bookId);
+                  return;
+                }
+                const chapter = preflight?.reasons.find((reason) => reason.chapterNumber)?.chapterNumber;
+                if (chapter) nav.toChapter(bookId, chapter);
+              }}
+              className="px-6 py-14 sm:px-8"
+              testId="write-empty"
+            />
+          )}
+        </div>
+      </div>
+
+        <details className="write-legacy" data-testid="write-legacy-tools">
+          <summary>{isZh ? "连续创作与作品工具" : "Serial writing and book tools"}</summary>
+          <p className="my-3 text-sm text-muted-foreground">{book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}</p>
         <div className="flex flex-wrap items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger className="btn-secondary inline-flex items-center gap-1.5">
@@ -487,16 +677,6 @@ export function BookDetail({
             </DropdownMenu>
           </div>
         </div>
-      </div>
-
-      <AuthoringWritePanel
-        key={`${bookId}:${writeChapter ?? data.nextChapter}`}
-        bookId={bookId}
-        chapterNumber={writeChapter ?? data.nextChapter}
-        chapterTitle={data.chapters.find((item) => item.number === (writeChapter ?? data.nextChapter))?.title}
-        isZh={isZh}
-        onChanged={() => refetch()}
-      />
 
       <SerialCockpitStrip
         bookId={bookId}
@@ -537,189 +717,7 @@ export function BookDetail({
         </div>
       )}
 
-      {(writing || drafting || activity.lastError || actionMessage || (typeof bookActionPending === "string" && bookActionPending.startsWith("saved:"))) && (
-        <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
-            activity.lastError
-              ? "border-destructive/30 bg-destructive/5 text-destructive"
-              : "border-border bg-card text-foreground"
-          }`}
-        >
-          {activity.lastError ? (
-            <span>{t("book.pipelineFailed")}: {activity.lastError}</span>
-          ) : writing ? (
-            <span>{t("book.pipelineWriting")}</span>
-          ) : drafting ? (
-            <span>{t("book.pipelineDrafting")}</span>
-          ) : actionMessage ? (
-            <span className="whitespace-pre-wrap">{actionMessage}</span>
-          ) : (
-            <span>{t("common.exportSuccess")}</span>
-          )}
-        </div>
-      )}
-
-      <div className="rounded-xl overflow-hidden border border-border">
-        <div className="overflow-x-auto">
-          <table className="w-full text-[15px] leading-[26px] border-collapse">
-            {chapters.length > 0 && (
-              <thead>
-                <tr className="bg-muted/30 border-b border-border">
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-16">#</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground">{t("book.manuscriptTitle")}</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-28">{t("book.words")}</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-36">{t("book.status")}</th>
-                  <th className="text-right px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-32">{t("book.curate")}</th>
-                </tr>
-              </thead>
-            )}
-            <tbody className="divide-y divide-border/30">
-              {chapters.map((ch) => (
-                <tr key={ch.number} className="group hover:bg-accent/60 transition-colors h-12">
-                  <td className="px-4 py-3 text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => nav.toChapter(bookId, ch.number)}
-                      className="font-serif text-lg font-medium text-left underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal"
-                    >
-                      {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
-                    </button>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground font-medium tabular-nums text-[13px]">{(ch.wordCount ?? 0).toLocaleString()}</td>
-                  <td className="px-4 py-3">
-                    <div className={`inline-flex items-center gap-1.5 text-[13px] font-medium ${statusTone(ch.status)}`}>
-                      <StageDot state={statusDotState(ch.status)} />
-                      {translateChapterStatus(ch.status, t)}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      {ch.status === "ready-for-review" && (
-                        <button
-                          type="button"
-                          onClick={() => void handleApprove(ch.number)}
-                          className="btn-primary h-8 px-3 text-[13px]"
-                          data-testid={`chapter-approve-${ch.number}`}
-                        >
-                          <Check size={14} />
-                          {t("book.approve")}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn-ghost h-8 px-2 text-[13px]"
-                        onClick={() => setWriteChapter(ch.number)}
-                      >
-                        {isZh ? "打磨" : "Polish"}
-                      </button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          data-testid={`chapter-more-${ch.number}`}
-                          className="btn-ghost inline-flex h-8 w-8 items-center justify-center"
-                        >
-                          <MoreHorizontal size={16} />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-44">
-                          {ch.status === "ready-for-review" && (
-                            <DropdownMenuItem
-                              variant="destructive"
-                              onClick={async () => {
-                                try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                                catch (e) { setActionMessage(e instanceof Error ? e.message : "Reject failed"); }
-                              }}
-                            >
-                              {t("book.rollbackChapter")}
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuItem
-                            onClick={async () => {
-                              try {
-                                const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                                setActionMessage(auditResult.passed
-                                  ? (isZh ? "审校已通过" : "Audit passed")
-                                  : (isZh ? `审校未过：${auditResult.issues?.length ?? 0} 条` : `Audit failed: ${auditResult.issues?.length ?? 0} issues`));
-                                refetch();
-                              } catch (e) {
-                                setActionMessage(e instanceof Error ? e.message : "Audit failed");
-                              }
-                            }}
-                          >
-                            {t("book.audit")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={rewritingChapters.includes(ch.number)}
-                            onClick={() => {
-                              setBriefPrompt({ kind: "rewrite", chapter: ch.number });
-                              setBriefValue("");
-                            }}
-                          >
-                            {t("book.rewrite")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
-                            onClick={() => {
-                              setBriefPrompt({ kind: "sync", chapter: ch.number });
-                              setBriefValue("");
-                            }}
-                          >
-                            {t("book.syncTruth")}
-                          </DropdownMenuItem>
-                          {ch.status === "state-degraded" && (
-                            <DropdownMenuItem
-                              disabled={bookActionPending === `repair-state-${ch.number}`}
-                              onClick={() => void handleRepairState(ch.number)}
-                            >
-                              {t("book.repairState")}
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuLabel>{t("book.reviseWith")}</DropdownMenuLabel>
-                          {([
-                            ["spot-fix", t("book.spotFix")],
-                            ["polish", t("book.polish")],
-                            ["rewrite", t("book.rewrite")],
-                            ["rework", t("book.rework")],
-                            ["anti-detect", t("book.antiDetect")],
-                          ] as const).map(([mode, label]) => (
-                            <DropdownMenuItem
-                              key={mode}
-                              disabled={revisingChapters.includes(ch.number)}
-                              onClick={() => {
-                                setBriefPrompt({ kind: "revise", chapter: ch.number, mode });
-                                setBriefValue("");
-                              }}
-                            >
-                              {label}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {chapters.length === 0 && (
-          <LiteraryEmpty
-            title={emptyCopy.title}
-            subtitle={emptyCopy.subtitle}
-            action={emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip) ? emptyCopy.action : undefined}
-            onAction={() => {
-              if (emptyCopy.target === "weave") {
-                nav.toOutline(bookId);
-                return;
-              }
-              const chapter = preflight?.reasons.find((reason) => reason.chapterNumber)?.chapterNumber;
-              if (chapter) nav.toChapter(bookId, chapter);
-            }}
-            className="px-6 py-14 sm:px-8"
-            testId="write-empty"
-          />
-        )}
-      </div>
+        </details>
 
       <ConfirmDialog
         open={Boolean(briefPrompt)}

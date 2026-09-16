@@ -22,6 +22,7 @@ import {
   deserializeMessages,
   extractErrorMessage,
   hasAnyInFlightExecution,
+  isRequestStreamMessage,
   markRunningToolsFailed,
   mergeToolExecution,
   mergeTaskExecution,
@@ -115,26 +116,26 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       })),
     })),
 
-  appendStreamChunk: (sessionId, text, streamTs) =>
+  appendStreamChunk: (sessionId, text, streamTs, streamRequestId) =>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (session) => {
         const last = session.messages[session.messages.length - 1];
-        if (last?.timestamp === streamTs && last.role === "assistant") {
+        if (last && isRequestStreamMessage(last, streamTs, streamRequestId)) {
           return {
             messages: [...session.messages.slice(0, -1), { ...last, content: last.content + text }],
           };
         }
         return {
-          messages: [...session.messages, { role: "assistant", content: text, timestamp: streamTs }],
+          messages: [...session.messages, { role: "assistant", content: text, timestamp: streamTs, ...(streamRequestId ? { streamRequestId } : {}) }],
         };
       }),
     })),
 
-  finalizeStream: (sessionId, streamTs, content, toolCall) =>
+  finalizeStream: (sessionId, streamTs, content, toolCall, streamRequestId) =>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (session) => ({
         messages: session.messages.map((message) => {
-          if (message.timestamp !== streamTs || message.role !== "assistant") return message;
+          if (!isRequestStreamMessage(message, streamTs, streamRequestId)) return message;
           const parts = [...(message.parts ?? [])];
           const lastPart = parts[parts.length - 1];
           if (lastPart?.type === "text") {
@@ -147,11 +148,11 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       })),
     })),
 
-  replaceStreamWithError: (sessionId, streamTs, errorMsg) =>
+  replaceStreamWithError: (sessionId, streamTs, errorMsg, streamRequestId) =>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (session) => {
         const streamMessage = session.messages.find(
-          (message) => message.timestamp === streamTs && message.role === "assistant",
+          (message) => isRequestStreamMessage(message, streamTs, streamRequestId),
         );
         const streamExecutions = [
           ...(streamMessage?.toolExecutions ?? []),
@@ -170,13 +171,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         //（那里会检查是否还有任务在跑）。
         const messages = hasActiveOrFailedTool
           ? session.messages.map((message) => (
-              message.timestamp === streamTs && message.role === "assistant"
+              isRequestStreamMessage(message, streamTs, streamRequestId)
                 ? markRunningToolsFailed([message], errorMsg)[0]!
                 : message
             ))
           : [
               ...session.messages.filter(
-                (message) => !(message.timestamp === streamTs && message.role === "assistant"),
+                (message) => !isRequestStreamMessage(message, streamTs, streamRequestId),
               ),
               { role: "assistant" as const, content: `\u2717 ${errorMsg}`, timestamp: Date.now() },
             ];
@@ -211,7 +212,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
 
   setSelectedModel: (model, service) => set({ selectedModel: model, selectedService: service }),
 
-  loadSessionList: async (bookId) => {
+  loadSessionList: async (bookId, strict = false) => {
     const query = bookId === null ? "null" : encodeURIComponent(bookId);
     try {
       const data = await fetchJson<{ sessions: ReadonlyArray<SessionSummary> }>(`/sessions?bookId=${query}`);
@@ -229,7 +230,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         };
       });
       return data.sessions;
-    } catch {
+    } catch (error) {
+      if (strict) throw error;
       return [];
     }
   },
@@ -300,37 +302,40 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     return sessionId;
   },
 
-  renameSession: async (sessionId, title) => {
+  renameSession: async (sessionId, title, strict = false) => {
     const previous = get().sessions[sessionId]?.title ?? null;
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, () => ({ title })),
     }));
 
     try {
-      await fetchJson(`/sessions/${sessionId}`, {
+      await fetchJson(`/sessions/${encodeURIComponent(sessionId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
-    } catch {
+    } catch (error) {
       set((state) => ({
         sessions: updateSession(state.sessions, sessionId, () => ({ title: previous })),
       }));
+      if (strict) throw error;
     }
   },
 
-  deleteSession: async (sessionId) => {
+  deleteSession: async (sessionId, strict = false) => {
     const session = get().sessions[sessionId];
-    session?.stream?.close();
-    forgetBookCreateSessionIfMatches(sessionId);
     // 草稿会话还没写到磁盘，跳过 DELETE 请求避免后端返回 404
     if (session && !session.isDraft) {
       try {
-        await fetchJson(`/sessions/${sessionId}`, { method: "DELETE" });
-      } catch {
-        // ignore
+        await fetchJson(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      } catch (error) {
+        // A failed disk deletion must leave the visible record and stream intact.
+        if (strict) throw error;
+        return;
       }
     }
+    session?.stream?.close();
+    forgetBookCreateSessionIfMatches(sessionId);
 
     set((state) => {
       const { [sessionId]: deleted, ...rest } = state.sessions;
@@ -386,16 +391,19 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     }
   },
 
-  loadSessionDetail: async (sessionId) => {
+  loadSessionDetail: async (sessionId, strict = false) => {
     // 草稿会话：磁盘上还没有文件，直接跳过远端拉取。
     const existing = get().sessions[sessionId];
     if (existing?.isDraft) return;
     if (existing?.isStreaming && existing.stream) return;
 
     try {
-      const data = await fetchJson<SessionResponse>(`/sessions/${sessionId}`);
+      const data = await fetchJson<SessionResponse>(`/sessions/${encodeURIComponent(sessionId)}`);
       const detail = data.session;
-      if (!detail?.sessionId) return;
+      if (!detail?.sessionId || detail.sessionId !== sessionId) {
+        if (strict) throw new Error(tr("问心记录读取失败，请重试。", "Could not load this conversation. Please retry."));
+        return;
+      }
       const detailSessionId = detail.sessionId;
       const persistedMessages = detail.messages ? deserializeMessages(detail.messages) : [];
       const task = data.task;
@@ -458,8 +466,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           get,
         });
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      if (strict) throw error;
     }
   },
 
@@ -625,7 +633,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         });
       }
       const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+        get().sessions[sessionId]?.messages.some((message) => isRequestStreamMessage(message, streamTs, sourceRequestId)),
       );
       const attachResponseTools = () => {
         if (responseToolExecutions.length === 0) return;
@@ -642,7 +650,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       if (data.error) {
         const errorMessage = extractErrorMessage(data.error);
         if (hasStream) {
-          get().replaceStreamWithError(sessionId, streamTs, errorMessage);
+          get().replaceStreamWithError(sessionId, streamTs, errorMessage, sourceRequestId);
         } else {
           get().addErrorMessage(sessionId, errorMessage);
         }
@@ -651,7 +659,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();
       } else if (finalContent) {
         if (hasStream) {
-          get().finalizeStream(sessionId, streamTs, finalContent, toolCall);
+          get().finalizeStream(sessionId, streamTs, finalContent, toolCall, sourceRequestId);
           attachResponseTools();
         } else {
           const message = withToolExecutions({
@@ -671,7 +679,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         }
       } else if (responseToolExecutions.length > 0) {
         if (hasStream) {
-          get().finalizeStream(sessionId, streamTs, "", toolCall);
+          get().finalizeStream(sessionId, streamTs, "", toolCall, sourceRequestId);
           attachResponseTools();
         } else {
           // A confirmed production task can be restored from task:snapshot before
@@ -683,7 +691,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         }
       } else {
         if (hasStream) {
-          get().finalizeStream(sessionId, streamTs, "", toolCall);
+          get().finalizeStream(sessionId, streamTs, "", toolCall, sourceRequestId);
         } else {
           const emptyMessage = tr(
             "模型未返回文本内容。请检查协议类型（chat/responses）、流式开关或上游服务兼容性。",
@@ -713,10 +721,10 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }) ?? false;
       if (failureAlreadyShown) return;
       const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+        get().sessions[sessionId]?.messages.some((message) => isRequestStreamMessage(message, streamTs, sourceRequestId)),
       );
       if (hasStream) {
-        get().replaceStreamWithError(sessionId, streamTs, errorMessage);
+        get().replaceStreamWithError(sessionId, streamTs, errorMessage, sourceRequestId);
       } else {
         get().addErrorMessage(sessionId, errorMessage);
       }

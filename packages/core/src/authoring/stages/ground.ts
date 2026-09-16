@@ -159,6 +159,7 @@ export async function proposeSettingsCatalog(input: GroundRuntime): Promise<Sett
 export async function generateGroundEntries(input: GroundRuntime & {
   readonly entryIds?: readonly string[];
   readonly regenerate?: boolean;
+  readonly requirements?: string;
 }): Promise<{ generated: string[]; failed: string[]; runId: string }> {
   if (!input.root.bookId) throw new Error("研墨需要已建的书。");
   const catalog = await loadSettingsCatalog(input.root);
@@ -189,10 +190,14 @@ export async function generateGroundEntries(input: GroundRuntime & {
   });
   for (const entry of targets) {
     try {
+      const priorId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
+      const prior = priorId ? await loadArtifact(input.root, priorId) : null;
       const text = await completeRole(resolved, [
         `撰写设定条目「${entry.name}」（分类：${entry.category}）。输出 Markdown 正文，不要 JSON。`,
         serializeCanonBrief(canon),
         "只写这一条，不要改其他条目。",
+        input.requirements ? `作者本次要求：\n${input.requirements}` : "",
+        prior ? `当前设定（按本次要求保留或调整）：\n${prior.body}` : "",
       ].join("\n"), input.llm);
       const artifactId = newArtifactId("ground", entry.id);
       await saveArtifact(input.root, {
@@ -318,6 +323,7 @@ export async function adoptGroundEntries(input: GroundRuntime & {
 }
 
 export async function reviseGroundEntry(input: GroundRuntime & {
+  readonly requirements?: string;
   readonly entryId?: string;
   readonly reportId: string;
   readonly selectedIssueIds: readonly string[];
@@ -352,6 +358,7 @@ export async function reviseGroundEntry(input: GroundRuntime & {
     const text = await completeRole(resolved, [
       `按意见修改设定「${entry.name}」（id:${entry.id}）。只输出该条目 Markdown。不要改其他条目。`,
       ...issues.map((issue) => `- ${issue.title}: ${issue.suggestion ?? ""}`),
+      input.requirements ? `作者本次要求：\n${input.requirements}` : "",
       loaded.body,
     ].join("\n"), input.llm);
     const nextId = newArtifactId("ground", entry.id);
@@ -378,6 +385,7 @@ export async function reviseGroundEntry(input: GroundRuntime & {
 
 export async function reviseGroundEntries(
   input: GroundRuntime & {
+    readonly requirements?: string;
     readonly entryId?: string;
     readonly reportId: string;
     readonly selectedIssueIds: readonly string[];

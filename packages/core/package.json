@@ -66,7 +66,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "node ../../scripts/typecheck-test-files.mjs"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.67.1",

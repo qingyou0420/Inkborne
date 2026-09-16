@@ -290,7 +290,7 @@ export function BookStudy({
       </header>
 
       {snapshot?.volumeClose ? (
-        <section className="rounded-2xl border border-primary/30 bg-primary/[0.05] px-5 py-5 space-y-3" data-testid="cockpit-volume-close">
+        <section className="space-y-3 border-b border-border pb-6" data-testid="cockpit-volume-close">
           <div className="flex items-center gap-2 text-sm font-medium">
             <CheckCircle2 size={16} className="text-primary" />
             {isZh ? "本卷已收" : "Volume closed"}
@@ -306,7 +306,7 @@ export function BookStudy({
           </button>
         </section>
       ) : (
-        <section className="rounded-2xl border border-border border-l-2 border-l-seal bg-card px-5 py-5 space-y-3" data-testid="cockpit-next-chapter">
+        <section className="space-y-3 border-b border-border pb-6" data-testid="cockpit-next-chapter">
           <div className="text-[13px] text-muted-foreground">{canWrite ? t("study.today") : guide.title}</div>
           {canWrite && snapshot ? (
             <>
@@ -456,9 +456,9 @@ export function BookStudy({
         </section>
       )}
 
-      <section className="space-y-3 border-t border-border/40 pt-6" data-testid="study-four-steps">
+      <section className="space-y-4 border-t border-border pt-6" data-testid="study-four-steps">
         <div className="text-sm font-medium">{isZh ? "四步一览" : "Four steps"}</div>
-        <ul className="grid gap-y-2 text-sm sm:grid-cols-2 sm:gap-x-8" data-testid="study-four-steps-grid">
+        <ul className="grid gap-y-3 text-sm sm:grid-cols-2 sm:gap-x-8" data-testid="study-four-steps-grid">
           <StepLine
             state={stage?.steps.ask}
             label={isZh ? "问心" : "Ask"}
@@ -530,7 +530,7 @@ function StepLine({
         className="grid w-full grid-cols-[8px_3.5rem_minmax(0,1fr)] items-center gap-x-3 text-left leading-6 hover:text-foreground"
       >
         {state ? <StageDot state={state} /> : <span className="h-2 w-2" aria-hidden="true" />}
-        <span className="whitespace-nowrap">{label}</span>
+        <span className="whitespace-nowrap text-[18px] font-medium">{label}</span>
         <span className="truncate text-muted-foreground" title={status}>{status}</span>
       </button>
     </li>

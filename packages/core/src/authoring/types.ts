@@ -143,6 +143,7 @@ export const AuthoringRunStatusSchema = z.enum([
 export type AuthoringRunStatus = z.infer<typeof AuthoringRunStatusSchema>;
 
 export const AuthoringRunCheckpointSchema = z.object({
+  requirements: z.string().optional(),
   completedThrough: z.number().int().min(0).optional(),
   remainingStart: z.number().int().min(1).optional(),
   remainingEnd: z.number().int().min(1).optional(),

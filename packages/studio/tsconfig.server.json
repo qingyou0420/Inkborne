@@ -7,5 +7,5 @@
     "types": ["node"]
   },
   "include": ["src/api"],
-  "exclude": ["src/api/**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "src/api/**/*.test.ts", "src/api/**/*.test.tsx", "src/api/**/*.spec.ts", "src/api/**/*.spec.tsx", "src/api/**/__tests__/**"]
 }

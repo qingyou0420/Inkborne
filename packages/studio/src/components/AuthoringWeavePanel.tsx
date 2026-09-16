@@ -8,8 +8,18 @@ import { useEffect, useRef, useState } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
-import { latestArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
+import { resolveAdoptArtifactId, workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
+import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
+import { pollWeaveRun } from "../lib/weave-editor-state";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
+import { useDraftDecision } from "../hooks/use-draft-decision";
+import { ManuscriptView } from "./ManuscriptView";
+import { ManuscriptHistoryDrawer } from "./ManuscriptHistoryDrawer";
+import { RegenerateDialog } from "./RegenerateDialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { MoreHorizontal } from "lucide-react";
+import "./write-workspace.css";
+import { registerNavigationGuard } from "../lib/edit-navigation";
 
 interface WeaveRun {
   readonly runId: string;
@@ -20,47 +30,77 @@ interface WeaveRun {
   readonly error?: string;
 }
 
+// Route changes preserve hand edits for this app session. Formal saves still use the API.
+const pendingWeaveEdits = new Map<string, { body: string; baseId: string; savedBody: string }>();
+let unloadGuardInstalled = false;
+function installUnloadGuard() {
+  if (unloadGuardInstalled || typeof window === "undefined") return;
+  unloadGuardInstalled = true;
+  window.addEventListener("beforeunload", (event) => {
+    if (pendingWeaveEdits.size === 0) return;
+    event.preventDefault(); event.returnValue = "";
+  });
+}
+
 export function AuthoringWeavePanel({
   bookId,
   targetChapters,
   isZh,
   onAdopted,
+  active = true,
+  onRegisterBeforeLeave,
 }: {
   readonly bookId: string;
   readonly targetChapters: number;
   readonly isZh: boolean;
   readonly onAdopted?: () => void;
+  readonly active?: boolean;
+  readonly onRegisterBeforeLeave?: (guard: (() => Promise<boolean>) | null) => void;
 }) {
-  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data, error: workspaceError, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const coverage = data?.manifest?.coverage;
-  const candidate = latestArtifact(data?.artifacts, "weave");
+  const candidate = data?.candidateWeave;
   const lastWeave = data?.runs?.find((item) => item.stage === "weave");
   const [endChapter, setEndChapter] = useState(String(targetChapters || 36));
   const [startChapter, setStartChapter] = useState("1");
   const [busy, setBusy] = useState<string | null>(null);
-  const [report, setReport] = useState<AuthoringReport | null>(null);
-  const [editBody, setEditBody] = useState("");
-  const dirtyRef = useRef(false);
-  const lastLoadedId = useRef<string>("");
+  const [reportOverride, setReport] = useState<AuthoringReport | null>(null);
+  const report = reportOverride ?? reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
+  const [reportOpen, setReportOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [generation, setGeneration] = useState<{ issueIds?: ReadonlyArray<string>; reuseStale?: boolean } | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const decision = useDraftDecision(isZh);
+  const restoredEdit = useRef(pendingWeaveEdits.get(bookId));
+  const [editBody, setEditBody] = useState(restoredEdit.current?.body ?? "");
+  const [dirty, setDirty] = useState(Boolean(restoredEdit.current));
+  const dirtyRef = useRef(dirty);
+  const editBaseId = useRef(restoredEdit.current?.baseId);
+  const savedBodyRef = useRef(restoredEdit.current?.savedBody ?? "");
+  const pendingSavedId = useRef<string | undefined>(undefined);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [liveRun, setLiveRun] = useState<WeaveRun | null>(null);
-  const pollRef = useRef<number | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [pollEpoch, setPollEpoch] = useState(0);
+  const actionRef = useRef(false);
   const generated = coverage?.chaptersGenerated ?? 0;
   const target = coverage?.chaptersTarget || Number(endChapter) || targetChapters || 0;
   const run = liveRun ?? (activeRunId && lastWeave?.runId === activeRunId ? lastWeave : null);
-  const running = Boolean(run && (run.status === "running" || run.status === "pausing" || busy === "generate"));
+  const running = busy === "generate" || Boolean(run && (run.status === "running" || run.status === "pausing"));
 
   useEffect(() => {
-    const loadKey = data?.candidateWeave?.artifactId ?? "empty";
-    if (dirtyRef.current && lastLoadedId.current === loadKey) return;
-    setEditBody(data?.candidateWeave?.body ?? "");
-    dirtyRef.current = false;
-    lastLoadedId.current = loadKey;
-  }, [data?.candidateWeave?.artifactId, data?.candidateWeave?.body]);
+    if (!data || dirtyRef.current || actionRef.current) return;
+    if (pendingSavedId.current && candidate?.artifactId !== pendingSavedId.current) return;
+    pendingSavedId.current = undefined;
+    setEditBody(candidate?.body ?? "");
+    savedBodyRef.current = candidate?.body ?? "";
+    editBaseId.current = candidate?.artifactId;
+  }, [data, candidate?.artifactId, candidate?.body, busy, dirty]);
 
   useEffect(() => {
     if (activeRunId) return;
-    if (lastWeave && (lastWeave.status === "running" || lastWeave.status === "paused" || lastWeave.status === "partial")) {
+    if (lastWeave && (lastWeave.status === "running" || lastWeave.status === "pausing" || lastWeave.status === "paused" || lastWeave.status === "partial" || lastWeave.status === "failed")) {
       setActiveRunId(lastWeave.runId);
       setLiveRun(lastWeave);
     }
@@ -69,55 +109,75 @@ export function AuthoringWeavePanel({
   useEffect(() => {
     if (!activeRunId) return undefined;
     let cancelled = false;
-    const tick = async () => {
-      try {
-        const next = await fetchJson<WeaveRun>(`/authoring/runs/${encodeURIComponent(activeRunId)}?bookId=${encodeURIComponent(bookId)}`);
-        if (cancelled) return;
+    const stop = pollWeaveRun({
+      read: () => fetchJson<WeaveRun>(`/authoring/runs/${encodeURIComponent(activeRunId)}?bookId=${encodeURIComponent(bookId)}`),
+      update: (next) => {
         setLiveRun(next);
-        if (next.status === "running" || next.status === "pausing") return;
+        setPollError(null);
+      },
+      settled: async () => {
         await refetch();
-        setBusy(null);
-      } catch {
-        /* keep last snapshot */
-      }
-    };
-    void tick();
-    pollRef.current = window.setInterval(() => void tick(), 1000);
+        if (!cancelled) setBusy((current) => current === "generate" ? null : current);
+      },
+      error: (error) => setPollError(error instanceof Error ? error.message : String(error)),
+    });
     return () => {
       cancelled = true;
-      if (pollRef.current) window.clearInterval(pollRef.current);
+      stop();
     };
-  }, [activeRunId, bookId, refetch]);
+  }, [activeRunId, bookId, refetch, pollEpoch]);
 
   const runAction = async (label: string, fn: () => Promise<unknown>, after?: "adopt") => {
+    if (actionRef.current) return undefined;
+    actionRef.current = true;
     setBusy(label);
+    setFailure(null);
     try {
       const result = await fn();
       await refetch();
       if (after === "adopt") onAdopted?.();
       return result;
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), "error");
+      const message = error instanceof Error ? error.message : String(error);
+      setFailure(message);
+      showToast(message, "error");
       return undefined;
     } finally {
+      actionRef.current = false;
       setBusy(null);
     }
   };
 
   const persistIfDirty = async (): Promise<string | undefined> => {
-    if (!candidate) return undefined;
-    if (!dirtyRef.current) return candidate.artifactId;
-    const saved = await putApi<{ artifactId?: string }>(`/authoring/artifacts/${candidate.artifactId}`, {
+    if (!dirtyRef.current) return pendingSavedId.current ?? candidate?.artifactId;
+    const baseId = editBaseId.current;
+    if (!baseId) throw new Error(isZh ? "手稿的原候选尚未加载，请重试。" : "The original candidate has not loaded. Please retry.");
+    const savingDraft = pendingWeaveEdits.get(bookId);
+    const saved = await putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(baseId)}`, {
       bookId,
       body: editBody,
     });
     dirtyRef.current = false;
+    setDirty(false);
+    savedBodyRef.current = editBody;
+    editBaseId.current = saved.artifactId;
+    pendingSavedId.current = saved.artifactId;
+    if (pendingWeaveEdits.get(bookId) === savingDraft) pendingWeaveEdits.delete(bookId);
     await refetch();
-    return saved.artifactId ?? candidate.artifactId;
+    return saved.artifactId;
   };
 
-  const startGenerate = async () => {
+  const startGenerate = async (requirements: string): Promise<boolean> => {
+    if (actionRef.current || running) return false;
+    const first = Number(startChapter);
+    const last = Number(endChapter);
+    if (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first) {
+      showToast(isZh ? "请输入有效章范围，结束章不能小于开始章。" : "Enter a valid chapter range.", "error");
+      return false;
+    }
+    actionRef.current = true;
     setBusy("generate");
+    setFailure(null);
     try {
       await persistIfDirty();
       const result = await postApi<WeaveRun & { beats?: unknown }>( "/authoring/weave/generate", {
@@ -125,28 +185,91 @@ export function AuthoringWeavePanel({
         startChapter: Number(startChapter) || 1,
         endChapter: Number(endChapter) || 36,
         targetChapters: Number(endChapter) || 36,
+        requirements,
       });
+      pendingSavedId.current = undefined;
       if (result.runId) {
         setActiveRunId(result.runId);
+        setPollEpoch((epoch) => epoch + 1);
         setLiveRun({ runId: result.runId, status: result.status ?? "running", progressLabel: result.progressLabel });
       } else {
         await refetch();
         setBusy(null);
       }
+      setReportOpen(false);
+      return true;
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), "error");
+      const message = error instanceof Error ? error.message : String(error);
+      setFailure(message);
+      showToast(message, "error");
       setBusy(null);
+      return false;
+    } finally {
+      actionRef.current = false;
     }
   };
 
+  const leaveRef = useRef<() => Promise<boolean>>(async () => true);
+  const discardEdits = () => { setEditBody(savedBodyRef.current); dirtyRef.current = false; setDirty(false); pendingWeaveEdits.delete(bookId); setEditing(false); };
+  leaveRef.current = async () => {
+    if (actionRef.current) return false;
+    if (!dirtyRef.current) { setEditing(false); return true; }
+    if (running) return false;
+    const answer = await decision.ask();
+    if (answer === "cancel") { setEditing(true); return false; }
+    if (answer === "discard") { discardEdits(); return true; }
+    let saved = false;
+    await runAction("save", async () => { await persistIfDirty(); setEditing(false); saved = true; });
+    return saved;
+  };
+  useEffect(() => {
+    onRegisterBeforeLeave?.(() => leaveRef.current());
+    return () => onRegisterBeforeLeave?.(null);
+  }, [onRegisterBeforeLeave]);
+  useEffect(() => {
+    if (!active || !dirty) return;
+    return registerNavigationGuard(() => leaveRef.current());
+  }, [active, dirty]);
+  useEffect(() => {
+    if (!active) setReportOpen(false);
+  }, [active]);
+  const saveRef = useRef<() => Promise<unknown>>(async () => undefined);
+  saveRef.current = () => runAction("save", async () => { await persistIfDirty(); setEditing(false); });
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (editing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !document.querySelector('[role="dialog"]')) {
+        event.preventDefault();
+        void saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, editing]);
+  useEffect(() => { installUnloadGuard(); }, []);
+
   const rangeDone = run?.status === "completed";
   const canResume = Boolean(run && (run.status === "partial" || run.status === "paused" || run.status === "failed"));
+  const activeReport = report && dirty ? { ...report, stale: true, staleReason: isZh ? "规划已有未保存手改，这份报告对应修改前的稿件。" : "Unsaved edits have changed the reviewed outline." } : report;
+  const adoptedId = data?.manifest?.adopted?.weave;
+  const history = (data?.artifacts ?? []).filter((item) => item.stage === "weave");
+  const currentId = pendingSavedId.current ?? editBaseId.current ?? candidate?.artifactId;
+  const reviewCurrent = () => {
+    if (actionRef.current || editing || dirty || running) return Promise.resolve(undefined);
+    setReportOpen(true);
+    return runAction("review", async () => { const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId); const next = await postApi<AuthoringReport>("/authoring/weave/review", { bookId, artifactId, coverage: isZh ? "整份规划" : "Entire outline" }); setReport(next); return next; });
+  };
+  const generationNotes = generationReviewNotes(activeReport, [currentId]);
 
   return (
-    <section className="space-y-3 rounded-2xl border border-border/60 bg-card/70 p-4" data-testid="authoring-weave-panel">
+    <section className={`space-y-5 ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-weave-panel">
+      {workspaceError && <p role="alert" className="text-sm text-destructive">{workspaceError} <button type="button" onClick={() => void refetch()}>{isZh ? "重新加载" : "Retry loading"}</button></p>}
+      {pollError && <p role="alert" className="text-sm text-destructive">{isZh ? "进度暂时无法读取，正在重试。" : "Unable to read progress. Retrying."} {pollError}</p>}
+      {run?.error && <p role="alert" className="text-sm text-destructive">{run.error}</p>}
+      {dirty && candidate && editBaseId.current !== candidate.artifactId && <p role="status" className="text-sm text-muted-foreground">{isZh ? "候选已有新版本。你的手改已保留，保存会生成新候选。" : "A newer candidate exists. Your edits are retained and will save as a new candidate."}</p>}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="font-serif text-lg">{isZh ? "全书 / 卷 / 章规划" : "Book / volume / chapter plan"}</h2>
+          <h2 className="font-serif text-2xl">{isZh ? "全书规划" : "Book outline"}</h2>
           <p className="text-sm text-muted-foreground">
             {isZh
               ? `全书已生成 ${generated}/${target || "—"} · 已采用 ${coverage?.chaptersAdopted ?? 0}`
@@ -155,6 +278,17 @@ export function AuthoringWeavePanel({
             {rangeDone ? (isZh ? " · 本次范围已完成" : " · this range complete") : ""}
           </p>
         </div>
+        <span className="text-xs text-muted-foreground">{dirty ? (isZh ? "未保存修改" : "Unsaved edits") : currentId === adoptedId && adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "候选" : "Candidate")}</span>
+      </div>
+      <RegenerateDialog open={Boolean(generation)} title={isZh ? "规划章节概要" : "Plan chapter summaries"} scopeLabel={isZh ? `第 ${startChapter}–${endChapter} 章` : `Chapters ${startChapter}–${endChapter}`} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && report ? report.summary : generationNotes} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
+        if (!generation) return false;
+        const ok = generation.issueIds && report && currentId ? (await runAction("revise", async () => {
+          await postApi("/authoring/weave/revise", { bookId, artifactId: currentId, reportId: report.reportId, selectedIssueIds: generation.issueIds, startChapter: Number(startChapter) || 1, endChapter: Number(endChapter) || target || 36, reuseStale: generation.reuseStale, requirements });
+          pendingSavedId.current = undefined; setReportOpen(false); return true;
+        })) === true : await startGenerate(withGenerationReview(requirements, generationNotes));
+        if (ok) setGeneration(null);
+        return ok;
+      }}>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <label>
             {isZh ? "从" : "From"}
@@ -163,6 +297,7 @@ export function AuthoringWeavePanel({
               min={1}
               className="ml-1 w-16 rounded-md border border-border bg-background px-2 py-1"
               value={startChapter}
+              disabled={Boolean(busy) || running}
               onChange={(event) => setStartChapter(event.target.value)}
             />
           </label>
@@ -173,58 +308,77 @@ export function AuthoringWeavePanel({
               min={1}
               className="ml-1 w-16 rounded-md border border-border bg-background px-2 py-1"
               value={endChapter}
+              disabled={Boolean(busy) || running}
               onChange={(event) => setEndChapter(event.target.value)}
             />
           </label>
         </div>
-      </div>
-      {editBody || data?.candidateWeave?.body ? (
-        <textarea
-          className="min-h-[200px] w-full rounded-md border border-border bg-background px-3 py-2 font-serif text-sm leading-6"
+      </RegenerateDialog>
+      {candidate || editBaseId.current ? (
+        editing ? <textarea
+          className="prose-body min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2"
           value={editBody}
+          readOnly={Boolean(busy) || running}
+          aria-label={isZh ? "全书大纲候选" : "Book outline candidate"}
           onChange={(event) => {
-            dirtyRef.current = true;
-            setEditBody(event.target.value);
+            if (actionRef.current || running) return;
+            const body = event.target.value;
+            const changed = body !== savedBodyRef.current;
+            dirtyRef.current = changed;
+            setDirty(changed);
+            setEditBody(body);
+            if (changed && editBaseId.current) pendingWeaveEdits.set(bookId, { body, baseId: editBaseId.current, savedBody: savedBodyRef.current });
+            else pendingWeaveEdits.delete(bookId);
           }}
           data-testid="weave-candidate-body"
-        />
+        /> : <ManuscriptView body={editBody} />
       ) : (
         <p className="text-sm text-muted-foreground">
           {isZh ? "还没有规划候选。生成后可在这里阅读和修改全书大纲、卷纲与章概要。" : "No outline candidate yet."}
         </p>
       )}
-      {candidate ? (
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
-          disabled={Boolean(busy) || running || editBody === (data?.candidateWeave?.body ?? "")}
-          onClick={() => void runAction("save", () => persistIfDirty())}
-        >
-          {isZh ? "保存手改" : "Save edits"}
-        </button>
-      ) : null}
-      <div className="flex flex-wrap gap-2">
-        <button
+      {failure ? <p role="alert" className="text-sm text-destructive">{failure}</p> : null}
+      <div className="manuscript-action-buttons ground-document-actions">
+        {editing ? <>
+          <button type="button" disabled={Boolean(busy) || running || !dirty} onClick={() => void runAction("save", async () => { await persistIfDirty(); setEditing(false); })}>{isZh ? "保存" : "Save"}</button>
+          <button type="button" className="quiet" disabled={Boolean(busy) || running} onClick={() => void leaveRef.current()}>{isZh ? "取消" : "Cancel"}</button>
+        </> : candidate || editBaseId.current ? <>
+          <button type="button" disabled={Boolean(busy) || running} onClick={() => setEditing(true)}>{isZh ? "编辑" : "Edit"}</button>
+          <button type="button" disabled={!candidate || Boolean(busy) || running || dirty} onClick={() => void reviewCurrent()}>{busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : (isZh ? "审查" : "Review")}</button>
+          <button type="button" disabled={!candidate || Boolean(busy) || running || dirty || currentId === adoptedId} onClick={() => void runAction("adopt", async () => {
+            const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId);
+            const result = await postApi<{ message?: string }>("/authoring/weave/adopt", { bookId, artifactId });
+            showToast(result.message ?? (isZh ? "整份规划已采用" : "Outline adopted"), "success"); return result;
+          }, "adopt")}>{currentId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
+          <span className="text-xs text-muted-foreground">{isZh ? "作用于整份规划" : "Applies to the entire outline"}</span>
+          <DropdownMenu><DropdownMenuTrigger className="quiet" aria-label={isZh ? "成果操作" : "Manuscript actions"} disabled={Boolean(busy) || running || dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger><DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setGeneration({})}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!report} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
+          </DropdownMenuContent></DropdownMenu>
+        </> : <button
           type="button"
           data-testid="outline-weave"
           className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-          disabled={running}
-          onClick={() => void startGenerate()}
+          disabled={Boolean(busy) || running}
+          onClick={() => setGeneration({})}
         >
           {running
             ? (isZh ? `正在规划… ${run?.progressLabel ?? ""}` : `Planning… ${run?.progressLabel ?? ""}`)
             : (isZh ? "规划全书每章概要" : "Plan every chapter")}
-        </button>
+        </button>}
         {canResume && !running ? (
           <button
             type="button"
             className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-            disabled={Boolean(busy)}
+            disabled={Boolean(busy) || editing || dirty}
             onClick={() => void runAction("resume", async () => {
               await persistIfDirty();
               const result = await postApi<WeaveRun>(`/authoring/runs/${run!.runId}/resume`, { bookId });
+              pendingSavedId.current = undefined;
               if (result.runId) {
                 setActiveRunId(result.runId);
+                setPollEpoch((epoch) => epoch + 1);
                 setLiveRun(result);
               }
               return result;
@@ -238,70 +392,36 @@ export function AuthoringWeavePanel({
             type="button"
             data-testid="outline-weave-pause"
             className="rounded-lg border border-border px-3 py-2 text-sm"
-            onClick={() => void postApi(`/authoring/runs/${activeRunId}/pause`, { bookId })}
+            onClick={() => void runAction("pause", () => postApi(`/authoring/runs/${activeRunId}/pause`, { bookId }))}
           >
             {isZh ? "暂停" : "Pause"}
           </button>
         ) : null}
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-          disabled={!candidate || running}
-          onClick={() => void runAction("review", async () => {
-            const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-            const next = await postApi<AuthoringReport>("/authoring/weave/review", {
-              bookId,
-              artifactId,
-              coverage: `第 ${startChapter}-${endChapter} 章`,
-            });
-            setReport(next);
-            return next;
-          })}
-        >
-          {isZh ? "审查规划" : "Review outline"}
-        </button>
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-          disabled={!candidate || running}
-          onClick={() => void runAction("adopt", async () => {
-            const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-            const result = await postApi<{ message?: string }>("/authoring/weave/adopt", {
-              bookId,
-              artifactId,
-            });
-            showToast(result.message ?? (isZh ? "规划已采用" : "Outline adopted"), "success");
-            return result;
-          }, "adopt")}
-        >
-          {isZh ? "采用并去落笔" : "Adopt and write"}
-        </button>
       </div>
 
       <AuthoringReviewDrawer
-        open={Boolean(report)}
+        key={report?.reportId ?? "closed"}
+        open={reportOpen}
         title={isZh ? "织卷审查" : "Weave review"}
-        report={report}
-        currentArtifactId={candidate?.artifactId}
+        report={activeReport}
+        currentArtifactId={pendingSavedId.current ?? editBaseId.current ?? candidate?.artifactId}
         isZh={isZh}
-        busy={busy === "revise"}
-        onClose={() => setReport(null)}
+        busy={busy === "review"}
+        reviseDisabled={Boolean(busy) || editing || dirty || running}
+        error={failure}
+        onRetry={() => void reviewCurrent()}
+        onClose={() => setReportOpen(false)}
         onRevise={(issueIds, reuseStale) => {
           if (!candidate || !report) return;
-          void runAction("revise", async () => {
-            const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate.artifactId);
-            return postApi("/authoring/weave/revise", {
-              bookId,
-              artifactId,
-              reportId: report.reportId,
-              selectedIssueIds: issueIds,
-              startChapter: Number(startChapter) || 1,
-              endChapter: Number(endChapter) || target || 36,
-              reuseStale,
-            });
-          });
+          if (editing || dirty) { showToast(isZh ? "请先保存或取消当前修改。" : "Save or cancel your edits first.", "info"); return; }
+          setGeneration({ issueIds, reuseStale });
         }}
       />
+      <ManuscriptHistoryDrawer open={historyOpen} bookId={bookId} title={isZh ? "规划版本" : "Outline versions"} artifacts={history} currentId={currentId} adoptedId={adoptedId} isZh={isZh} busy={Boolean(busy)} onClose={() => setHistoryOpen(false)} onRestore={async (artifactId, body) => {
+        const ok = await runAction("restore", async () => { await putApi(`/authoring/artifacts/${encodeURIComponent(artifactId)}`, { bookId, body }); pendingSavedId.current = undefined; return true; });
+        return ok === true;
+      }} />
+      {decision.dialog}
     </section>
   );
 }

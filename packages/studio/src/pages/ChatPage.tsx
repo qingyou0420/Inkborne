@@ -5,6 +5,8 @@ import type { SSEMessage } from "../hooks/use-sse";
 import { fetchJson, invalidateApiPaths, postApi, putApi, useApi } from "../hooks/use-api";
 import type { ChatAttachmentPayload } from "../store/chat/types";
 import { chatSelectors, useChatStore } from "../store/chat";
+import { isAskSession } from "../components/ask-canon-state";
+import "../components/ask-workspace.css";
 import type { ChatSessionKind } from "../store/chat";
 import { useServiceStore } from "../store/service";
 import { showToast } from "../lib/toast";
@@ -34,6 +36,7 @@ import {
   BotMessageSquare,
   ArrowUp,
   ChevronDown,
+  MoreHorizontal,
   Check,
   FolderUp,
   X,
@@ -84,6 +87,7 @@ interface Nav {
 
 export interface ChatPageProps {
   readonly activeBookId?: string;
+  readonly resumeSessionId?: string;
   readonly mode?: "book" | "book-create" | "project-chat" | "interactive-film-authoring";
   readonly nav: Nav;
   readonly theme: Theme;
@@ -298,7 +302,7 @@ function SkillPickerPanel({
 
 // -- Component --
 
-export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -323,6 +327,9 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const activateSession = useChatStore((s) => s.activateSession);
   const setSessionPlayMode = useChatStore((s) => s.setSessionPlayMode);
   const bumpBookDataVersion = useChatStore((s) => s.bumpBookDataVersion);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionLoadError, setSessionLoadError] = useState<string | null>(null);
+  const [sessionRetry, setSessionRetry] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<ScrollFrameId | null>(null);
@@ -545,8 +552,21 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   // stay in the sidebar until the user picks them explicitly.
   useEffect(() => {
     let cancelled = false;
+    setSessionLoading(true);
+    setSessionLoadError(null);
 
     void (async () => {
+      if (resumeSessionId && (mode === "book" || mode === "book-create")) {
+        await loadSessionDetail(resumeSessionId, true);
+        if (cancelled) return;
+        const restored = useChatStore.getState().sessions[resumeSessionId];
+        if (!isAskSession(restored, activeBookId)) {
+          throw new Error(isZh ? "这条问心记录不属于当前作品。请重新选择记录。" : "This conversation does not belong to this work. Choose another record.");
+        }
+        activateSession(resumeSessionId);
+        if (mode === "book-create") setBookCreateSessionId(resumeSessionId);
+        return;
+      }
       if (!activeBookId && mode === "project-chat") {
         const state = useChatStore.getState();
         const currentSession = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
@@ -556,19 +576,19 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       }
 
       if (activeBookId) {
-        await loadSessionList(activeBookId);
+        await loadSessionList(activeBookId, true);
         if (cancelled) return;
 
         const state = useChatStore.getState();
         const currentSession = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
-        if (currentSession?.bookId === activeBookId) {
-          await loadSessionDetail(currentSession.sessionId);
+        if (currentSession?.bookId === activeBookId && (mode !== "book" || isAskSession(currentSession, activeBookId))) {
+          await loadSessionDetail(currentSession.sessionId, true);
           return;
         }
-        const ids = state.sessionIdsByBook[activeBookId] ?? [];
+        const ids = (state.sessionIdsByBook[activeBookId] ?? []).filter((id) => mode !== "book" || isAskSession(state.sessions[id], activeBookId));
         if (ids.length > 0) {
           activateSession(ids[0]);
-          await loadSessionDetail(ids[0]);
+          await loadSessionDetail(ids[0], true);
           return;
         }
 
@@ -652,12 +672,16 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       if (!cancelled) {
         setProjectChatSessionId(newSessionId);
       }
-    })();
+    })().catch((failure) => {
+      if (!cancelled) setSessionLoadError(failure instanceof Error ? failure.message : String(failure));
+    }).finally(() => {
+      if (!cancelled) setSessionLoading(false);
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [activeBookId, activateSession, createDraftSession, createSession, loadSessionDetail, loadSessionList, mode]);
+  }, [activeBookId, activateSession, createDraftSession, createSession, loadSessionDetail, loadSessionList, mode, resumeSessionId, sessionRetry]);
 
   const addAttachedFiles = (files: FileList | File[]) => {
     const incoming = Array.from(files);
@@ -677,7 +701,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   };
 
   const onSend = async (text: string) => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || sessionLoading || sessionLoadError) return;
     const hasPendingMessage = Boolean(text.trim()) || attachedFiles.length > 0;
     if (!hasPendingMessage) {
       if (chatStreaming || loading) await abortSession(activeSessionId);
@@ -886,8 +910,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       : "Tell me what you want to write \u2014 genre, world, protagonist, core conflict";
   })();
 
+  const askLayout = mode === "book" || mode === "book-create";
+
   return (
-    <div className="flex flex-col h-full flex-1 min-w-0 relative">
+    <div className={`flex flex-col h-full flex-1 min-w-0 relative ${askLayout ? "ask-chat" : ""}`}>
+      {sessionLoadError ? <div role="alert" className="ask-canon-error"><p>{sessionLoadError}</p><button type="button" onClick={() => setSessionRetry((value) => value + 1)}>{isZh ? "重试加载对话" : "Retry conversation"}</button></div> : null}
       {/* Message scroll area */}
       <div
         ref={scrollRef}
@@ -901,7 +928,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         }}
         className={`chat-message-scroll flex-1 overflow-y-auto [scrollbar-gutter:stable] px-4 py-6 transition-[padding] duration-200 ${worldPanelInsetClass}`}
       >
-        {needsPlayModeChoice ? (
+        {sessionLoading ? <p role="status" className="text-sm text-muted-foreground py-4">{isZh ? "正在载入对话…" : "Loading conversation…"}</p> : sessionLoadError ? null : needsPlayModeChoice ? (
           <div className="h-full flex flex-col items-center justify-center text-center select-none gap-4">
             <div className="w-14 h-14 rounded-2xl border border-dashed border-border flex items-center justify-center bg-secondary/30 opacity-40">
               <Gamepad2 size={24} className="text-muted-foreground" />
@@ -929,16 +956,19 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             </div>
           </div>
         ) : messages.length === 0 && !loading ? (
-          <div className="h-full flex flex-col items-center justify-center text-center select-none">
-            <div className="w-14 h-14 rounded-2xl border border-dashed border-border flex items-center justify-center mb-4 bg-secondary/30 opacity-40">
-              <BotMessageSquare size={24} className="text-muted-foreground" />
-            </div>
-            <p className="text-sm text-muted-foreground/70 max-w-md leading-7">
-              {emptyGuidance}
-            </p>
+          <div className={`h-full flex flex-col ${askLayout ? "items-start text-left" : "items-center justify-center text-center"} select-none`}>
+            {askLayout ? (
+              <h2 className="ask-hello">{isZh ? "聊聊，你想写的故事。" : "Let's talk about the story you want to write."}</h2>
+            ) : (
+              <div className="w-14 h-14 rounded-2xl border border-dashed border-border flex items-center justify-center mb-4 bg-secondary/30 opacity-40">
+                <BotMessageSquare size={24} className="text-muted-foreground" />
+              </div>
+            )}
+            {!askLayout ? <p className="text-sm text-muted-foreground/70 max-w-md leading-7">{emptyGuidance}</p> : null}
           </div>
         ) : (
           <div className="max-w-3xl mx-auto space-y-4">
+            {askLayout ? <h2 className="ask-hello">{isZh ? "聊聊，你想写的故事。" : "Let's talk about the story you want to write."}</h2> : null}
             {messages.map((msg, i) => (
               <div key={`${msg.timestamp}-${i}`}>
                 {msg.role === "user" ? (
@@ -1091,10 +1121,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         </div>
       ) : null}
       {needsPlayModeChoice ? null : (
-      <div className={`shrink-0 border-t border-border/40 px-4 py-3 transition-[padding] duration-200 ${worldPanelInsetClass}`}>
+      <div className={`ask-composer-wrap shrink-0 border-t border-border/40 px-4 py-3 transition-[padding] duration-200 ${worldPanelInsetClass}`}>
         <div className="max-w-3xl mx-auto">
           <div className="flex items-start gap-2">
-            <div className="relative flex-1 rounded-xl bg-secondary/30 transition-all">
+            <div className={`relative flex-1 rounded-xl transition-all ${askLayout ? "ask-composer bg-background" : "bg-secondary/30"}`}>
               {skillPanelOpen ? (
                 <SkillPickerPanel
                   isZh={isZh}
@@ -1121,19 +1151,17 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                 }}
               />
               {mode === "book" && activeBookId ? (
-                <div className="flex flex-wrap gap-1.5 border-b border-border/20 px-3 py-2">
-                  <button
-                    type="button"
+                <div className="ask-chat-options">
+                  <DropdownMenu><DropdownMenuTrigger aria-label={isZh ? "对话操作" : "Conversation actions"}><MoreHorizontal size={17} /></DropdownMenuTrigger><DropdownMenuContent align="end" side="top"><DropdownMenuItem
                     data-testid="reopen-ask"
                     title={isZh ? "只开新一条问心，不改已确认的正典" : "Opens a new ask without changing confirmed canon"}
                     onClick={() => {
                       createDraftSession(activeBookId, "book");
                       setInput(isZh ? REOPEN_ASK_PROMPT.zh : REOPEN_ASK_PROMPT.en);
                     }}
-                    className="rounded-full border border-border/60 bg-secondary/40 px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
                   >
                     {isZh ? "重新推敲前提" : "Revisit the premise"}
-                  </button>
+                  </DropdownMenuItem></DropdownMenuContent></DropdownMenu>
                 </div>
               ) : null}
               {selectedSkills.length > 0 ? (
@@ -1185,7 +1213,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   ) : null}
                 </div>
               ) : null}
-              <div className="flex items-center gap-2 px-3 py-2">
+              <div className="ask-composer-main flex items-center gap-2 px-3 py-2">
                 <button
                   type="button"
                   onClick={() => setSkillPanelOpen((value) => !value)}
@@ -1210,32 +1238,36 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   ref={textareaRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSend(input); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void onSend(input); } }}
                   placeholder={
-                    mode === "book"
-                      ? (isZh ? "和它聊聊这本书……" : "Talk about this book…")
-                      : mode === "book-create"
-                        ? (isZh ? "告诉我你想写什么——题材、世界、主角、冲突" : "Tell me what you want to write — genre, world, lead, conflict")
-                        : t("common.enterCommand")
+                    askLayout
+                      ? (isZh ? "说说那个让你想动笔的念头…" : "Tell me the idea that made you want to write…")
+                      : t("common.enterCommand")
                   }
-                  disabled={!activeSessionId}
+                  disabled={!activeSessionId || sessionLoading || Boolean(sessionLoadError)}
                   rows={1}
-                  className="flex-1 bg-transparent text-base leading-7 placeholder:text-muted-foreground/50 outline-none! border-none! ring-0! shadow-none focus:outline-none! focus:ring-0! focus:border-none! resize-none disabled:opacity-50 max-h-[200px] overflow-y-auto"
+                  aria-label={isZh ? "发送给问心的内容" : "Message"}
+                  className="ask-input flex-1 bg-transparent text-base leading-7 placeholder:text-muted-foreground/50 outline-none! border-none! ring-0! shadow-none focus:outline-none! focus:ring-0! focus:border-none! resize-none disabled:opacity-50 max-h-[200px] overflow-y-auto"
                 />
                 <button
                   type="button"
                   onClick={() => void onSend(input)}
-                  disabled={(!input.trim() && attachedFiles.length === 0 && !loading) || !activeSessionId}
-                  className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 transition-colors disabled:opacity-20 shadow-sm shadow-primary/20"
+                  disabled={(!input.trim() && attachedFiles.length === 0 && !loading) || !activeSessionId || sessionLoading || Boolean(sessionLoadError)}
+                  className={askLayout
+                    ? "ask-send inline-flex items-center gap-1 shrink-0 disabled:opacity-20"
+                    : "w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 transition-colors disabled:opacity-20 shadow-sm shadow-primary/20"}
                   title={loading && !input.trim() && attachedFiles.length === 0 ? (isZh ? "停止当前回复" : "Stop") : undefined}
+                  aria-label={loading && !input.trim() && attachedFiles.length === 0 ? (isZh ? "停止当前回复" : "Stop") : (isZh ? "发送" : "Send")}
                 >
                   {loading && !input.trim() && attachedFiles.length === 0
                     ? <Square size={13} fill="currentColor" />
-                    : <ArrowUp size={14} strokeWidth={2.5} />}
+                    : askLayout
+                      ? <>{isZh ? "发送" : "Send"} <ArrowUp size={14} strokeWidth={2.5} /></>
+                      : <ArrowUp size={14} strokeWidth={2.5} />}
                 </button>
               </div>
-              <div className="flex items-center gap-2 px-3 pb-2 border-t border-border/20 pt-1.5">
-                {modelPickerStatus === "loading" ? (
+              <div className="ask-composer-tools flex items-center gap-2 px-3 pb-2 border-t border-border/20 pt-1.5">
+                {askLayout && modelPickerStatus === "ready" ? null : modelPickerStatus === "loading" ? (
                   <span className="text-[15px] text-muted-foreground/40 animate-pulse">{isZh ? "加载模型..." : "Loading models..."}</span>
                 ) : modelPickerStatus === "ready" ? (
                   <DropdownMenu>

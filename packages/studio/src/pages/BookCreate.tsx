@@ -876,7 +876,7 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
               <span className="text-xs font-medium text-muted-foreground">{copy.chapterWordCountLabel}</span>
               <input
                 type="number"
-                min={1000}
+                min={100}
                 value={form.chapterWordCount}
                 onChange={(event) => updateForm({ chapterWordCount: event.target.value })}
                 className={`w-full ${c.input} rounded-md px-3 py-2.5 focus:outline-none text-sm`}

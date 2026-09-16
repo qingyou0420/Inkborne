@@ -5,12 +5,24 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createLightweightBook } from "../authoring/book-create.js";
 import { isBookFoundationComplete } from "../utils/outline-paths.js";
 import { isBookPresent, isLightweightAuthoringBook } from "../authoring/context.js";
+import { BookConfigSchema } from "../models/book.js";
+import { parseCanon } from "../authoring/canon.js";
 
 describe("lightweight book create", () => {
   let root = "";
   afterEach(async () => {
     if (root) await rm(root, { recursive: true, force: true });
     root = "";
+  });
+
+  it("keeps a valid short-chapter canon readable after book creation", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-short-chapter-"));
+    const canon = parseCanon("---\ntitle: 短章验收\nchapterWordCount: 300\ntargetChapters: 2\n---\n\n## 一句话故事\n一次归还旧信的旅程。\n");
+    const book = await createLightweightBook({ projectRoot: root, canon });
+    const saved = BookConfigSchema.parse(JSON.parse(await readFile(join(book.bookDir, "book.json"), "utf8")));
+    expect(saved.chapterWordCount).toBe(300);
+    expect(parseCanon(await readFile(join(book.bookDir, "story", "canon.md"), "utf8")).chapterWordCount).toBe(300);
+    expect(saved.targetChapters).toBe(2);
   });
 
   it("creates a readable book without calling ground or weave artifacts", async () => {

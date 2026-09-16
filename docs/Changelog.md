@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 2.2.1
+
+中国水墨界面与四阶段创作更新。具体用户可见变化见根目录 [CHANGELOG.md](../CHANGELOG.md)。安装包 `Inkborne-Setup-2.2.1.exe`；统一配置入口，明确编辑、审查与采用，并保留旧文件名的更新兼容。
+
 ## 2.1.9
 
 用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。Windows 安装包 `Inkborne-Setup-2.1.9.exe`（#124：等你过目建议改成白话）。

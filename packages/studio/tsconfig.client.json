@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@actalk/inkos-core": ["../core/dist/index.d.ts"],
+      "@actalk/inkos-core/*": ["../core/dist/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "src/api/**", "src/**/*.test.ts", "src/**/*.test.tsx", "src/**/*.spec.ts", "src/**/*.spec.tsx", "src/**/__tests__/**"]
+}

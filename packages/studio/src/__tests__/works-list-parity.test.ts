@@ -125,9 +125,10 @@ describe("sidebar create block", () => {
     expect(sidebar).not.toMatch(/nav\.agentOnline/);
   });
 
-  it("opens home covers in 书房, not a random tab", () => {
+  it("opens covers at the remembered stage and keeps shorts reachable", () => {
     const dashboard = read("src/pages/Dashboard.tsx");
-    expect(dashboard).toMatch(/nav\.toBook\(book\.id\)/);
+    expect(dashboard).toMatch(/goBookStage\(nav, book.id, stage\)/);
+    expect(dashboard).toMatch(/bookResumeStage/);
     expect(dashboard).toMatch(/nav\.toShort\(short\.id\)/);
     expect(dashboard).not.toMatch(/toBookChat/);
     expect(dashboard).not.toMatch(/write-next/);
@@ -135,16 +136,14 @@ describe("sidebar create block", () => {
 });
 
 describe("works list long/short parity", () => {
-  it("labels longs as 连载 and shorts as 短篇 on the home shelf", () => {
+  it("labels novels by current stage and preserves the short-fiction label", () => {
     const dashboard = read("src/pages/Dashboard.tsx");
     const i18n = read("src/hooks/use-i18n.ts");
 
     expect(i18n).toMatch(/"home\.typeSerial": \{ zh: "连载"/);
     expect(i18n).toMatch(/"short\.badge": \{ zh: "短篇"/);
-    expect(dashboard).toMatch(/home\.typeSerial/);
-    expect(dashboard).toMatch(/short\.badge/);
-    expect(dashboard).toMatch(/dashboard-book-badge-/);
-    expect(dashboard).toMatch(/dashboard-short-badge-/);
+    expect(dashboard).toMatch(/STAGE_LABELS\[stage\]/);
+    expect(dashboard).toMatch(/短篇/);
   });
 
   it("gives shorts the same cover-menu actions as books", () => {
@@ -152,9 +151,9 @@ describe("works list long/short parity", () => {
     expect(dashboard).toMatch(/home-short-menu-/);
     expect(dashboard).toMatch(/short-export-manuscript-/);
     expect(dashboard).toMatch(/short-delete-/);
-    expect(dashboard).toMatch(/short\.finished|short\.continue/);
-    expect(dashboard).toMatch(/home\.toWrite|cockpit\.title/);
-    expect(dashboard).toMatch(/book\.export/);
+    expect(dashboard).toMatch(/nav\.toShort\(short.id\)/);
+    expect(dashboard).toMatch(/nav\.toShortSettings\(short.id\)/);
+    expect(dashboard).toMatch(/导出正文/);
     expect(dashboard).toMatch(/shortManuscriptExportPath/);
     expect(dashboard).not.toMatch(/\/books\/\$\{short/);
   });
@@ -187,7 +186,7 @@ describe("works list delete refresh", () => {
   it("drops a deleted book from the home shelf immediately", () => {
     const dashboard = read("src/pages/Dashboard.tsx");
     const settings = read("src/components/BookSettingsDrawer.tsx");
-    const nav = read("src/components/BookWorkspaceNav.tsx");
+    const nav = read("src/components/AppMoreMenu.tsx");
 
     expect(dashboard).toMatch(/removeBookFromCollection/);
     expect(dashboard).toMatch(/bumpBookDataVersion/);

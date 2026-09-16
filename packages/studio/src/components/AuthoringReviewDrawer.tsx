@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuthoringReport } from "../lib/authoring-workspace";
 import { severityLabel } from "../lib/authoring-workspace";
-import { Drawer } from "./ui/drawer";
+import { ReadingSidePanel } from "./ReadingSidePanel";
 
 export function AuthoringReviewDrawer({
   open,
@@ -18,6 +18,9 @@ export function AuthoringReviewDrawer({
   busy,
   onClose,
   onRevise,
+  error,
+  onRetry,
+  reviseDisabled,
 }: {
   readonly open: boolean;
   readonly title: string;
@@ -27,15 +30,25 @@ export function AuthoringReviewDrawer({
   readonly busy?: boolean;
   readonly onClose: () => void;
   readonly onRevise: (selectedIssueIds: ReadonlyArray<string>, reuseStale?: boolean) => void;
+  readonly error?: string | null;
+  readonly onRetry?: () => void;
+  readonly reviseDisabled?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [reuseStale, setReuseStale] = useState(false);
   const issues = report?.issues ?? [];
+  useEffect(() => {
+    setSelected([]);
+    setReuseStale(false);
+  }, [report?.reportId, currentArtifactId]);
   const historical = Boolean(report && currentArtifactId && !report.targetRefs.includes(currentArtifactId));
   const blocked = Boolean(report?.incomplete || ((report?.stale || historical) && !reuseStale));
 
   return (
-    <Drawer open={open} title={title} onClose={onClose} testId="authoring-review-drawer">
+    <ReadingSidePanel open={open} title={title} onClose={onClose} testId="authoring-review-drawer">
+      {busy ? <p role="status" className="mb-4 text-sm text-muted-foreground">{isZh ? "正在审查，可继续对照文稿…" : "Reviewing. You can keep reading the manuscript…"}</p> : null}
+      {error ? <p role="alert" className="mb-4 text-sm text-destructive">{error}</p> : null}
+      {onRetry && (report || error) ? <button type="button" className="btn-ghost mb-4" disabled={busy || reviseDisabled} onClick={onRetry}>{isZh ? "重新审查" : "Retry review"}</button> : null}
       {!report ? (
         <p className="text-sm text-muted-foreground">{isZh ? "还没有审查报告。" : "No report yet."}</p>
       ) : (
@@ -82,7 +95,7 @@ export function AuthoringReviewDrawer({
               </label>
             ))
           )}
-          <div className="flex gap-2 pt-2">
+          {issues.length > 0 ? <div className="flex gap-2 pt-2">
             <button
               type="button"
               className="rounded-lg border border-border px-3 py-2 text-sm"
@@ -93,14 +106,14 @@ export function AuthoringReviewDrawer({
             <button
               type="button"
               className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-              disabled={busy || selected.length === 0 || blocked}
+              disabled={busy || reviseDisabled || selected.length === 0 || blocked}
               onClick={() => onRevise(selected, reuseStale)}
             >
               {isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`}
             </button>
-          </div>
+          </div> : null}
         </div>
       )}
-    </Drawer>
+    </ReadingSidePanel>
   );
 }
