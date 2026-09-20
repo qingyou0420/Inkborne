@@ -111,6 +111,7 @@ export {
   parseCanon,
   serializeCanon,
   ensureAuthoringDraft,
+  loadDraft,
   bindDraftToBook,
   reviseGroundEntry,
   generateAskCanon,

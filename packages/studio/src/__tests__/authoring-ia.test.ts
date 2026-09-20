@@ -98,6 +98,15 @@ describe("authoring four-agent IA", () => {
     expect(read("src/pages/OutlineWorkspace.tsx")).toMatch(/preferredVolume/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/请先/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/outline-weave-pause/);
+    expect(read("src/components/AskCanonPanel.tsx")).toMatch(/放弃这次运行/);
+    expect(read("src/components/AuthoringGroundPanel.tsx")).toMatch(/放弃这次运行/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/放弃这次运行/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/data-testid="authoring-abandon-run"/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/selectScopedAuthoringRun\(data\?\.runs, "write", scope\)/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/writeRetryAction/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/serverStartedAt/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/migrateBookSession/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/persistStartingRun/);
     expect(read("src/components/AskCanonPanel.tsx")).toMatch(/ask-candidate-body/);
     expect(read("src/components/AuthoringRolesPanel.tsx")).toMatch(/测试此配置/);
     expect(read("src/components/AuthoringRolesPanel.tsx")).toMatch(/继承连接/);

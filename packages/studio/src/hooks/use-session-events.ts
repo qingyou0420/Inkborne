@@ -17,9 +17,11 @@ export function bookCreatedRoute(
   page: HashRoute["page"],
   bookId: string,
   canonCandidate = false,
+  stage?: string,
 ): HashRoute | null {
-  if (page === "book-create") return { page: canonCandidate ? "book-ask" : "book", bookId };
-  return null;
+  if (page !== "book-create") return null;
+  if (stage === "ask" || canonCandidate) return { page: "book-ask", bookId };
+  return { page: "book", bookId };
 }
 
 export function useSessionEvents(
@@ -43,7 +45,7 @@ export function useSessionEvents(
     }
 
     if (recent.event === "book:created") {
-      const data = recent.data as { sessionId?: string; bookId?: string; canonCandidate?: boolean } | null;
+      const data = recent.data as { sessionId?: string; bookId?: string; canonCandidate?: boolean; stage?: string } | null;
       if (!data?.sessionId || !data.bookId) return;
       const { sessionId, bookId } = data;
 
@@ -64,7 +66,7 @@ export function useSessionEvents(
 
       if (getBookCreateSessionId() === sessionId) {
         clearBookCreateSessionId();
-        const next = bookCreatedRoute(route.page, bookId, data.canonCandidate === true);
+        const next = bookCreatedRoute(route.page, bookId, data.canonCandidate === true, data.stage);
         if (next) setRoute(next);
       }
     }

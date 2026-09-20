@@ -5,8 +5,15 @@
  */
 
 import { useEffect, useState } from "react";
-import { fetchJson } from "./use-api";
+import { fetchJson, StudioApiError } from "./use-api";
 import { pollWeaveRun } from "../lib/weave-editor-state";
+
+export const AUTHORING_RUN_NOT_FOUND_LIMIT = 10;
+
+export function keepPollingAuthoringRunError(cause: unknown, consecutiveErrors: number): boolean {
+  const missing = cause instanceof StudioApiError && cause.status === 404;
+  return !(missing && consecutiveErrors >= AUTHORING_RUN_NOT_FOUND_LIMIT);
+}
 
 export interface AuthoringRunView {
   readonly runId: string;
@@ -79,6 +86,7 @@ export function useAuthoringRun(
       },
       error: (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
       settled: async () => undefined,
+      keepPollingOnError: keepPollingAuthoringRunError,
     });
   }, [bookId, draftId, runId, epoch]);
 

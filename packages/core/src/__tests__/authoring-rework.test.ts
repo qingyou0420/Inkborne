@@ -13,7 +13,7 @@ import { findChapterNode, parseVolumeMapTree } from "../utils/volume-map-tree.js
 import { parseReviewPayload } from "../authoring/review.js";
 import { generateAskCanon, adoptAskCanon } from "../authoring/stages/ask.js";
 import { generateGroundEntries, proposeSettingsCatalog, reviseGroundEntry } from "../authoring/stages/ground.js";
-import { adoptWeave, generateWeaveRange as generateWeaveRangeCore, generateWeaveStructure, resolveWeaveTargetChapters, reviseWeave, volumesFromOutline } from "../authoring/stages/weave.js";
+import { adoptWeave, generateWeaveRange as generateWeaveRangeCore, generateWeaveStructure, resolveWeaveTargetChapters, reviseWeave, validateVolumePlan, volumesFromOutline } from "../authoring/stages/weave.js";
 import { adoptChapterDraft, bindRestoredChapter, generateChapterDraft as generateChapterDraftCore, reviewChapterDraft, reviseChapterDraft, saveWriteBody, selectWriteCandidate } from "../authoring/stages/write.js";
 import { loadArtifact, loadManifest, loadRun, newRunId, saveHandEditedArtifact, saveReport, saveRunControl } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
@@ -78,16 +78,60 @@ async function adoptPlannedStructure(
   return structured;
 }
 
+function outlineCoversTarget(markdown: string, target: number): boolean {
+  const volumes = volumesFromOutline(markdown);
+  if (!volumes.length) return false;
+  try {
+    validateVolumePlan(volumes, target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withCoveringVolumes(markdown: string, target: number): string {
+  const seed = markdown.trim();
+  const volumes = volumesFromOutline(seed);
+  if (!volumes.length) {
+    return `## 第1卷 测试卷（1-${target}章）\n测试卷目标\n\n${seed}\n`;
+  }
+  if (outlineCoversTarget(seed, target)) return seed;
+  const ordered = [...volumes].sort((left, right) => left.startChapter - right.startChapter);
+  const last = ordered.at(-1)!;
+  if (ordered[0]?.startChapter === 1 && last.endChapter < target) {
+    const start = String(last.startChapter);
+    const end = String(last.endChapter);
+    const replaced = seed
+      .replace(new RegExp(`(${start}\\s*[-–—]\\s*)${end}(章?)`), `$1${target}$2`)
+      .replace(new RegExp(`(Chapters ${start}-)${end}`), `$1${target}`);
+    if (replaced !== seed && outlineCoversTarget(replaced, target)) return replaced;
+    return `${seed}\n\n## 第${volumes.length + 1}卷 续卷（${last.endChapter + 1}-${target}章）\n续写覆盖\n`;
+  }
+  return `## 第1卷 测试卷（1-${target}章）\n测试卷目标\n\n${seed}\n`;
+}
+
 async function generateWeaveRange(input: Parameters<typeof generateWeaveRangeCore>[0]) {
   const bookDir = input.root.bookId ? join(input.root.projectRoot, "books", input.root.bookId) : "";
   const lightweight = bookDir ? await isLightweightAuthoringBook(bookDir) : false;
-  const manifest = await loadManifest(input.root);
-  if (!input.resumeRunId && !manifest.adopted.weave && lightweight && input.root.bookId) {
+  if (!input.resumeRunId && lightweight && input.root.bookId) {
     const target = await resolveWeaveTargetChapters(input.root);
-    await adoptPlannedStructure(
-      { root: input.root, project: input.project },
-      [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: target, body: "测试卷目标" }],
-    );
+    const manifest = await loadManifest(input.root);
+    const candidate = manifest.candidates.weave
+      ? await loadArtifact(input.root, manifest.candidates.weave)
+      : undefined;
+    const seed = candidate?.body ?? "";
+    if (!outlineCoversTarget(seed, target)) {
+      if (candidate && seed.trim()) {
+        await saveHandEditedArtifact(input.root, candidate.meta.artifactId, withCoveringVolumes(seed, target));
+      } else if (!manifest.adopted.weave) {
+        await adoptPlannedStructure(
+          { root: input.root, project: input.project },
+          [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: target, body: "测试卷目标" }],
+        );
+      } else if (candidate) {
+        await saveHandEditedArtifact(input.root, candidate.meta.artifactId, withCoveringVolumes(seed, target));
+      }
+    }
   }
   return generateWeaveRangeCore(input);
 }
@@ -2078,10 +2122,10 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r13-01-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    const first = await generateWeaveRange({
+    const first = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "OLD_BOOK",
@@ -2089,14 +2133,18 @@ describe("authoring rework R01-R12", () => {
           { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "旧卷1" },
           { volumeNumber: 2, title: "南岸", startChapter: 5, endChapter: 8, body: "旧卷2" },
         ],
+      }),
+    });
+    await generateWeaveRange({
+      ...ctx,
+      llm: async () => JSON.stringify({
         chapters: [1, 2, 3, 4].map((n) => ({ chapterNumber: n, title: `章${n}`, summary: `OLD_${n}` })),
       }),
       startChapter: 1,
       endChapter: 4,
-      targetChapters: 8,
     });
     const idea = await saveHandEditedArtifact(ctx.root, first.artifactId, "作者想法：改从南门焚信写起，不要旧卷结构。\n");
-    const planned = await generateWeaveRange({
+    const planned = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "NEW_BOOK 南门焚信。",
@@ -2104,13 +2152,17 @@ describe("authoring rework R01-R12", () => {
           { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "NEW_VOL1 尚未渡海。" },
           { volumeNumber: 2, title: "南岸", startChapter: 5, endChapter: 8, body: "NEW_VOL2 已抵南岸。" },
         ],
+      }),
+    });
+    const filled = await generateWeaveRange({
+      ...ctx,
+      llm: async () => JSON.stringify({
         chapters: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ chapterNumber: n, title: `章${n}`, summary: `PLAN_${n}` })),
       }),
       startChapter: 1,
       endChapter: 8,
-      targetChapters: 8,
     });
-    const body = (await loadArtifact(ctx.root, planned.artifactId))?.body ?? "";
+    const body = (await loadArtifact(ctx.root, filled.artifactId))?.body ?? "";
     expect(body).toContain("作者想法：改从南门焚信写起");
     expect(body).toContain("NEW_BOOK");
     expect(body).toContain("NEW_VOL1");
@@ -2119,7 +2171,7 @@ describe("authoring rework R01-R12", () => {
     expect(parseVolumeMapTree(body).chapterCount).toBe(8);
     const noteOnly = await saveHandEditedArtifact(ctx.root, idea.artifactId, "## 第1卷·节点A\nAUTHOR_NOTE 限知视角。\n");
     expect(noteOnly.artifactId).toBeTruthy();
-    const fromNote = await generateWeaveRange({
+    const fromNote = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "NOTE_BOOK 从备注重建。",
@@ -2127,17 +2179,23 @@ describe("authoring rework R01-R12", () => {
           { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "NOTE_VOL1" },
           { volumeNumber: 2, title: "南岸", startChapter: 5, endChapter: 8, body: "NOTE_VOL2" },
         ],
+      }),
+    });
+    const noteFilled = await generateWeaveRange({
+      ...ctx,
+      llm: async () => JSON.stringify({
         chapters: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ chapterNumber: n, title: `章${n}`, summary: `NOTE_${n}` })),
       }),
       startChapter: 1,
       endChapter: 8,
-      targetChapters: 8,
     });
-    const noteBody = (await loadArtifact(ctx.root, fromNote.artifactId))?.body ?? "";
+    const noteBody = (await loadArtifact(ctx.root, noteFilled.artifactId))?.body ?? "";
     expect(noteBody).toContain("AUTHOR_NOTE");
     expect(noteBody).toContain("NOTE_BOOK");
     expect(noteBody).toContain("NOTE_VOL1");
     expect(parseVolumeMapTree(noteBody).volumeCount).toBe(2);
+    expect(fromNote.artifactId).toBeTruthy();
+    expect(planned.artifactId).toBeTruthy();
   });
 
   it("appends chapters past the last volume range into the last volume (R13-02)", async () => {
@@ -2455,11 +2513,28 @@ describe("authoring rework R01-R12", () => {
       projectRoot: root,
       canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
-    const source = [
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const structured = await generateWeaveStructure({
+      ...ctx,
+      llm: async () => JSON.stringify({
+        bookOutline: "NEW_BOOK",
+        volumes: [
+          { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "VOL1 尚未渡海。" },
+          { volumeNumber: 2, title: "寻父", startChapter: 5, endChapter: 8, body: "VOL2 仍在寻找父亲。" },
+          { volumeNumber: 3, title: "重逢", startChapter: 9, endChapter: 12, body: "VOL3 已经与父亲重逢。" },
+        ],
+      }),
+    });
+    await saveHandEditedArtifact(ctx.root, structured.artifactId, [
       "AUTHOR_BOOK 保留全书纲。",
+      "",
+      "NEW_BOOK",
       "",
       "## 第1卷·节点A",
       "NOTE_KEEP 作者备注。",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "VOL1 尚未渡海。",
       "",
       "## 第 1 章 旧信",
       "OLD_CH1",
@@ -2470,15 +2545,13 @@ describe("authoring rework R01-R12", () => {
       "## 第 4 章 归港",
       "OLD_CH4",
       "",
-    ].join("\n");
-    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    await saveHandEditedArtifact(ctx.root, (await generateWeaveRange({
-      ...ctx,
-      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "旧信", summary: "OLD_CH1" }] }),
-      startChapter: 1,
-      endChapter: 1,
-      targetChapters: 16,
-    })).artifactId, source);
+      "## 第2卷 寻父（5-8章）",
+      "VOL2 仍在寻找父亲。",
+      "",
+      "## 第3卷 重逢（9-12章）",
+      "VOL3 已经与父亲重逢。",
+      "",
+    ].join("\n"));
     const runId = newRunId();
     let calls = 0;
     const paused = await generateWeaveRange({
@@ -2491,12 +2564,6 @@ describe("authoring rework R01-R12", () => {
         const start = Number(match?.[1] ?? 5);
         const end = Number(match?.[2] ?? 8);
         return JSON.stringify({
-          bookOutline: "NEW_BOOK",
-          volumes: [
-            { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "VOL1 尚未渡海。" },
-            { volumeNumber: 2, title: "寻父", startChapter: 5, endChapter: 8, body: "VOL2 仍在寻找父亲。" },
-            { volumeNumber: 3, title: "重逢", startChapter: 9, endChapter: 12, body: "VOL3 已经与父亲重逢。" },
-          ],
           chapters: Array.from({ length: end - start + 1 }, (_, index) => ({
             chapterNumber: start + index,
             title: `章${start + index}`,
@@ -2506,7 +2573,6 @@ describe("authoring rework R01-R12", () => {
       },
       startChapter: 5,
       endChapter: 12,
-      targetChapters: 12,
       runId,
     });
     expect(paused.status).toBe("paused");
@@ -2567,16 +2633,17 @@ describe("authoring rework R01-R12", () => {
       await createLightweightBook({
         projectRoot: root,
         existingBookId: `${created.bookId}-b${blanks}`,
-        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
       });
-      await saveHandEditedArtifact(ctx.root, (await generateWeaveRange({
+      const seeded = await generateWeaveStructure({
         ...ctx,
-        llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "起行", summary: "OLD_CH1 起行。" }] }),
-        startChapter: 1,
-        endChapter: 1,
-        targetChapters: 8,
-      })).artifactId, source);
-      const planned = await generateWeaveRange({
+        llm: async () => JSON.stringify({
+          bookOutline: "SEED_BOOK",
+          volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: 8, body: "覆盖" }],
+        }),
+      });
+      await saveHandEditedArtifact(ctx.root, seeded.artifactId, source);
+      await generateWeaveStructure({
         ...ctx,
         llm: async () => JSON.stringify({
           bookOutline: "MODEL_BOOK 众人护送配角平安返乡。",
@@ -2584,11 +2651,15 @@ describe("authoring rework R01-R12", () => {
             { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "VOL1" },
             { volumeNumber: 2, title: "南岸", startChapter: 5, endChapter: 8, body: "VOL2" },
           ],
+        }),
+      });
+      const planned = await generateWeaveRange({
+        ...ctx,
+        llm: async () => JSON.stringify({
           chapters: [1, 2, 3, 4].map((n) => ({ chapterNumber: n, title: `章${n}`, summary: `NEW_${n}` })),
         }),
         startChapter: 1,
         endChapter: 4,
-        targetChapters: 8,
       });
       const body = (await loadArtifact(ctx.root, planned.artifactId))?.body ?? "";
       expect(body.split("AUTHOR_INPUT 本书全程不能杀死配角。").length - 1, `blanks ${blanks}`).toBe(1);
@@ -2604,28 +2675,8 @@ describe("authoring rework R01-R12", () => {
       projectRoot: root,
       canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
     });
-    const source = [
-      "AUTHOR_INPUT 本书全程不能杀死配角。",
-      "",
-      "## 第 1 章 起行",
-      "OLD_CH1 起行。",
-      "",
-      "## 第2-6章 长途",
-      "RANGE_KEEP 路途期间保持戒备。",
-      "",
-      "## 第 7 章 归途",
-      "OLD_CH7 归途。",
-      "",
-    ].join("\n");
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    await saveHandEditedArtifact(ctx.root, (await generateWeaveRange({
-      ...ctx,
-      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "起行", summary: "OLD_CH1 起行。" }] }),
-      startChapter: 1,
-      endChapter: 1,
-      targetChapters: 8,
-    })).artifactId, source);
-    const planned = await generateWeaveRange({
+    const structured = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "NEW_BOOK",
@@ -2633,11 +2684,36 @@ describe("authoring rework R01-R12", () => {
           { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "VOL1_SEA 尚未渡海。" },
           { volumeNumber: 2, title: "南岸", startChapter: 5, endChapter: 8, body: "VOL2_SHORE 已经抵达南岸。" },
         ],
+      }),
+    });
+    await saveHandEditedArtifact(ctx.root, structured.artifactId, [
+      "AUTHOR_INPUT 本书全程不能杀死配角。",
+      "",
+      "NEW_BOOK",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "VOL1_SEA 尚未渡海。",
+      "",
+      "## 第 1 章 起行",
+      "OLD_CH1 起行。",
+      "",
+      "## 第2-6章 长途",
+      "RANGE_KEEP 路途期间保持戒备。",
+      "",
+      "## 第2卷 南岸（5-8章）",
+      "VOL2_SHORE 已经抵达南岸。",
+      "",
+      "## 第 7 章 归途",
+      "OLD_CH7 归途。",
+      "",
+    ].join("\n"));
+    const planned = await generateWeaveRange({
+      ...ctx,
+      llm: async () => JSON.stringify({
         chapters: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ chapterNumber: n, title: `章${n}`, summary: `PLAN_${n}` })),
       }),
       startChapter: 1,
       endChapter: 8,
-      targetChapters: 8,
     });
     const body = (await loadArtifact(ctx.root, planned.artifactId))?.body ?? "";
     expect(body).toContain("RANGE_KEEP");
@@ -2666,11 +2742,28 @@ describe("authoring rework R01-R12", () => {
       projectRoot: root,
       canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
-    const source = [
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const structured = await generateWeaveStructure({
+      ...ctx,
+      llm: async () => JSON.stringify({
+        bookOutline: "NEW_BOOK",
+        volumes: [
+          { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "VOL1 尚未渡海。" },
+          { volumeNumber: 2, title: "寻父", startChapter: 5, endChapter: 8, body: "VOL2 寻找父亲，仍未见面。" },
+          { volumeNumber: 3, title: "重逢", startChapter: 9, endChapter: 12, body: "VOL3 已经找到父亲，应继续重逢后的故事。" },
+        ],
+      }),
+    });
+    await saveHandEditedArtifact(ctx.root, structured.artifactId, [
       "AUTHOR_BOOK 保留全书纲。",
+      "",
+      "NEW_BOOK",
       "",
       "## 第1卷·节点A",
       "NOTE_KEEP 作者备注。",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "VOL1 尚未渡海。",
       "",
       "## 第 1 章 旧信",
       "OLD_CH1",
@@ -2681,18 +2774,16 @@ describe("authoring rework R01-R12", () => {
       "## 第 4 章 归港",
       "OLD_CH4",
       "",
+      "## 第2卷 寻父（5-8章）",
+      "VOL2 寻找父亲，仍未见面。",
+      "",
+      "## 第3卷 重逢（9-12章）",
+      "VOL3 已经找到父亲，应继续重逢后的故事。",
+      "",
       "## 第 9 章 见面",
       "OLD_CH9",
       "",
-    ].join("\n");
-    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    await saveHandEditedArtifact(ctx.root, (await generateWeaveRange({
-      ...ctx,
-      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "旧信", summary: "OLD_CH1" }] }),
-      startChapter: 1,
-      endChapter: 1,
-      targetChapters: 16,
-    })).artifactId, source);
+    ].join("\n"));
     const runId = newRunId();
     let calls = 0;
     const paused = await generateWeaveRange({
@@ -2705,12 +2796,6 @@ describe("authoring rework R01-R12", () => {
         const start = Number(match?.[1] ?? 5);
         const end = Number(match?.[2] ?? 8);
         return JSON.stringify({
-          bookOutline: "NEW_BOOK",
-          volumes: [
-            { volumeNumber: 1, title: "纸城", startChapter: 1, endChapter: 4, body: "VOL1 尚未渡海。" },
-            { volumeNumber: 2, title: "寻父", startChapter: 5, endChapter: 8, body: "VOL2 寻找父亲，仍未见面。" },
-            { volumeNumber: 3, title: "重逢", startChapter: 9, endChapter: 12, body: "VOL3 已经找到父亲，应继续重逢后的故事。" },
-          ],
           chapters: Array.from({ length: end - start + 1 }, (_, index) => ({
             chapterNumber: start + index,
             title: `章${start + index}`,
@@ -2720,7 +2805,6 @@ describe("authoring rework R01-R12", () => {
       },
       startChapter: 5,
       endChapter: 12,
-      targetChapters: 12,
       runId,
     });
     expect(paused.status).toBe("paused");

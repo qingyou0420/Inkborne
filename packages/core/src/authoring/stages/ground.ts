@@ -273,6 +273,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
       done ? (generated.length === 0 ? "failed" : failed.length ? "partial" : "completed") : "running",
     );
   }
+  if (targets.length === 0) await persistRun("completed");
   await saveSettingsCatalog(input.root, catalog);
   const manifest = await loadManifest(input.root);
   await saveManifest(input.root, {

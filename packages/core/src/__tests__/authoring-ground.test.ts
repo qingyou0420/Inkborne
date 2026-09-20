@@ -90,6 +90,31 @@ describe("ground stage", () => {
     await expect(readFile(join(created.bookDir, "story", "outline", "volume_map.md"), "utf-8")).rejects.toThrow();
   });
 
+  it("marks an empty generate target list completed instead of leaving it running", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-empty-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm: async () => "" };
+    const result = await generateGroundEntries({ ...ctx, entryIds: ["missing"] });
+    expect(result).toMatchObject({ generated: [], failed: [], runId: expect.any(String) });
+    const run = (await listRuns(ctx.root)).find((item) => item.runId === result.runId);
+    expect(run?.status).toBe("completed");
+    expect(run?.progressLabel).toBe("没有需要生成的条目");
+  });
+
   it("merges proposed catalog identities and keeps adopted links (R7-02)", async () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r7-02-"));
     const created = await createLightweightBook({
