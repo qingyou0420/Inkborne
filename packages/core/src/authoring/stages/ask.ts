@@ -26,7 +26,7 @@ import {
   saveRun,
   type AuthoringStoreRoot,
 } from "../store.js";
-import { createLightweightBook, syncBookJsonTitle } from "../book-create.js";
+import { canonLengthRequiredError, createLightweightBook, hasConfirmedCanonLength, syncBookJsonTitle } from "../book-create.js";
 import type {
   AuthoringLlmFn,
   AuthoringArtifactMeta,
@@ -552,6 +552,9 @@ export async function adoptAskCanon(input: AskRuntime & {
         : manifest.watches,
     });
     return { bookId: input.root.bookId, created: false, artifactId: loaded.meta.artifactId };
+  }
+  if (!hasConfirmedCanonLength(canon)) {
+    throw canonLengthRequiredError();
   }
   const created = await createLightweightBook({
     projectRoot: input.root.projectRoot,

@@ -905,7 +905,7 @@ describe("runAgentSession cache — bookId switch", () => {
       .not.toContain("TURN_ONLY_SECRET_GUIDANCE");
   });
 
-  it("gates book creation behind an in-session confirmation proposal", async () => {
+  it("keeps book-create discussion tools and does not inject create_book proposals", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
 
@@ -915,7 +915,6 @@ describe("runAgentSession cache — bookId switch", () => {
     );
 
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "propose_action",
       "research_web",
       "ingest_material",
       "retrieve_material",
@@ -923,6 +922,8 @@ describe("runAgentSession cache — bookId switch", () => {
       "ls",
       "use_skill",
     ]);
+    expect(agentInstances[0].state.systemPrompt).toContain("整理正典");
+    expect(agentInstances[0].state.systemPrompt).not.toContain("create_book");
   });
 
   it("does not run a hidden repair prompt when book-create returns plain text", async () => {
@@ -1072,7 +1073,7 @@ describe("runAgentSession cache — bookId switch", () => {
       const pipeline = { initBook: vi.fn() } as any;
       const sessionId = `proposal-repair-${mode}`;
       const result = await runAgentSession(
-        { sessionId, bookId: null, sessionKind: "book-create", language: "zh", pipeline, projectRoot, model },
+        { sessionId, bookId: null, sessionKind: "chat", language: "zh", pipeline, projectRoot, model },
         `propose repair ${mode}`,
       );
 
@@ -1100,7 +1101,7 @@ describe("runAgentSession cache — bookId switch", () => {
       const sessionId = `proposal-exhausted-${language}`;
       const onEvent = vi.fn();
       const result = await runAgentSession(
-        { sessionId, bookId: null, sessionKind: "book-create", language, pipeline, projectRoot, model, onEvent },
+        { sessionId, bookId: null, sessionKind: "chat", language, pipeline, projectRoot, model, onEvent },
         "propose invalid forever",
       );
 
@@ -1120,7 +1121,7 @@ describe("runAgentSession cache — bookId switch", () => {
 
   it("resets the proposal repair budget when a new user turn starts in the cached session", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
-    const config = { sessionId: "proposal-new-turn", bookId: null, sessionKind: "book-create" as const, language: "zh" as const, pipeline: {} as any, projectRoot, model };
+    const config = { sessionId: "proposal-new-turn", bookId: null, sessionKind: "chat" as const, language: "zh" as const, pipeline: {} as any, projectRoot, model };
     const first = await runAgentSession(config, "propose repair twice");
     const second = await runAgentSession(config, "propose repair twice");
     expect(first.errorMessage).toBeUndefined();

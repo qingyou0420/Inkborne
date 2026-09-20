@@ -40,6 +40,12 @@ export function weaveGuideWhenUngrounded(isZh: boolean): StageGuideCopy {
     : { title: "Outline grows from ground", subtitle: "Confirm 研墨 before weaving volumes", action: "Go to Ground", target: "ground" };
 }
 
+export function weaveLengthGateCopy(isZh: boolean): StageGuideCopy {
+  return isZh
+    ? { title: "先定全书篇幅", subtitle: "请先在问心正典里确认目标章数和每章字数", action: "去问心", target: "ask" }
+    : { title: "Set the book length first", subtitle: "Confirm target chapters and words per chapter in Ask canon", action: "Go to Ask", target: "ask" };
+}
+
 export function writeEmptyCopy(input: {
   readonly hasOutline: boolean;
   readonly previousUnapproved?: number;

@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAskBookCandidate, type AskBookCreateInput } from "../authoring/ask-book-create.js";
+import { CANON_LENGTH_REQUIRED } from "../authoring/book-create.js";
 import { parseCanon } from "../authoring/canon.js";
 import { isLightweightAuthoringBook } from "../authoring/context.js";
+import { ensureAuthoringDraft } from "../authoring/drafts.js";
+import { adoptAskCanon, generateAskCanon } from "../authoring/stages/ask.js";
 import { listArtifacts, listRuns, loadArtifact, loadManifest, loadRun } from "../authoring/store.js";
 import { ProjectConfigSchema } from "../models/project.js";
 import type { AuthoringLlmCall } from "../authoring/types.js";
@@ -166,20 +169,24 @@ describe("Ask confirmation creates only an unadopted canon candidate", () => {
     expect(book).toMatchObject({ targetChapters: 260, chapterWordCount: 5000 });
   });
 
-  it("keeps genuinely unconfirmed length absent from the candidate and uses only internal book defaults", async () => {
+  it("rejects creating a book from a draft canon that still has no length", async () => {
     const request = input();
-    const result = await createAskBookCandidate({
-      ...request,
+    const draft = await ensureAuthoringDraft({ projectRoot, sessionId: "length-required" });
+    const root = { projectRoot, draftId: draft.draftId };
+    const draftCanon = await generateAskCanon({
+      root,
+      project: request.project,
       conversation: "主角叶川寻找书院旧物。章数和每章字数尚未决定，保留为待定。",
-      book: { title: request.book.title },
       llm: async () => JSON.stringify({ ...generated, targetChapters: null, chapterWordCount: null }),
     });
-    const artifact = await loadArtifact({ projectRoot, bookId: result.bookId }, result.artifactId);
-    const canon = parseCanon(artifact!.body);
-    expect(canon.targetChapters).toBeUndefined();
-    expect(canon.chapterWordCount).toBeUndefined();
-    const book = JSON.parse(await readFile(join(result.bookDir, "book.json"), "utf-8"));
-    expect(book.targetChapters).toBe(200);
-    expect(book.chapterWordCount).toBe(3000);
+    await expect(adoptAskCanon({
+      root,
+      project: request.project,
+      artifactId: draftCanon.artifactId,
+    })).rejects.toMatchObject({
+      code: CANON_LENGTH_REQUIRED,
+      message: expect.stringContaining("请先确认全书篇幅"),
+    });
+    expect(await readdir(join(projectRoot, "books")).catch(() => [])).toEqual([]);
   });
 });

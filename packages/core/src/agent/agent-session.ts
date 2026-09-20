@@ -1023,7 +1023,7 @@ function createModeTools(params: CreateAgentToolsForModeParams) {
         workerSkills: params.workerSkills,
       })];
     }
-    return [proposalTool, researchTool, materialTool, materialRetrievalTool, scopedReadTool, scopedLsTool];
+    return [researchTool, materialTool, materialRetrievalTool, scopedReadTool, scopedLsTool];
   }
 
   if (!params.bookId) {

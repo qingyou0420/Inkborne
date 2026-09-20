@@ -18,7 +18,7 @@ type PromptCase = readonly [
 const CASES: readonly PromptCase[] = [
   ["chat/free-text proposes only", "zh", "chat", null, undefined, ["普通聊天助手", "propose_action"], ["sub_agent", "short_fiction_run", "play_start：", "play_revise：", "play_step：", "generate_cover："]],
   ["chat/en/free-text proposes only", "en", "chat", null, undefined, ["general chat assistant", "propose_action"], ["sub_agent", "short_fiction_run", "play_start:", "play_revise:", "play_step:", "generate_cover:"]],
-  ["book-create/free-text proposes creation", "zh", "book-create", null, undefined, ["propose_action", "create_book"], ["sub_agent", "architect"]],
+  ["book-create/free-text discusses only", "zh", "book-create", null, undefined, ["整理正典", "采用并建书", "不要调用 propose_action"], ["可用工具：propose_action", "create_book", "sub_agent", "architect"]],
   ["book-create/confirmed runs architect", "zh", "book-create", null, { actionSource: "button", requestedIntent: "create_book" }, ["sub_agent", "architect"], ["short_fiction_run", "play_start", "play_step", "agent=\"writer\""]],
   ["short/free-text proposes only", "zh", "short", null, undefined, ["propose_action", "short_run"], ["short_fiction_run：", "short_fiction_run:"]],
   ["short/confirmed-run exposes runner", "zh", "short", null, { actionSource: "button", requestedIntent: "short_run" }, ["short_fiction_run"], ["propose_action", "generate_cover：", "sub_agent", "play_start"]],

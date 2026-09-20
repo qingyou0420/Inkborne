@@ -180,22 +180,19 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   describe("book-create mode", () => {
-    it("gates long-form creation behind a confirmation proposal", () => {
+    it("discusses canon and points to the right-rail create path", () => {
       const prompt = buildAgentSystemPrompt(null, "zh", "book-create");
-      expect(prompt).toContain("建书助手");
-      expect(prompt).toContain("确认是否创建");
-      expect(prompt).toContain("分阶段");
-      expect(prompt).toContain("世界观与规则");
-      expect(prompt).toContain("人称/比例/禁忌/节奏要求");
-      expect(prompt).toContain("propose_action");
-      expect(prompt).toContain("create_book");
+      expect(prompt).toContain("问心");
+      expect(prompt).toContain("整理正典");
+      expect(prompt).toContain("采用并建书");
+      expect(prompt).toContain("右侧正典面板");
+      expect(prompt).toContain("不要调用 propose_action");
+      expect(prompt).not.toContain("可用工具：propose_action");
+      expect(prompt).not.toContain("create_book");
+      expect(prompt).not.toContain("200/3000");
       expect(prompt).not.toContain("sub_agent");
       expect(prompt).not.toContain("architect");
-      expect(prompt).toContain("标题");
-      expect(prompt).toContain("题材");
-      expect(prompt).toContain("世界观");
-      expect(prompt).toContain("主角");
-      expect(prompt).toContain("核心冲突");
+      expect(prompt).toContain("篇幅");
       expect(prompt).not.toContain("short_fiction_run");
       expect(prompt).not.toContain("generate_cover");
       expect(prompt).not.toContain("play_start");
@@ -216,8 +213,13 @@ describe("buildAgentSystemPrompt", () => {
 
     it("English book-create mode is isolated from short and play before confirmation", () => {
       const prompt = buildAgentSystemPrompt(null, "en", "book-create");
-      expect(prompt).toContain("book creation assistant");
-      expect(prompt).toContain("propose_action");
+      expect(prompt).toContain("Ask agent");
+      expect(prompt).toContain("Create canon");
+      expect(prompt).toContain("Adopt and create book");
+      expect(prompt).toContain("Do not call propose_action");
+      expect(prompt).not.toContain("Available tools: propose_action");
+      expect(prompt).not.toContain("create_book");
+      expect(prompt).not.toContain("200/3000");
       expect(prompt).not.toContain("agent=\"architect\"");
       expect(prompt).not.toContain("short_fiction_run");
       expect(prompt).not.toContain("play_start");

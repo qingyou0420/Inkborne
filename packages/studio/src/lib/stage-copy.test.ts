@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { fourStepCopy } from "./stage-copy";
+import { fourStepCopy, weaveLengthGateCopy } from "./stage-copy";
 
 describe("fourStepCopy", () => {
   it("renders Chinese status sentences for a mid-book", () => {
@@ -57,6 +57,15 @@ describe("fourStepCopy", () => {
       weaveReady: false,
     }, true);
     expect(copy.weave).toBe("—");
+  });
+
+  it("names the weave length gate", () => {
+    expect(weaveLengthGateCopy(true)).toMatchObject({
+      title: "先定全书篇幅",
+      action: "去问心",
+      target: "ask",
+    });
+    expect(weaveLengthGateCopy(false).title).toBe("Set the book length first");
   });
 
   it("renders English status sentences", () => {

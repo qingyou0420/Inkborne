@@ -43,5 +43,7 @@ describe("canon field form preserves manuscript storage", () => {
     expect(validateCanonFields(updateCanonField(source, "chapterWordCount", "99"), true)).toContain("每章字数");
     expect(validateCanonFields(updateCanonField(source, "title", ""), true)).toContain("书名");
     expect(validateCanonFields(updateCanonField(source, "targetChapters", ""), true)).toBeUndefined();
+    expect(validateCanonFields(updateCanonField(source, "targetChapters", ""), true, { requireLength: true })).toContain("预计章节");
+    expect(validateCanonFields(updateCanonField(source, "chapterWordCount", ""), true, { requireLength: true })).toContain("每章字数");
   });
 });

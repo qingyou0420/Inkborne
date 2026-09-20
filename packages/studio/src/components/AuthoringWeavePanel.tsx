@@ -13,6 +13,8 @@ import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-works
 import { resolveAdoptArtifactId, workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
 import { pollWeaveRun, resolveWeaveVolumeRange } from "../lib/weave-editor-state";
+import { weaveLengthGateCopy } from "../lib/stage-copy";
+import { LiteraryEmpty } from "./LiteraryEmpty";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
 import { useDraftDecision } from "../hooks/use-draft-decision";
 import { ManuscriptView } from "./ManuscriptView";
@@ -61,6 +63,7 @@ export function AuthoringWeavePanel({
   active = true,
   onRegisterBeforeLeave,
   preferredVolume,
+  onGoAsk,
 }: {
   readonly bookId: string;
   readonly targetChapters: number;
@@ -69,12 +72,13 @@ export function AuthoringWeavePanel({
   readonly active?: boolean;
   readonly onRegisterBeforeLeave?: (guard: (() => Promise<boolean>) | null) => void;
   readonly preferredVolume?: { readonly startChapter: number; readonly endChapter: number } | null;
+  readonly onGoAsk?: () => void;
 }) {
   const { data, error: workspaceError, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const coverage = data?.manifest?.coverage;
   const candidate = data?.candidateWeave;
   const lastWeave = data?.runs?.find((item) => item.stage === "weave");
-  const [endChapter, setEndChapter] = useState(String(targetChapters || 36));
+  const [endChapter, setEndChapter] = useState(String(targetChapters || ""));
   const [startChapter, setStartChapter] = useState("1");
   const [busy, setBusy] = useState<string | null>(null);
   const [reportOverride, setReport] = useState<AuthoringReport | null>(null);
@@ -98,7 +102,11 @@ export function AuthoringWeavePanel({
   const [pollEpoch, setPollEpoch] = useState(0);
   const actionRef = useRef(false);
   const generated = coverage?.chaptersGenerated ?? 0;
-  const target = targetChapters || coverage?.chaptersTarget || 0;
+  const canonTarget = data?.canon?.targetChapters;
+  const lengthMissing = Boolean(data) && !(typeof canonTarget === "number" && canonTarget > 0);
+  const target = (typeof canonTarget === "number" && canonTarget > 0)
+    ? canonTarget
+    : (targetChapters || coverage?.chaptersTarget || 0);
   const adoptedId = data?.manifest?.adopted?.weave;
   const hasAdoptedStructure = Boolean(adoptedId);
   const plannedVolumes = parseVolumeMapTree(candidate?.body ?? "").volumes
@@ -221,8 +229,8 @@ export function AuthoringWeavePanel({
       const result = await postApi<WeaveRun & { beats?: unknown }>( "/authoring/weave/generate", {
         bookId,
         startChapter: Number(startChapter) || 1,
-        endChapter: Number(endChapter) || targetChapters || 36,
-        targetChapters: targetChapters || undefined,
+        endChapter: Number(endChapter) || target,
+        targetChapters: target || undefined,
         requirements,
       });
       pendingSavedId.current = undefined;
@@ -298,6 +306,21 @@ export function AuthoringWeavePanel({
   };
   const generationNotes = generationReviewNotes(activeReport, [currentId]);
 
+  if (lengthMissing) {
+    const gate = weaveLengthGateCopy(isZh);
+    return (
+      <section className="space-y-5" data-testid="authoring-weave-panel">
+        <LiteraryEmpty
+          title={gate.title}
+          subtitle={gate.subtitle}
+          action={onGoAsk ? gate.action : undefined}
+          onAction={onGoAsk}
+          testId="weave-length-gate"
+        />
+      </section>
+    );
+  }
+
   return (
     <section className={`space-y-5 ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-weave-panel">
       {workspaceError && <p role="alert" className="text-sm text-destructive">{workspaceError} <button type="button" onClick={() => void refetch()}>{isZh ? "重新加载" : "Retry loading"}</button></p>}
@@ -326,7 +349,7 @@ export function AuthoringWeavePanel({
             reportId: report.reportId,
             selectedIssueIds: generation.issueIds,
             startChapter: Number(startChapter) || 1,
-            endChapter: Number(endChapter) || target || 36,
+            endChapter: Number(endChapter) || target,
             reuseStale: generation.reuseStale,
             requirements,
             reviseStructure: isStructureCandidate,
