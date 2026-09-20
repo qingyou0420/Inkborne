@@ -186,7 +186,8 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("整理正典");
       expect(prompt).toContain("采用并建书");
       expect(prompt).toContain("右侧正典面板");
-      expect(prompt).not.toContain("propose_action");
+      expect(prompt).toContain("不要调用 propose_action");
+      expect(prompt).not.toContain("可用工具：propose_action");
       expect(prompt).not.toContain("create_book");
       expect(prompt).not.toContain("200/3000");
       expect(prompt).not.toContain("sub_agent");
@@ -215,7 +216,8 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("Ask agent");
       expect(prompt).toContain("Create canon");
       expect(prompt).toContain("Adopt and create book");
-      expect(prompt).not.toContain("propose_action");
+      expect(prompt).toContain("Do not call propose_action");
+      expect(prompt).not.toContain("Available tools: propose_action");
       expect(prompt).not.toContain("create_book");
       expect(prompt).not.toContain("200/3000");
       expect(prompt).not.toContain("agent=\"architect\"");

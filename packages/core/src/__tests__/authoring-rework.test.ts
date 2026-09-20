@@ -976,7 +976,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r7-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "续跑手改", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+      canon: { title: "续跑手改", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     await adoptPlannedStructure(ctx, [
@@ -1174,7 +1174,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r8-02-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     await adoptPlannedStructure(ctx, [
@@ -1329,7 +1329,7 @@ describe("authoring rework R01-R12", () => {
       root = await mkdtemp(join(tmpdir(), `authoring-r9-02-${style}-`));
       const created = await createLightweightBook({
         projectRoot: root,
-        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
       });
       const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
       await adoptPlannedStructure(ctx, [
@@ -1424,7 +1424,7 @@ describe("authoring rework R01-R12", () => {
       root = await mkdtemp(join(tmpdir(), "authoring-r10-01-"));
       const created = await createLightweightBook({
         projectRoot: root,
-        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
       });
       const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
       await adoptPlannedStructure(ctx, [
@@ -2602,7 +2602,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r15-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
     });
     const source = [
       "AUTHOR_INPUT 本书全程不能杀死配角。",

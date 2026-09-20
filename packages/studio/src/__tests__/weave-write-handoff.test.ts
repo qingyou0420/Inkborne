@@ -89,7 +89,7 @@ describe("adopted weave to write handoff", () => {
       target: "ask",
     });
     expect(panel).toMatch(/weave-length-gate/);
-    expect(panel).toMatch(/data\.canon\?\.targetChapters/);
+    expect(panel).toMatch(/data\?\.canon\?\.targetChapters/);
     expect(panel).toMatch(/weaveLengthGateCopy/);
     expect(panel).not.toMatch(/targetChapters \|\| 36/);
   });

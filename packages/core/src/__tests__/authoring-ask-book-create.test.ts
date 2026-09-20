@@ -173,7 +173,7 @@ describe("Ask confirmation creates only an unadopted canon candidate", () => {
     const request = input();
     const draft = await ensureAuthoringDraft({ projectRoot, sessionId: "length-required" });
     const root = { projectRoot, draftId: draft.draftId };
-    const generated = await generateAskCanon({
+    const draftCanon = await generateAskCanon({
       root,
       project: request.project,
       conversation: "主角叶川寻找书院旧物。章数和每章字数尚未决定，保留为待定。",
@@ -182,7 +182,7 @@ describe("Ask confirmation creates only an unadopted canon candidate", () => {
     await expect(adoptAskCanon({
       root,
       project: request.project,
-      artifactId: generated.artifactId,
+      artifactId: draftCanon.artifactId,
     })).rejects.toMatchObject({
       code: CANON_LENGTH_REQUIRED,
       message: expect.stringContaining("请先确认全书篇幅"),
