@@ -142,4 +142,12 @@ describe("adopted weave to write handoff", () => {
     expect(panel).toMatch(/weaveLengthGateCopy/);
     expect(panel).not.toMatch(/targetChapters \|\| 36/);
   });
+
+  it("waits for the weave review report instead of treating a wait=false runId as a report", () => {
+    const studioRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const panel = readFileSync(join(studioRoot, "src/components/AuthoringWeavePanel.tsx"), "utf8");
+    // /authoring/weave/review returns { runId, status } unless wait is set; the panel
+    // hands the response straight to AuthoringReviewDrawer, which reads report.targetRefs.
+    expect(panel).toMatch(/"\/authoring\/weave\/review",\s*\{[^}]*wait: true/);
+  });
 });

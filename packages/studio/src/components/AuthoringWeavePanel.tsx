@@ -326,7 +326,7 @@ export function AuthoringWeavePanel({
   const reviewCurrent = () => {
     if (actionRef.current || editing || dirty || running) return Promise.resolve(undefined);
     setReportOpen(true);
-    return runAction("review", async () => { const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId); const next = await postApi<AuthoringReport>("/authoring/weave/review", { bookId, artifactId, coverage: isZh ? "整份规划" : "Entire outline" }); setReport(next); return next; });
+    return runAction("review", async () => { const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId); const next = await postApi<AuthoringReport>("/authoring/weave/review", { bookId, artifactId, coverage: isZh ? "整份规划" : "Entire outline", wait: true }); setReport(next); return next; });
   };
   const generationNotes = generationReviewNotes(activeReport, [currentId]);
 
