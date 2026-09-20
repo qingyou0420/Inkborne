@@ -3250,6 +3250,49 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(resyncChapterArtifactsMock).toHaveBeenCalledWith("demo-book", 3);
   });
 
+  it("returns 400 on legacy write routes for four-stage authoring books", async () => {
+    const bookId = "四阶段书";
+    const bookDir = join(root, "books", bookId);
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: bookId,
+      title: bookId,
+      platform: "qidian",
+      genre: "urban",
+      status: "writing",
+      targetChapters: 36,
+      chapterWordCount: 3000,
+    }), "utf-8");
+    await writeFile(join(bookDir, "story", "canon.md"), "# 正典\n", "utf-8");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const paths = [
+      `/api/v1/books/${encodeURIComponent(bookId)}/rewrite/1`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/revise/1`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/resync/1`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/write-next`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/draft`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/chapters/1/approve`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/chapters/1/reject`,
+    ];
+    for (const path of paths) {
+      const response = await app.request(`http://localhost${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(response.status, path).toBe(400);
+      const json = await response.json() as { error?: { message?: string; code?: string } };
+      expect(json.error?.message, path).toBe("四阶段书请在落笔中生成候选并采用");
+      expect(json.error?.code, path).toBe("AUTHORING_WRITE_REQUIRED");
+    }
+    expect(reviseDraftMock).not.toHaveBeenCalled();
+    expect(resyncChapterArtifactsMock).not.toHaveBeenCalled();
+    expect(writeNextChapterMock).not.toHaveBeenCalled();
+    expect(rollbackToChapterMock).not.toHaveBeenCalled();
+  });
+
   it("routes export-save through the shared structured interaction runtime", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);

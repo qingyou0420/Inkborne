@@ -17,12 +17,10 @@ export function ToastHost() {
   return (
     <div className="pointer-events-none fixed right-6 top-16 z-[120] flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-2">
       {toasts.map((toast) => (
-        <button
+        <div
           key={toast.id}
-          type="button"
           data-testid="studio-toast"
           data-variant={toast.variant}
-          onClick={() => dismissToast(toast.id)}
           className={`pointer-events-auto rounded-xl border px-4 py-3 text-left text-sm leading-6 shadow-soft fade-in ${
             toast.variant === "error"
               ? "border-destructive/30 bg-destructive/10 text-destructive"
@@ -31,8 +29,23 @@ export function ToastHost() {
                 : "border-border bg-card text-foreground"
           }`}
         >
-          {toast.message}
-        </button>
+          <button type="button" className="block w-full text-left" onClick={() => dismissToast(toast.id)}>
+            {toast.message}
+          </button>
+          {toast.action ? (
+            <button
+              type="button"
+              data-testid="studio-toast-action"
+              className="mt-2 text-sm font-medium underline underline-offset-2"
+              onClick={() => {
+                toast.action?.onClick();
+                dismissToast(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          ) : null}
+        </div>
       ))}
     </div>
   );

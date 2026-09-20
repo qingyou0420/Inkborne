@@ -29,7 +29,7 @@
     "publish:update": "node scripts/publish-update.mjs",
     "typecheck:tests": "pnpm --filter @actalk/inkos-core build && pnpm --filter @actalk/inkos-core typecheck:tests && pnpm --filter @actalk/inkos-studio typecheck:tests",
     "test:build": "pnpm --filter @actalk/inkos-studio test:build && pnpm --filter @actalk/inkos-studio exec vitest run src/api/static-assets.test.ts",
-    "test:authoring-ui": "pnpm --filter @actalk/inkos-studio exec vitest run src/__tests__/weave-write-handoff.test.ts src/components/ask-session-actions.test.ts src/components/ask-canon-state.test.ts src/lib/weave-editor-state.test.ts src/lib/ground-drafts.test.ts src/store/chat/slices/message/action.test.ts src/store/chat/slices/message/runtime.test.ts src/store/chat/slices/message/stream-events.test.ts",
+    "test:authoring-ui": "pnpm --filter @actalk/inkos-studio exec vitest run src/__tests__/weave-write-handoff.test.ts src/lib/write-directory.test.ts src/lib/toast.test.ts src/lib/authoring-nav.test.ts src/components/ask-session-actions.test.ts src/components/ask-canon-state.test.ts src/lib/weave-editor-state.test.ts src/lib/ground-drafts.test.ts src/store/chat/slices/message/action.test.ts src/store/chat/slices/message/runtime.test.ts src/store/chat/slices/message/stream-events.test.ts",
     "test:llm-compat": "pnpm --filter @actalk/inkos-core exec vitest run src/__tests__/claude-sampling.test.ts src/__tests__/foundation-reviewer-claude-sampling.test.ts src/__tests__/provider.test.ts src/__tests__/temperature-constraints.test.ts",
     "test:ask-canon-ui": "node packages/studio/e2e/ask-canon-recovery.mjs"
   },

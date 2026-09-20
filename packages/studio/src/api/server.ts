@@ -3875,11 +3875,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     throw new BookWriteLockError(id, existingLock.lockPath, lockData, existingLock);
   }
 
+  async function rejectLegacyPipelineForAuthoringBook(id: string): Promise<void> {
+    if (await isLightweightAuthoringBook(state.bookDir(id))) {
+      throw new ApiError(400, "AUTHORING_WRITE_REQUIRED", "四阶段书请在落笔中生成候选并采用");
+    }
+  }
+
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
     if (!isSafeBookId(id)) {
       throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
     }
+    await rejectLegacyPipelineForAuthoringBook(id);
     const body = await c.req.json<{ wordCount?: number; skipPreviousApproval?: boolean }>().catch(() => ({
       wordCount: undefined as number | undefined,
       skipPreviousApproval: undefined as boolean | undefined,
@@ -3972,6 +3979,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
     }
+    await rejectLegacyPipelineForAuthoringBook(id);
     const body = await c.req.json<{ wordCount?: number; context?: string; skipPreviousApproval?: boolean }>().catch(() => ({
       wordCount: undefined as number | undefined,
       context: undefined as string | undefined,
@@ -4331,6 +4339,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const num = parseInt(c.req.param("num"), 10);
     const body = await c.req.json<{ override?: { who?: string; why?: string } }>().catch(() => ({
       override: undefined as { who?: string; why?: string } | undefined,
@@ -4362,6 +4371,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const num = parseInt(c.req.param("num"), 10);
 
     try {
@@ -6386,6 +6396,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/revise/:chapter", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const chapterNum = parseInt(c.req.param("chapter"), 10);
     const bookDir = state.bookDir(id);
     const body = await c.req
@@ -6808,6 +6819,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/rewrite/:chapter", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const chapterNum = parseInt(c.req.param("chapter"), 10);
     const body: { brief?: string } = await c.req
       .json<{ brief?: string }>()
@@ -6839,6 +6851,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/resync/:chapter", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const chapterNum = parseInt(c.req.param("chapter"), 10);
     const body: { brief?: string } = await c.req
       .json<{ brief?: string }>()

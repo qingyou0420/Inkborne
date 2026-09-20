@@ -8,8 +8,10 @@ import { useEffect, useRef, useState } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { invalidateBookStage } from "../hooks/use-book-stage";
 import { useChatStore } from "../store/chat";
+import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
+import { GenerationRequirements } from "./GenerationRequirements";
 import { resolveAdoptArtifactId, workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
 import { pollWeaveRun, resolveWeaveVolumeRange } from "../lib/weave-editor-state";
@@ -87,6 +89,7 @@ export function AuthoringWeavePanel({
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [generation, setGeneration] = useState<{ issueIds?: ReadonlyArray<string>; reuseStale?: boolean; mode?: "chapters" | "structure" } | null>(null);
+  const [requirementNotes, setRequirementNotes] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
   const decision = useDraftDecision(isZh);
   const restoredEdit = useRef(pendingWeaveEdits.get(bookId));
@@ -454,7 +457,10 @@ export function AuthoringWeavePanel({
           <button type="button" disabled={!candidate || Boolean(busy) || running || dirty || currentId === adoptedId} onClick={() => void runAction("adopt", async () => {
             const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId);
             const result = await adoptWeaveAndRefreshStage(bookId, artifactId);
-            showToast(result.message ?? (isZh ? "整份规划已采用" : "Outline adopted"), "success"); return result;
+            showToast(result.message ?? (isZh ? "整份规划已采用" : "Outline adopted"), "success", {
+              label: isZh ? "去落笔" : "Go to Write",
+              onClick: () => goBookAuthoringStage(bookId, "write"),
+            }); return result;
           }, "adopt")}>{currentId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
           {hasAdoptedStructure ? <button type="button" data-testid="outline-weave-chapters" disabled={Boolean(busy) || running || dirty || currentId !== adoptedId} onClick={openChapterGeneration}>{isZh ? "生成本卷章概要" : "Plan chapter summaries"}</button> : null}
           <span className="text-xs text-muted-foreground">{isZh ? "作用于整份规划" : "Applies to the entire outline"}</span>
@@ -464,7 +470,7 @@ export function AuthoringWeavePanel({
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!report} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
-        </> : <button
+        </> : <><button
           type="button"
           data-testid="outline-weave"
           className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
@@ -475,7 +481,7 @@ export function AuthoringWeavePanel({
               return;
             }
             void runAction("generate", async () => {
-              await postApi("/authoring/weave/structure", { bookId });
+              await postApi("/authoring/weave/structure", { bookId, requirements: requirementNotes.trim() || undefined });
               pendingSavedId.current = undefined;
             });
           }}
@@ -485,7 +491,7 @@ export function AuthoringWeavePanel({
             : hasAdoptedStructure
               ? (isZh ? "生成本卷章概要" : "Plan chapter summaries")
               : (isZh ? "生成分卷规划" : "Plan volumes")}
-        </button>}
+        </button>{!hasAdoptedStructure ? <GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={Boolean(busy) || running} /> : null}</>}
         {canResume && !running ? (
           <button
             type="button"

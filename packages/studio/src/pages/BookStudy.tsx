@@ -28,6 +28,7 @@ import {
 } from "../lib/copy-map";
 import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
+import { firstUnwrittenChapter, mergeWriteDirectory } from "../lib/write-directory";
 import {
   CheckCircle2,
   Feather,
@@ -210,6 +211,14 @@ export function BookStudy({
   if (!data) return null;
 
   const book = data.book;
+  const authoringBook = authoring?.authoringBook === true;
+  const writeDirectory = mergeWriteDirectory({
+    volumeMap,
+    persisted: data.chapters,
+    candidates: authoring?.manifest?.candidates?.write,
+    adopted: authoring?.manifest?.adopted?.write,
+  });
+  const writeChapterNumber = firstUnwrittenChapter(writeDirectory, snapshot?.nextChapter.number ?? data.nextChapter);
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
   const currentStage = stage?.stage ?? "write";
@@ -327,7 +336,17 @@ export function BookStudy({
             <p className="text-sm text-muted-foreground">{guide.subtitle}</p>
           )}
 
-          {canWrite && snapshot?.writeNext.enabled ? (
+          {authoringBook && canWrite ? (
+            <button
+              type="button"
+              onClick={() => goStage(nav, bookId, "write")}
+              className="btn-primary"
+              data-testid="study-write-chapter"
+            >
+              <Feather size={16} />
+              {isZh ? `落笔 · 第 ${writeChapterNumber} 章` : `Write · Chapter ${writeChapterNumber}`}
+            </button>
+          ) : canWrite && snapshot?.writeNext.enabled ? (
             <button
               type="button"
               onClick={() => void handleWriteNext()}
