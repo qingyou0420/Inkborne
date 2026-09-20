@@ -11,7 +11,7 @@ import type { SessionRuntime } from "../store/chat/types";
 import type { AuthoringArtifact, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { resolveAdoptArtifactId } from "../lib/authoring-workspace";
 import { askCanonScopeKey, askConversation, askReportState, createAskCanonEditor, isAskSession } from "./ask-canon-state";
-import { canonFieldNames, readCanonFields, updateCanonField, updateCanonText, validateCanonFields } from "./ask-canon-fields";
+import { canonFieldNames, canonLengthMissing, readCanonFields, updateCanonField, updateCanonText, validateCanonFields, type CanonFieldName } from "./ask-canon-fields";
 import { ManuscriptView } from "./ManuscriptView";
 import { RegenerateDialog } from "./RegenerateDialog";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
@@ -65,6 +65,8 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
   const historyRequest = useRef(0);
+  const [lengthOpen, setLengthOpen] = useState(false);
+  const [lengthDraft, setLengthDraft] = useState<Record<CanonFieldName, string>>({ title: "", genre: "", targetChapters: "", chapterWordCount: "" });
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generationIssueIds, setGenerationIssueIds] = useState<string[]>([]);
   const [revision, setRevision] = useState<RevisionIntent>();
@@ -116,8 +118,8 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       showToast(message, "error"); return false;
     } finally { await refetch(); busyRef.current = false; if (mounted.current) setBusy(null); }
   };
-  const persistIfDirty = async (): Promise<string | undefined> => {
-    const fieldError = validateCanonFields(editor.current.snapshot.body, isZh);
+  const persistIfDirty = async (requireLength = false): Promise<string | undefined> => {
+    const fieldError = validateCanonFields(editor.current.snapshot.body, isZh, { requireLength });
     if (fieldError) throw new Error(fieldError);
     const artifactId = await editor.current.save((baseId, body) => putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(baseId)}`, { ...scope, body }));
     if (mounted.current) setEditState(editor.current.snapshot);
@@ -185,6 +187,42 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       await postApi("/authoring/ask/review", { ...scope, artifactId, conversation });
     });
   };
+  const creatingBook = !bookId;
+  const applyCanonFields = (body: string, next: Record<CanonFieldName, string>) => {
+    let updated = body;
+    for (const key of canonFieldNames) updated = updateCanonField(updated, key, next[key]);
+    return updated;
+  };
+  const adoptCurrent = async () => {
+    const artifactId = await prepareCurrentArtifact();
+    const savedId = await persistIfDirty(creatingBook);
+    const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId: savedId ?? artifactId });
+    invalidateBookStage(result.bookId ?? bookId);
+    useChatStore.getState().bumpBookDataVersion();
+    showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"));
+    if (mounted.current && result.bookId && !bookId) onAdopted?.(result.bookId);
+  };
+  const startAdopt = () => void run("adopt", async () => {
+    await prepareCurrentArtifact();
+    const source = editor.current.snapshot.body || candidate?.body || "";
+    const current = readCanonFields(source).fields;
+    if (creatingBook && canonLengthMissing(current)) {
+      setLengthDraft(current);
+      setLengthOpen(true);
+      return;
+    }
+    await adoptCurrent();
+  });
+  const confirmLengthAndAdopt = () => void run("adopt", async () => {
+    const source = editor.current.snapshot.body || candidate?.body || "";
+    const nextBody = applyCanonFields(source, lengthDraft);
+    const fieldError = validateCanonFields(nextBody, isZh, { requireLength: true });
+    if (fieldError) throw new Error(fieldError);
+    editor.current.change(nextBody);
+    if (mounted.current) setEditState(editor.current.snapshot);
+    await adoptCurrent();
+    if (mounted.current) setLengthOpen(false);
+  });
   const regenerate = (requirements: string, authorRequirement = requirements) => run(revision ? "revise" : "generate", async () => {
     const generated = revision
       ? await postApi<{ artifactId: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
@@ -223,14 +261,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
         </> : hasManuscript ? <>
           <button type="button" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready} onClick={startEditing}><PencilLine size={15} />{isZh ? "编辑" : "Edit"}</button>
           <button type="button" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || session?.isChatStreaming} onClick={report && !reportOpen ? () => { setReportOpen(true); setExpanded(true); } : review}><FileCheck2 size={15} />{isZh ? "审查" : "Review"}</button>
-          <button type="button" className="ask-canon-primary" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || isAdopted} onClick={() => void run("adopt", async () => {
-            const artifactId = await prepareCurrentArtifact();
-            const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId });
-            invalidateBookStage(result.bookId ?? bookId);
-            useChatStore.getState().bumpBookDataVersion();
-            showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"));
-            if (mounted.current && result.bookId && !bookId) onAdopted?.(result.bookId);
-          })}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
+          <button type="button" className="ask-canon-primary" data-testid={creatingBook ? "ask-adopt-create" : "ask-adopt"} disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || isAdopted} onClick={startAdopt}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : creatingBook ? (isZh ? "采用并建书" : "Adopt and create book") : (isZh ? "采用" : "Adopt")}</button>
           <DropdownMenu><DropdownMenuTrigger className="ask-canon-menu-trigger" disabled={Boolean(busy)} aria-label={isZh ? "正典操作" : "Canon actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" side="top">
             <DropdownMenuItem disabled={!ready || Boolean(session?.isChatStreaming)} onClick={() => { setActionError(undefined); setGenerationIssueIds(report && !stale && !report.incomplete ? report.issues.map((issue) => issue.issueId) : []); setGenerateOpen(true); }}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!artifacts.length} onClick={() => openHistory(currentArtifactId)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
@@ -256,6 +287,15 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
         {generateOpen && report && (stale || report.incomplete) ? <p className="text-sm text-muted-foreground">{isZh ? "已有报告对应旧稿或未完成，本次不会自动带入。" : "The previous review is outdated or incomplete and will not be included."}</p> : null}
         {generateOpen && report && !stale && !report.incomplete && report.issues.length ? <fieldset className="ask-regenerate-issues"><legend>{isZh ? "带入哪些审查意见" : "Include review notes"}</legend>{report.issues.map((issue) => <label key={issue.issueId}><input type="checkbox" checked={generationIssueIds.includes(issue.issueId)} disabled={Boolean(busy)} onChange={(event) => setGenerationIssueIds((ids) => event.target.checked ? [...ids, issue.issueId] : ids.filter((id) => id !== issue.issueId))} /><span>{issue.title}{issue.suggestion ? <small>{issue.suggestion}</small> : null}</span></label>)}</fieldset> : null}
       </RegenerateDialog>
+      <Drawer open={lengthOpen} placement="center" title={isZh ? "确认全书篇幅" : "Confirm book length"} onClose={() => { if (!busyRef.current) setLengthOpen(false); }}>
+        <p className="text-sm leading-7 text-muted-foreground">{isZh ? "建书前必须确认目标章数和每章字数，不会再静默补默认值。" : "Confirm target chapters and words per chapter before creating the book. Silent defaults are no longer filled in."}</p>
+        <div className="ask-canon-fields mt-4">{canonFieldNames.map((key) => <label key={key}><span>{labels[key]}</span><input aria-label={labels[key]} type={key === "targetChapters" || key === "chapterWordCount" ? "number" : "text"} min={key === "chapterWordCount" ? 100 : 1} step={1} value={lengthDraft[key]} disabled={Boolean(busy)} onChange={(event) => setLengthDraft((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div>
+        {actionError ? <p role="alert" className="text-destructive text-sm">{actionError}</p> : null}
+        <div className="ask-cancel-actions">
+          <button type="button" disabled={Boolean(busy)} onClick={() => setLengthOpen(false)}>{isZh ? "再改改" : "Edit more"}</button>
+          <button type="button" className="ask-canon-primary" data-testid="ask-length-confirm" disabled={Boolean(busy) || canonLengthMissing(lengthDraft)} onClick={confirmLengthAndAdopt}>{isZh ? "采用并建书" : "Adopt and create book"}</button>
+        </div>
+      </Drawer>
       <Drawer open={cancelOpen} placement="center" title={isZh ? "保留这次修改？" : "Keep your changes?"} onClose={() => { if (!busyRef.current) { setCancelOpen(false); answerNavigation(false); } }}><p className="text-sm leading-7 text-muted-foreground">{isZh ? "保存为候选，或放弃本次未保存的修改。" : "Save a candidate, or discard only these unsaved changes."}</p>{actionError ? <p role="alert" className="text-destructive text-sm">{actionError}</p> : null}<div className="ask-cancel-actions">
         <button type="button" disabled={Boolean(busy)} onClick={() => { setCancelOpen(false); answerNavigation(false); }}>{isZh ? "继续编辑" : "Continue editing"}</button>
         <button type="button" disabled={Boolean(busy)} onClick={() => { editor.current.discard(); setEditState(editor.current.snapshot); setEditing(false); setCancelOpen(false); setActionError(undefined); answerNavigation(true); }}>{isZh ? "放弃修改" : "Discard changes"}</button>

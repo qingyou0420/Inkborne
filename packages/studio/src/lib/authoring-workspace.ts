@@ -60,6 +60,8 @@ export interface AuthoringWorkspace {
     readonly boundaries?: string;
     readonly direction?: string;
     readonly openQuestions?: string[];
+    readonly targetChapters?: number;
+    readonly chapterWordCount?: number;
   };
   readonly canonSource?: string;
   readonly adoptedAskId?: string;

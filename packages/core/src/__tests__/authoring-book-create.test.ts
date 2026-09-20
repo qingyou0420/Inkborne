@@ -25,6 +25,26 @@ describe("lightweight book create", () => {
     expect(saved.targetChapters).toBe(2);
   });
 
+  it("refuses to create a book when target chapters are still unset", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-book-length-"));
+    await expect(createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "未定篇幅",
+        oneLine: "还没决定写多少章",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    })).rejects.toMatchObject({
+      message: expect.stringContaining("请先确认全书篇幅"),
+    });
+  });
+
   it("creates a readable book without calling ground or weave artifacts", async () => {
     root = await mkdtemp(join(tmpdir(), "authoring-book-"));
     const first = await createLightweightBook({
@@ -41,6 +61,8 @@ describe("lightweight book create", () => {
         boundaries: "开放结局",
         direction: "从港口开始",
         openQuestions: ["结局是否公开真相"],
+        targetChapters: 12,
+        chapterWordCount: 2000,
       },
     });
     expect(first.created).toBe(true);

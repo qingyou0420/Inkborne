@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
+import { serializeCanon } from "../authoring/canon.js";
 import { extractJsonObject } from "../authoring/json.js";
 import { assembleAuthoringContext, isLightweightAuthoringBook } from "../authoring/context.js";
-import { adoptWeave, generateWeaveRange, generateWeaveStructure, inferredVolumeCount, reviewWeave, reviseWeave, validateVolumePlan, volumesFromOutline } from "../authoring/stages/weave.js";
+import { adoptWeave, generateWeaveRange, generateWeaveStructure, inferredVolumeCount, resolveWeaveTargetChapters, reviewWeave, reviseWeave, validateVolumePlan, volumesFromOutline, WEAVE_LENGTH_REQUIRED } from "../authoring/stages/weave.js";
 import { generateChapterDraft, saveWriteBody } from "../authoring/stages/write.js";
 import { authoringRootDir, listRuns, loadArtifact, saveHandEditedArtifact, saveReport } from "../authoring/store.js";
 import { parseReviewPayload } from "../authoring/review.js";
@@ -125,6 +126,49 @@ describe("weave stage", () => {
   afterEach(async () => {
     if (root) await rm(root, { recursive: true, force: true });
     root = "";
+  });
+
+  it("rejects weave planning when canon and book.json omit length", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-weave-length-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "未定篇幅",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+        chapterWordCount: 2000,
+      },
+    });
+    await writeFile(join(created.bookDir, "story", "canon.md"), serializeCanon({
+      title: "未定篇幅",
+      oneLine: "测",
+      proposition: "",
+      protagonist: "",
+      conflict: "",
+      voice: "",
+      boundaries: "",
+      direction: "",
+      openQuestions: [],
+    }));
+    const book = JSON.parse(await readFile(join(created.bookDir, "book.json"), "utf-8")) as Record<string, unknown>;
+    delete book.targetChapters;
+    await writeFile(join(created.bookDir, "book.json"), `${JSON.stringify(book, null, 2)}\n`, "utf-8");
+    await expect(resolveWeaveTargetChapters({ projectRoot: root, bookId: created.bookId })).rejects.toMatchObject({
+      code: WEAVE_LENGTH_REQUIRED,
+      message: expect.stringContaining("请先在问心正典里确认全书篇幅"),
+    });
+    await expect(generateWeaveStructure({
+      root: { projectRoot: root, bookId: created.bookId },
+      project: project(),
+      llm: async () => JSON.stringify({ bookOutline: "不应生成", volumes: [] }),
+    })).rejects.toMatchObject({ code: WEAVE_LENGTH_REQUIRED });
   });
 
   it("covers every chapter in a 12-chapter book and reports actual review coverage", async () => {
@@ -347,6 +391,7 @@ describe("weave stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     const settingsDir = join(created.bookDir, "story", "settings");

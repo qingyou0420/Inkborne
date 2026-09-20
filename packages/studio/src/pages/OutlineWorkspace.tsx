@@ -564,6 +564,7 @@ function OutlineWorkspaceBook({
                     active={showingBookOutline}
                     preferredVolume={preferredVolume}
                     onRegisterBeforeLeave={registerWeaveBeforeLeave}
+                    onGoAsk={() => nav.toAsk(bookId)}
                     onAdopted={() => {
                       void reloadVolumeMap();
                     }}

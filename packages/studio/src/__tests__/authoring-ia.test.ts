@@ -47,6 +47,16 @@ describe("authoring four-agent IA", () => {
     expect(page).toMatch(/mode="book"/);
   });
 
+  it("uses 采用并建书 on the create page and has no confirmation-card rail", () => {
+    const app = read("src/App.tsx");
+    const panel = read("src/components/AskCanonPanel.tsx");
+    expect(app).toMatch(/mode="book-create"/);
+    expect(app).toMatch(/AskCanonPanel/);
+    expect(app).not.toMatch(/AskCreateRail/);
+    expect(panel).toMatch(/采用并建书/);
+    expect(panel).toMatch(/creatingBook \? \(isZh \? "采用并建书"/);
+  });
+
   it("wires 研墨 / 织卷 / 落笔 / 书房 to authoring panels", () => {
     expect(read("src/pages/BookGround.tsx")).toMatch(/AuthoringGroundPanel/);
     expect(read("src/pages/OutlineWorkspace.tsx")).toMatch(/AuthoringWeavePanel/);

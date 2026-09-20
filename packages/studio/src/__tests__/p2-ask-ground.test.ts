@@ -17,18 +17,17 @@ function read(rel: string): string {
 }
 
 describe("P2-1 问心", () => {
-  it("writes story_card.md and gates 就此建书 on three fields", () => {
+  it("writes story_card.md and keeps the legacy story card for old books only", () => {
     const card = read("src/lib/story-card.ts");
     const ask = read("src/components/AskStoryCard.tsx") + read("src/pages/ChatPage.tsx");
-    const rail = read("src/components/AskCreateRail.tsx") + read("src/components/AskStoryCard.tsx");
     const sidebar = read("src/components/Sidebar.tsx");
     const nav = read("src/components/BookWorkspaceNav.tsx");
     expect(card).toMatch(/story_card\.md/);
     expect(card).toMatch(/workingTitle/);
     expect(card).toMatch(/oneLine/);
     expect(card).toMatch(/synopsis/);
-    expect(rail).toMatch(/create-book-from-card/);
-    expect(rail).toMatch(/requestedIntent: "create_book"/);
+    expect(existsSync(join(studioRoot, "src/components/AskCreateRail.tsx"))).toBe(false);
+    expect(existsSync(join(studioRoot, "src/lib/ask-create-request.ts"))).toBe(false);
     expect(ask).toMatch(/reopen-ask/);
     expect(ask).toMatch(/REOPEN_ASK_PROMPT/);
     expect(ask).not.toMatch(/wipe|rm\(.*story/);
@@ -39,10 +38,8 @@ describe("P2-1 问心", () => {
 
   it("does not render genre template chips above the ask composer", () => {
     const chat = read("src/pages/ChatPage.tsx");
-    const rail = read("src/components/AskCreateRail.tsx");
     expect(chat).not.toMatch(/AskGenreChips/);
-    expect(rail).not.toMatch(/AskGenreChips/);
-    expect(chat + rail).not.toMatch(/ask-genre-chips/);
+    expect(chat).not.toMatch(/ask-genre-chips/);
     expect(chat).toMatch(/reopen-ask/);
   });
 });

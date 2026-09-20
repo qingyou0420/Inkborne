@@ -634,7 +634,9 @@ function holesInRange(collected: ReadonlyMap<number, WeaveChapterBeat>, start: n
   return missing;
 }
 
-export async function resolveWeaveTargetChapters(root: { projectRoot: string; bookId?: string }, hint?: number): Promise<number> {
+export const WEAVE_LENGTH_REQUIRED = "WEAVE_LENGTH_REQUIRED";
+
+export async function resolveWeaveTargetChapters(root: { projectRoot: string; bookId?: string }): Promise<number> {
   const { canon } = await loadCanonDocument(root);
   if (canon.targetChapters && canon.targetChapters > 0) return canon.targetChapters;
   if (root.bookId) {
@@ -646,8 +648,9 @@ export async function resolveWeaveTargetChapters(root: { projectRoot: string; bo
       /* missing */
     }
   }
-  if (hint && hint > 0) return hint;
-  throw new Error("找不到全书目标章数。请先在正典或书设置里填写目标章数。");
+  const error = new Error("请先在问心正典里确认全书篇幅。");
+  (error as Error & { code: string }).code = WEAVE_LENGTH_REQUIRED;
+  throw error;
 }
 
 export async function generateWeaveStructure(input: WeaveRuntime & {
@@ -781,7 +784,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   if (!input.root.bookId) throw new Error("织卷需要已建的书。");
   const start = Math.max(1, input.startChapter);
   const end = Math.max(start, input.endChapter);
-  const bookTarget = await resolveWeaveTargetChapters(input.root, input.targetChapters);
+  const bookTarget = await resolveWeaveTargetChapters(input.root);
   if (end > bookTarget) throw new Error(`本次结束章 ${end} 超出全书目标 ${bookTarget} 章。`);
   const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
   const existingOutline = await loadOutlineText(input.root);

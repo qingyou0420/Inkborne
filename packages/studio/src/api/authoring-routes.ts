@@ -10,6 +10,8 @@ import {
   AUTHORING_ROLE_IDS,
   AUTHORING_ROLE_META,
   adoptAskCanon,
+  CANON_LENGTH_REQUIRED,
+  WEAVE_LENGTH_REQUIRED,
   adoptChapterDraft,
   adoptGroundEntries,
   adoptWeave,
@@ -392,16 +394,25 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   app.post("/api/v1/authoring/ask/adopt", async (c) => {
     const body = await c.req.json<{ bookId?: string; draftId?: string; artifactId: string; language?: "zh" | "en" }>();
     const project = await deps.loadProject();
-    const result = await adoptAskCanon({
-      root: storeRoot(deps.root, body),
-      project,
-      artifactId: body.artifactId,
-      language: body.language,
-    });
-    return c.json({
-      ...result,
-      message: result.created ? "正典已采用，新书已建立" : "正典已采用",
-    });
+    try {
+      const result = await adoptAskCanon({
+        root: storeRoot(deps.root, body),
+        project,
+        artifactId: body.artifactId,
+        language: body.language,
+      });
+      return c.json({
+        ...result,
+        message: result.created ? "正典已采用，新书已建立" : "正典已采用",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = (error as { code?: string }).code;
+      if (code === CANON_LENGTH_REQUIRED || /篇幅/.test(message)) {
+        return c.json({ error: message, code: code ?? CANON_LENGTH_REQUIRED }, 400);
+      }
+      throw error;
+    }
   });
 
   app.post("/api/v1/authoring/ground/catalog", async (c) => {
@@ -471,12 +482,21 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   app.post("/api/v1/authoring/weave/structure", async (c) => {
     const body = await c.req.json<{ bookId: string; requirements?: string }>();
     const project = await deps.loadProject();
-    const result = await generateWeaveStructure({
-      root: storeRoot(deps.root, body),
-      project,
-      requirements: body.requirements,
-    });
-    return c.json(result);
+    try {
+      const result = await generateWeaveStructure({
+        root: storeRoot(deps.root, body),
+        project,
+        requirements: body.requirements,
+      });
+      return c.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = (error as { code?: string }).code;
+      if (code === WEAVE_LENGTH_REQUIRED || /请先/.test(message)) {
+        return c.json({ error: message, code: code ?? WEAVE_LENGTH_REQUIRED }, 400);
+      }
+      throw error;
+    }
   });
 
   app.post("/api/v1/authoring/weave/generate", async (c) => {

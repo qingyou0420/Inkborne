@@ -66,6 +66,8 @@ describe("ask stage", () => {
           boundaries: "开放结局",
           direction: "港口",
           openQuestions: [],
+          targetChapters: 12,
+          chapterWordCount: 2000,
         });
       }
       return JSON.stringify({
@@ -78,6 +80,8 @@ describe("ask stage", () => {
         boundaries: "开放结局",
         direction: "港口",
         openQuestions: ["结局"],
+        targetChapters: 12,
+        chapterWordCount: 2000,
       });
     };
     const ctx = { root: { projectRoot: root, draftId: "d1" }, project: project(), llm };

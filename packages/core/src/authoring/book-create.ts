@@ -14,6 +14,8 @@ import { bindDraftToBook, loadDraft } from "./drafts.js";
 import { loadManifest, saveArtifact, saveManifest, type AuthoringStoreRoot } from "./store.js";
 import type { AuthoringArtifactMeta, CanonDocument } from "./types.js";
 
+export const CANON_LENGTH_REQUIRED = "CANON_LENGTH_REQUIRED";
+
 export interface LightweightBookCreateInput {
   readonly projectRoot: string;
   readonly canon: CanonDocument;
@@ -22,6 +24,19 @@ export interface LightweightBookCreateInput {
   readonly platform?: BookConfig["platform"];
   readonly existingBookId?: string;
   readonly fromArtifact?: { readonly meta: AuthoringArtifactMeta; readonly body: string };
+}
+
+export function hasConfirmedCanonLength(canon: Pick<CanonDocument, "targetChapters" | "chapterWordCount">): boolean {
+  return Boolean(
+    canon.targetChapters && canon.targetChapters > 0
+    && canon.chapterWordCount && canon.chapterWordCount >= 100,
+  );
+}
+
+export function canonLengthRequiredError(): Error {
+  const error = new Error("请先确认全书篇幅（目标章数与每章字数），未填写不能建书。");
+  (error as Error & { code: string }).code = CANON_LENGTH_REQUIRED;
+  return error;
 }
 
 export async function syncBookJsonTitle(bookDir: string, canon: CanonDocument): Promise<void> {
@@ -118,6 +133,9 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
   if (exists) {
     return { bookId, bookDir, created: false };
   }
+  if (!input.canon.targetChapters || input.canon.targetChapters < 1) {
+    throw canonLengthRequiredError();
+  }
   const now = new Date().toISOString();
   const book = BookConfigSchema.parse({
     id: bookId,
@@ -125,8 +143,8 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
     platform: input.platform ?? "other",
     genre: input.canon.genre?.trim() || "未分类",
     status: "incubating",
-    targetChapters: input.canon.targetChapters ?? 36,
-    chapterWordCount: input.canon.chapterWordCount ?? 3000,
+    targetChapters: input.canon.targetChapters,
+    chapterWordCount: input.canon.chapterWordCount,
     language: input.language ?? "zh",
     createdAt: now,
     updatedAt: now,

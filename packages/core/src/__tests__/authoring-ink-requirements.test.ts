@@ -13,7 +13,7 @@ import { loadArtifact, loadManifest, loadRun, newRunId, saveRunControl } from ".
 async function generateWeaveRange(input: Parameters<typeof generateWeaveRangeCore>[0]) {
   const manifest = await loadManifest(input.root);
   if (!manifest.adopted.weave && input.root.bookId) {
-    const target = await resolveWeaveTargetChapters(input.root, input.targetChapters);
+    const target = await resolveWeaveTargetChapters(input.root);
     const structured = await generateWeaveStructure({
       root: input.root,
       project: input.project,
@@ -56,7 +56,7 @@ async function generateChapterDraft(input: Parameters<typeof generateChapterDraf
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 const project = ProjectConfigSchema.parse({ name:"test", version:"0.1.0", llm:{ provider:"custom", service:"test", configSource:"studio", baseUrl:"https://example.invalid/v1", model:"test", apiKey:"test" } });
-const canon = { title:"渡口", oneLine:"归还旧信", proposition:"", protagonist:"", conflict:"", voice:"", boundaries:"", direction:"", openQuestions:[] };
+const canon = { title:"渡口", oneLine:"归还旧信", proposition:"", protagonist:"", conflict:"", voice:"", boundaries:"", direction:"", openQuestions:[], targetChapters: 12, chapterWordCount: 2000 };
 const requirement = "保留内容：渡口旧信。修改重点：收紧冲突。";
 describe("ink task requirements", () => {
   const roots:string[]=[];

@@ -53,6 +53,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let catalogCalls = 0;
@@ -101,6 +102,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let round = 0;
@@ -155,6 +157,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let round = 0;
@@ -190,6 +193,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let round = 0;
@@ -257,6 +261,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     const cases = [
@@ -299,6 +304,7 @@ describe("ground stage", () => {
           boundaries: "",
           direction: "",
           openQuestions: [],
+          targetChapters: 12,
         },
       });
       const bookCtx = { root: { projectRoot: root, bookId: book.bookId }, project: project(), llm };

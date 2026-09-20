@@ -83,7 +83,7 @@ async function generateWeaveRange(input: Parameters<typeof generateWeaveRangeCor
   const lightweight = bookDir ? await isLightweightAuthoringBook(bookDir) : false;
   const manifest = await loadManifest(input.root);
   if (!input.resumeRunId && !manifest.adopted.weave && lightweight && input.root.bookId) {
-    const target = await resolveWeaveTargetChapters(input.root, input.targetChapters);
+    const target = await resolveWeaveTargetChapters(input.root);
     await adoptPlannedStructure(
       { root: input.root, project: input.project },
       [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: target, body: "测试卷目标" }],
@@ -174,6 +174,8 @@ describe("authoring rework R01-R12", () => {
       boundaries: "甲边界",
       direction: "甲方向",
       openQuestions: [],
+      targetChapters: 12,
+      chapterWordCount: 2000,
     });
     const first = await generateAskCanon({
       root: { projectRoot: root, draftId: a.draftId },
@@ -196,6 +198,8 @@ describe("authoring rework R01-R12", () => {
       boundaries: "",
       direction: "",
       openQuestions: [],
+      targetChapters: 12,
+      chapterWordCount: 2000,
     });
     const second = await generateAskCanon({
       root: { projectRoot: root, draftId: b.draftId },
@@ -358,6 +362,7 @@ describe("authoring rework R01-R12", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     await persistAdoptedChapter({
@@ -389,6 +394,7 @@ describe("authoring rework R01-R12", () => {
         boundaries: "MARK-BOUND",
         direction: "MARK-DIR",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     const llm: AuthoringLlmFn = async (call) => {
@@ -573,6 +579,8 @@ describe("authoring rework R01-R12", () => {
       boundaries: "",
       direction: "",
       openQuestions: [],
+      targetChapters: 12,
+      chapterWordCount: 2000,
     });
     const generated = await generateAskCanon({
       root: { projectRoot: root, draftId: draft.draftId },
@@ -640,7 +648,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r2-07-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "空索引", oneLine: "旧", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "空索引", oneLine: "旧", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     await mkdir(join(created.bookDir, "chapters"), { recursive: true });
     await writeFile(join(created.bookDir, "chapters", "0001_旧稿.md"), "第一章旧正文。\n", "utf-8");
@@ -689,7 +697,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r3-01-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "手改采用", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "手改采用", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm: (async () => "CANDIDATE_V1") as AuthoringLlmFn };
     const draft = await generateChapterDraft({ ...ctx, chapterNumber: 1, title: "开篇" });
@@ -708,7 +716,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r3-02-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "旧稿保护", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "旧稿保护", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     await mkdir(join(created.bookDir, "chapters"), { recursive: true });
     await writeFile(join(created.bookDir, "chapters", "0001_旧稿.md"), "R3_LEGACY_ONLY_8e7d\n", "utf-8");
@@ -794,7 +802,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r3-05-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "保留原稿", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "保留原稿", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm: (async () => "R3_KEEP_ORIGINAL") as AuthoringLlmFn };
     const v1 = await generateChapterDraft({ ...ctx, chapterNumber: 3, title: "夜谈" });
@@ -813,7 +821,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r4-01-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "归档失败", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "归档失败", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     await mkdir(join(created.bookDir, "chapters"), { recursive: true });
     const originalPath = join(created.bookDir, "chapters", "0001_原章题.md");
@@ -850,7 +858,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r4-02-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "恢复章题", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "恢复章题", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     await persistAdoptedChapter({
       bookDir: created.bookDir,
@@ -891,7 +899,7 @@ describe("authoring rework R01-R12", () => {
     for (const [offset, title] of titles.entries()) {
       const created = await createLightweightBook({
         projectRoot: root,
-        canon: { title: `章题${offset}`, oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+        canon: { title: `章题${offset}`, oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
         existingBookId: `title-book-${offset}`,
       });
       const chapterNumber = 1;
@@ -933,7 +941,7 @@ describe("authoring rework R01-R12", () => {
     const title = "雨夜：最后一封信";
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "生成章题", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "生成章题", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = {
       root: { projectRoot: root, bookId: created.bookId },
@@ -968,7 +976,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r7-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "续跑手改", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "续跑手改", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     await adoptPlannedStructure(ctx, [
@@ -1041,7 +1049,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r7-04-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "修订漏章", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "修订漏章", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     const generated = await generateWeaveRange({
@@ -1108,7 +1116,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r7-09-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "状态版本", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "状态版本", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     const alive = await generateChapterDraft({
@@ -1166,7 +1174,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r8-02-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     await adoptPlannedStructure(ctx, [
@@ -1269,7 +1277,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r8-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "信件", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "信件", oneLine: "测", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     await mkdir(join(created.bookDir, "story", "outline"), { recursive: true });
     await writeFile(
@@ -1321,7 +1329,7 @@ describe("authoring rework R01-R12", () => {
       root = await mkdtemp(join(tmpdir(), `authoring-r9-02-${style}-`));
       const created = await createLightweightBook({
         projectRoot: root,
-        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
       });
       const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
       await adoptPlannedStructure(ctx, [
@@ -1416,7 +1424,7 @@ describe("authoring rework R01-R12", () => {
       root = await mkdtemp(join(tmpdir(), "authoring-r10-01-"));
       const created = await createLightweightBook({
         projectRoot: root,
-        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "林一", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
       });
       const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
       await adoptPlannedStructure(ctx, [
@@ -1598,7 +1606,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r11-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     const first = await generateWeaveRange({
@@ -1684,7 +1692,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r11-04-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const runId = newRunId();
     let calls = 0;
@@ -1925,7 +1933,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r12-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     await generateWeaveRange({
@@ -1978,7 +1986,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r12-04-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const source = [
       "## 第1卷 纸城（1-4章）",
@@ -2070,7 +2078,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r13-01-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
     const first = await generateWeaveRange({
@@ -2551,7 +2559,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r15-02-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     for (const blanks of [0, 2, 5]) {
       const source = `${"\n".repeat(blanks)}AUTHOR_INPUT 本书全程不能杀死配角。\n\n## 第 1 章 起行\nOLD_CH1 起行。\n\n## 第 5 章 渡海\nOLD_CH5 已经抵达南岸。\n`;
@@ -2559,7 +2567,7 @@ describe("authoring rework R01-R12", () => {
       await createLightweightBook({
         projectRoot: root,
         existingBookId: `${created.bookId}-b${blanks}`,
-        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+        canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
       });
       await saveHandEditedArtifact(ctx.root, (await generateWeaveRange({
         ...ctx,
@@ -2594,7 +2602,7 @@ describe("authoring rework R01-R12", () => {
     root = await mkdtemp(join(tmpdir(), "authoring-r15-03-"));
     const created = await createLightweightBook({
       projectRoot: root,
-      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [] },
+      canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
     const source = [
       "AUTHOR_INPUT 本书全程不能杀死配角。",

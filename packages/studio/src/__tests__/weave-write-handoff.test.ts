@@ -1,4 +1,7 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -6,6 +9,7 @@ import type { BookStageView } from "../lib/book-stage";
 import type { TFunction } from "../hooks/use-i18n";
 import { adoptWeaveAndRefreshStage } from "../components/AuthoringWeavePanel";
 import { BookDetail } from "../pages/BookDetail";
+import { weaveLengthGateCopy } from "../lib/stage-copy";
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(), invalidate: vi.fn(), bump: vi.fn(), stage: null as BookStageView | null,
@@ -72,5 +76,21 @@ describe("adopted weave to write handoff", () => {
   it("still shows the existing guidance when loaded facts confirm no chapter outline", () => {
     mocks.stage = { stage: "weave", steps: { ask: "done", ground: "done", weave: "current", write: "todo" } };
     expect(renderWrite()).toContain("还没有可写的章");
+  });
+
+  it("shows a 先定全书篇幅 gate when canon length is missing", () => {
+    const studioRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const panel = readFileSync(join(studioRoot, "src/components/AuthoringWeavePanel.tsx"), "utf8");
+    const copy = weaveLengthGateCopy(true);
+    expect(copy).toEqual({
+      title: "先定全书篇幅",
+      subtitle: "请先在问心正典里确认目标章数和每章字数",
+      action: "去问心",
+      target: "ask",
+    });
+    expect(panel).toMatch(/weave-length-gate/);
+    expect(panel).toMatch(/data\.canon\?\.targetChapters/);
+    expect(panel).toMatch(/weaveLengthGateCopy/);
+    expect(panel).not.toMatch(/targetChapters \|\| 36/);
   });
 });
