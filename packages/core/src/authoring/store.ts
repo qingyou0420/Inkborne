@@ -121,6 +121,19 @@ export async function listRuns(root: AuthoringStoreRoot): Promise<AuthoringRunRe
 
 export type AuthoringRunControl = "none" | "pause" | "cancel";
 
+export class AuthoringRunCancelledError extends Error {
+  override readonly name = "AuthoringRunCancelledError";
+  constructor(message = "这次运行已放弃") {
+    super(message);
+  }
+}
+
+export async function throwIfRunCancelled(root: AuthoringStoreRoot, runId: string): Promise<void> {
+  if (await loadRunControl(root, runId) === "cancel") {
+    throw new AuthoringRunCancelledError();
+  }
+}
+
 export async function saveRunControl(
   root: AuthoringStoreRoot,
   runId: string,

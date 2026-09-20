@@ -9,7 +9,7 @@ import {
   generateGroundEntries,
   proposeSettingsCatalog,
 } from "../authoring/stages/ground.js";
-import { listRuns, loadSettingsCatalog } from "../authoring/store.js";
+import { listRuns, loadSettingsCatalog, newRunId, saveRunControl } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 function project() {
@@ -396,5 +396,98 @@ describe("ground stage", () => {
     expect(prompts[0]).not.toContain("MARK-PEER-SHEN");
     expect(prompts[1]).toContain("MARK-PEER-SHEN");
     expect(prompts[1]).toContain("同书其他条目摘要");
+  });
+
+  it("persists catalog attachments after each generated entry", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-partial-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    let generated = 0;
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({
+          categories: ["人物", "地点"],
+          entries: [
+            { id: "shen", category: "人物", name: "沈砚" },
+            { id: "port", category: "地点", name: "夜港" },
+          ],
+        });
+      }
+      generated += 1;
+      if (generated === 2) {
+        const catalog = await loadSettingsCatalog(ctx.root);
+        expect(catalog.entries.find((entry) => entry.id === "shen")?.candidateArtifactId).toBeTruthy();
+        throw new Error("第二项中断");
+      }
+      return "沈砚，港口会计。";
+    };
+    await proposeSettingsCatalog({ ...ctx, llm });
+    const result = await generateGroundEntries({ ...ctx, llm });
+    expect(result.generated).toEqual(["shen"]);
+    expect(result.failed).toEqual(["port"]);
+    const catalog = await loadSettingsCatalog(ctx.root);
+    expect(catalog.entries.find((entry) => entry.id === "shen")?.candidateArtifactId).toBeTruthy();
+    expect(catalog.entries.find((entry) => entry.id === "port")?.candidateArtifactId).toBeFalsy();
+  });
+
+  it("cancels remaining ground entries and keeps already attached catalog items", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-cancel-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const runId = newRunId();
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const names: string[] = [];
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({
+          categories: ["人物", "地点"],
+          entries: [
+            { id: "shen", category: "人物", name: "沈砚" },
+            { id: "port", category: "地点", name: "夜港" },
+          ],
+        });
+      }
+      names.push(text.includes("夜港") ? "夜港" : "沈砚");
+      await saveRunControl(ctx.root, runId, "cancel");
+      return "沈砚，港口会计。";
+    };
+    await proposeSettingsCatalog({ ...ctx, llm });
+    const result = await generateGroundEntries({ ...ctx, llm, runId });
+    expect(names).toEqual(["沈砚"]);
+    expect(result.generated).toEqual(["shen"]);
+    expect(result.failed).toEqual([]);
+    expect((await listRuns(ctx.root)).find((run) => run.runId === runId)?.status).toBe("cancelled");
+    const catalog = await loadSettingsCatalog(ctx.root);
+    expect(catalog.entries.find((entry) => entry.id === "shen")?.candidateArtifactId).toBeTruthy();
+    expect(catalog.entries.find((entry) => entry.id === "port")?.candidateArtifactId).toBeFalsy();
   });
 });

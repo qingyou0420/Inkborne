@@ -63,6 +63,17 @@ export function groundRetryAction(
   return "generate";
 }
 
+export function previousChapterSettleHold<T extends AuthoringRunLike>(
+  runs: readonly T[] | undefined,
+  chapterNumber: number,
+): T | undefined {
+  if (chapterNumber <= 1) return undefined;
+  const previous = selectScopedAuthoringRun(runs, "write", `chapter:${chapterNumber - 1}`);
+  if (previous?.operation !== "settle") return undefined;
+  if (previous.status !== "running" && previous.status !== "pausing") return undefined;
+  return previous;
+}
+
 export function producedArtifactForScope(
   run: Pick<AuthoringRunLike, "scope" | "producedArtifactIds"> | undefined,
   scope: string,

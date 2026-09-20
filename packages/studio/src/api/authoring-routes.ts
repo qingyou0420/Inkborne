@@ -27,6 +27,7 @@ import {
   generateWeaveStructure,
   isLightweightAuthoringBook,
   listArtifacts,
+  listChapterStateRefs,
   listReports,
   listRuns,
   loadArtifact,
@@ -301,13 +302,14 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const draftId = c.req.query("draftId") || undefined;
     const root = storeRoot(deps.root, { bookId, draftId });
     const project = await deps.loadProject();
-    const [manifest, artifacts, reports, canon, catalog, listedRuns] = await Promise.all([
+    const [manifest, artifacts, reports, canon, catalog, listedRuns, writeStateRefs] = await Promise.all([
       loadManifest(root),
       listArtifacts(root),
       listReports(root),
       loadCanonDocument(root).catch(() => null),
       loadSettingsCatalog(root).catch(() => ({ categories: [], entries: [] })),
       listRuns(root).catch(() => []),
+      listChapterStateRefs(root).catch(() => ({})),
     ]);
     const runs = (await Promise.all(listedRuns.map((run) => reclaimOrphanRun(root, run)))).filter(
       (run): run is AuthoringRunRecord => Boolean(run),
@@ -324,6 +326,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       catalog,
       authoringBook,
       runs,
+      writeStateRefs,
       canon: canon?.canon,
       canonSource: canon?.source,
       adoptedAskId: manifest.adopted.ask,
@@ -1026,10 +1029,12 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       artifactId: body.artifactId,
       deferSettle: true,
     });
+    const adoptedMeta = await loadArtifact(root, body.artifactId);
     const runId = newRunId();
     await persistStartingRun(root, emptyRun({
       runId, stage: "write", operation: "settle", roleId: "write.main",
-      bookId: body.bookId, progressLabel: "正在整理章节状态",
+      bookId: body.bookId, scope: adoptedMeta?.meta.scope,
+      progressLabel: "正在整理章节状态",
     }));
     const workFactory = () => settleAdoptedChapter({
       root,
@@ -1061,10 +1066,12 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const body = await c.req.json<{ bookId: string; artifactId: string; wait?: boolean }>();
     const project = await deps.loadProject();
     const root = storeRoot(deps.root, body);
+    const settleMeta = await loadArtifact(root, body.artifactId);
     const runId = newRunId();
     await persistStartingRun(root, emptyRun({
       runId, stage: "write", operation: "settle", roleId: "write.main",
-      bookId: body.bookId, progressLabel: "正在整理章节状态",
+      bookId: body.bookId, scope: settleMeta?.meta.scope,
+      progressLabel: "正在整理章节状态",
     }));
     const workFactory = () => settleAdoptedChapter({
       root,

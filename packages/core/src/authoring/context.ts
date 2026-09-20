@@ -482,6 +482,26 @@ export async function invalidateChapterState(root: AuthoringStoreRoot, chapterNu
   await rm(paths.ref, { force: true });
 }
 
+export async function listChapterStateRefs(root: AuthoringStoreRoot): Promise<Record<string, string>> {
+  if (!root.bookId) return {};
+  const dir = join(root.projectRoot, "books", root.bookId, "story", "state");
+  let files: string[];
+  try {
+    files = await readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  const refs: Record<string, string> = {};
+  for (const file of files) {
+    const match = /^chapter-(\d+)\.ref\.json$/.exec(file);
+    if (!match) continue;
+    const artifactId = await readStateRef(join(dir, file));
+    if (artifactId) refs[match[1]!] = artifactId;
+  }
+  return refs;
+}
+
 export async function loadChapterState(root: AuthoringStoreRoot, chapterNumber: number): Promise<string> {
   if (!root.bookId) return "";
   const bookDir = join(root.projectRoot, "books", root.bookId);

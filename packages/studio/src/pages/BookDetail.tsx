@@ -177,8 +177,9 @@ export function BookDetail({
       persisted: data.chapters,
       candidates: authoring?.manifest?.candidates?.write,
       adopted: authoring?.manifest?.adopted?.write,
+      stateRefs: authoring?.writeStateRefs,
     });
-  }, [authoring?.manifest?.adopted?.write, authoring?.manifest?.candidates?.write, authoringBook, data, outline?.content]);
+  }, [authoring?.manifest?.adopted?.write, authoring?.manifest?.candidates?.write, authoring?.writeStateRefs, authoringBook, data, outline?.content]);
   const firstUnwritten = firstUnwrittenChapter(writeDirectory, data?.nextChapter ?? 1);
   useEffect(() => { setWriteChapter(null); }, [bookId]);
   useEffect(() => {
@@ -409,6 +410,17 @@ export function BookDetail({
     });
   };
 
+  const handleSettleWriteState = async (chapterNum: number) => {
+    const artifactId = authoring?.manifest?.adopted?.write?.[String(chapterNum)];
+    if (!artifactId) return;
+    await runBookAction(`settle-state-${chapterNum}`, async () => {
+      await postApi("/authoring/write/settle", { bookId, artifactId });
+      return data?.book.language === "en"
+        ? `Settling chapter ${chapterNum} state.`
+        : `正在整理第 ${chapterNum} 章状态。`;
+    });
+  };
+
   const confirmBrief = () => {
     if (!briefPrompt) return;
     const { kind, chapter, mode } = briefPrompt;
@@ -519,7 +531,7 @@ export function BookDetail({
                   {item.title || t("chapter.label").replace("{n}", String(item.number))}
                   <small className={tone}>
                     <StageDot state={dotState} />
-                    {" "}{statusLabel} · {(item.wordCount ?? 0).toLocaleString()} {t("book.words")}
+                    {" "}{statusLabel}{item.stateMissing ? (isZh ? " · 状态未整理" : " · state unset") : ""} · {(item.wordCount ?? 0).toLocaleString()} {t("book.words")}
                   </small>
                 </button>
                 {selected ? <DropdownMenu>
@@ -535,6 +547,15 @@ export function BookDetail({
                     <DropdownMenuItem onClick={() => nav.toChapter(bookId, item.number)}>
                       {t("reader.preview")}
                     </DropdownMenuItem>
+                    {authoringBook && item.stateMissing ? (
+                      <DropdownMenuItem
+                        data-testid={`chapter-settle-${item.number}`}
+                        disabled={bookActionPending === `settle-state-${item.number}`}
+                        onClick={() => void handleSettleWriteState(item.number)}
+                      >
+                        {isZh ? "整理状态" : "Settle state"}
+                      </DropdownMenuItem>
+                    ) : null}
                     {!authoringBook ? <>
                     {ch?.status === "ready-for-review" && (
                       <DropdownMenuItem

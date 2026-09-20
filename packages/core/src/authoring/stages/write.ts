@@ -22,6 +22,8 @@ import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from
 import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
 import { StateManager } from "../../state/manager.js";
 import {
+  AuthoringRunCancelledError,
+  listRuns,
   loadArtifact,
   loadManifest,
   loadReport,
@@ -33,6 +35,7 @@ import {
   saveManifest,
   saveReport,
   saveRun,
+  throwIfRunCancelled,
   type AuthoringStoreRoot,
 } from "../store.js";
 import { AuthoringRunRecordSchema, type AuthoringLlmFn, type AuthoringReviewReport, type AuthoringRunRecord } from "../types.js";
@@ -94,6 +97,17 @@ export async function generateChapterDraft(input: WriteRuntime & {
   };
   await writeRun(input.root, { ...baseRun, status: "running" }, input.onProgress);
   try {
+    if (input.chapterNumber > 1) {
+      const previousSettle = (await listRuns(input.root)).find((run) => (
+        run.stage === "write"
+        && run.scope === `chapter:${input.chapterNumber - 1}`
+        && run.operation === "settle"
+        && (run.status === "running" || run.status === "pausing")
+      ));
+      if (previousSettle) {
+        throw new Error(`正在整理第 ${input.chapterNumber - 1} 章状态，完成后可写下一章。`);
+      }
+    }
     if (await isLightweightAuthoringBook(bookDir)) {
       if (!currentManifest.adopted.weave) {
         throw new Error("请先到织卷生成并采用分卷与本章规划，再自动写正文。");
@@ -120,6 +134,7 @@ export async function generateChapterDraft(input: WriteRuntime & {
     const title = input.title?.trim()
       || located?.title?.trim()
       || await resolvePlannedChapterTitle(input.root, input.chapterNumber);
+    await throwIfRunCancelled(input.root, runId);
     const text = await completeRole(resolved, [
       `撰写第 ${input.chapterNumber} 章${title ? `《${title}》` : ""}。只输出章节正文 Markdown。`,
       wordCount ? `目标约 ${wordCount} 字（±15%）。` : "",
@@ -128,6 +143,7 @@ export async function generateChapterDraft(input: WriteRuntime & {
       ctx.text,
       previous ? `上一章结尾：\n${previous.slice(-2000)}` : "",
     ].filter(Boolean).join("\n"), input.llm);
+    await throwIfRunCancelled(input.root, runId);
     const artifactId = newArtifactId("write", `ch${input.chapterNumber}`);
     await saveArtifact(input.root, {
       artifactId,
@@ -164,6 +180,14 @@ export async function generateChapterDraft(input: WriteRuntime & {
     });
     return { artifactId, runId, body: text };
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await writeRun(input.root, {
+        ...baseRun,
+        status: "cancelled",
+        progressLabel: `已放弃第 ${input.chapterNumber} 章`,
+      }, input.onProgress);
+      throw error;
+    }
     await writeRun(input.root, {
       ...baseRun,
       status: "failed",
@@ -201,6 +225,7 @@ export async function reviewChapterDraft(input: WriteRuntime & {
     createdAt: startedAt,
   }, input.onProgress);
   try {
+    await throwIfRunCancelled(input.root, runId);
     const ctx = await assembleAuthoringContext(input.root, { stage: "write", chapterNumber });
     const { canon } = await loadCanonDocument(input.root);
     const extras = [
@@ -212,6 +237,7 @@ export async function reviewChapterDraft(input: WriteRuntime & {
       reviewPrompt("write", coverage, loaded.body, extras),
       input.llm,
     );
+    await throwIfRunCancelled(input.root, runId);
     const report = parseReviewPayload(text, {
       stage: "write",
       targetRefs: [loaded.meta.artifactId],
@@ -239,6 +265,22 @@ export async function reviewChapterDraft(input: WriteRuntime & {
     }, input.onProgress);
     return report;
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await writeRun(input.root, {
+        runId,
+        stage: "write",
+        operation: "review",
+        roleId: "write.review",
+        status: "cancelled",
+        bookId: input.root.bookId,
+        scope: loaded.meta.scope,
+        progressLabel: "已放弃这次审查",
+        modelSnapshot: resolved.snapshot,
+        producedArtifactIds: [],
+        createdAt: startedAt,
+      }, input.onProgress);
+      throw error;
+    }
     await writeRun(input.root, {
       runId,
       stage: "write",
@@ -291,6 +333,7 @@ export async function reviseChapterDraft(input: WriteRuntime & {
     createdAt: startedAt,
   }, input.onProgress);
   try {
+  await throwIfRunCancelled(input.root, runId);
   const ctx = await assembleAuthoringContext(input.root, { stage: "write", chapterNumber });
   const text = await completeRole(resolved, [
     "按选中意见修改正文。只输出完整章节 Markdown。不要声称已经复审通过。",
@@ -300,6 +343,7 @@ export async function reviseChapterDraft(input: WriteRuntime & {
     ctx.text,
     loaded.body,
   ].filter(Boolean).join("\n"), input.llm);
+  await throwIfRunCancelled(input.root, runId);
   const nextId = newArtifactId("write", loaded.meta.scope);
   const version = loaded.meta.version + 1;
   await saveArtifact(input.root, {
@@ -344,6 +388,23 @@ export async function reviseChapterDraft(input: WriteRuntime & {
   }, input.onProgress);
   return { artifactId: nextId, version, runId };
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await writeRun(input.root, {
+        runId,
+        stage: "write",
+        operation: "revise",
+        roleId: "write.main",
+        status: "cancelled",
+        bookId: input.root.bookId,
+        scope: loaded.meta.scope,
+        reportId: input.reportId,
+        progressLabel: "已放弃这次修订",
+        modelSnapshot: resolved.snapshot,
+        producedArtifactIds: [],
+        createdAt: startedAt,
+      }, input.onProgress);
+      throw error;
+    }
     await writeRun(input.root, {
       runId,
       stage: "write",
@@ -454,10 +515,12 @@ export async function settleAdoptedChapter(input: WriteRuntime & {
     createdAt: startedAt,
   }, input.onProgress);
   try {
+    await throwIfRunCancelled(input.root, runId);
     const note = await completeRole(resolved, [
       "根据刚采用的正文整理人物状态与伏笔变化。只输出 Markdown 摘要，不要改正文。",
       loaded.body.slice(0, 8000),
     ].join("\n"), input.settle ?? input.llm);
+    await throwIfRunCancelled(input.root, runId);
     await writeChapterState(input.root, chapterNumber, loaded.meta.artifactId, note);
     await writeRun(input.root, {
       runId,
@@ -476,6 +539,22 @@ export async function settleAdoptedChapter(input: WriteRuntime & {
     }, input.onProgress);
     return { settled: true, runId };
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await writeRun(input.root, {
+        runId,
+        stage: "write",
+        operation: "settle",
+        roleId: "write.main",
+        status: "cancelled",
+        bookId: input.root.bookId,
+        scope: loaded.meta.scope,
+        progressLabel: "已放弃这次状态整理",
+        modelSnapshot: resolved.snapshot,
+        producedArtifactIds: [loaded.meta.artifactId],
+        createdAt: startedAt,
+      }, input.onProgress);
+      throw error;
+    }
     const settleError = error instanceof Error ? error.message : String(error);
     await invalidateChapterState(input.root, chapterNumber);
     await writeRun(input.root, {
