@@ -2513,32 +2513,8 @@ describe("authoring rework R01-R12", () => {
       projectRoot: root,
       canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
-    const source = [
-      "AUTHOR_BOOK 保留全书纲。",
-      "",
-      "## 第1卷·节点A",
-      "NOTE_KEEP 作者备注。",
-      "",
-      "## 第 1 章 旧信",
-      "OLD_CH1",
-      "",
-      "## 第2-3章 雨途",
-      "RANGE_KEEP 主角卧病。",
-      "",
-      "## 第 4 章 归港",
-      "OLD_CH4",
-      "",
-    ].join("\n");
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    const seeded = await generateWeaveStructure({
-      ...ctx,
-      llm: async () => JSON.stringify({
-        bookOutline: "SEED_BOOK",
-        volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: 12, body: "覆盖" }],
-      }),
-    });
-    await saveHandEditedArtifact(ctx.root, seeded.artifactId, source);
-    await generateWeaveStructure({
+    const structured = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "NEW_BOOK",
@@ -2549,6 +2525,33 @@ describe("authoring rework R01-R12", () => {
         ],
       }),
     });
+    await saveHandEditedArtifact(ctx.root, structured.artifactId, [
+      "AUTHOR_BOOK 保留全书纲。",
+      "",
+      "NEW_BOOK",
+      "",
+      "## 第1卷·节点A",
+      "NOTE_KEEP 作者备注。",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "VOL1 尚未渡海。",
+      "",
+      "## 第 1 章 旧信",
+      "OLD_CH1",
+      "",
+      "## 第2-3章 雨途",
+      "RANGE_KEEP 主角卧病。",
+      "",
+      "## 第 4 章 归港",
+      "OLD_CH4",
+      "",
+      "## 第2卷 寻父（5-8章）",
+      "VOL2 仍在寻找父亲。",
+      "",
+      "## 第3卷 重逢（9-12章）",
+      "VOL3 已经与父亲重逢。",
+      "",
+    ].join("\n"));
     const runId = newRunId();
     let calls = 0;
     const paused = await generateWeaveRange({
@@ -2672,29 +2675,8 @@ describe("authoring rework R01-R12", () => {
       projectRoot: root,
       canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 8 },
     });
-    const source = [
-      "AUTHOR_INPUT 本书全程不能杀死配角。",
-      "",
-      "## 第 1 章 起行",
-      "OLD_CH1 起行。",
-      "",
-      "## 第2-6章 长途",
-      "RANGE_KEEP 路途期间保持戒备。",
-      "",
-      "## 第 7 章 归途",
-      "OLD_CH7 归途。",
-      "",
-    ].join("\n");
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    const seeded = await generateWeaveStructure({
-      ...ctx,
-      llm: async () => JSON.stringify({
-        bookOutline: "SEED_BOOK",
-        volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: 8, body: "覆盖" }],
-      }),
-    });
-    await saveHandEditedArtifact(ctx.root, seeded.artifactId, source);
-    await generateWeaveStructure({
+    const structured = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "NEW_BOOK",
@@ -2704,6 +2686,27 @@ describe("authoring rework R01-R12", () => {
         ],
       }),
     });
+    await saveHandEditedArtifact(ctx.root, structured.artifactId, [
+      "AUTHOR_INPUT 本书全程不能杀死配角。",
+      "",
+      "NEW_BOOK",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "VOL1_SEA 尚未渡海。",
+      "",
+      "## 第 1 章 起行",
+      "OLD_CH1 起行。",
+      "",
+      "## 第2-6章 长途",
+      "RANGE_KEEP 路途期间保持戒备。",
+      "",
+      "## 第2卷 南岸（5-8章）",
+      "VOL2_SHORE 已经抵达南岸。",
+      "",
+      "## 第 7 章 归途",
+      "OLD_CH7 归途。",
+      "",
+    ].join("\n"));
     const planned = await generateWeaveRange({
       ...ctx,
       llm: async () => JSON.stringify({
@@ -2739,35 +2742,8 @@ describe("authoring rework R01-R12", () => {
       projectRoot: root,
       canon: { title: "纸城", oneLine: "送信", proposition: "", protagonist: "", conflict: "", voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 12 },
     });
-    const source = [
-      "AUTHOR_BOOK 保留全书纲。",
-      "",
-      "## 第1卷·节点A",
-      "NOTE_KEEP 作者备注。",
-      "",
-      "## 第 1 章 旧信",
-      "OLD_CH1",
-      "",
-      "## 第2-3章 雨途",
-      "RANGE_KEEP 主角卧病。",
-      "",
-      "## 第 4 章 归港",
-      "OLD_CH4",
-      "",
-      "## 第 9 章 见面",
-      "OLD_CH9",
-      "",
-    ].join("\n");
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    const seeded = await generateWeaveStructure({
-      ...ctx,
-      llm: async () => JSON.stringify({
-        bookOutline: "SEED_BOOK",
-        volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: 12, body: "覆盖" }],
-      }),
-    });
-    await saveHandEditedArtifact(ctx.root, seeded.artifactId, source);
-    await generateWeaveStructure({
+    const structured = await generateWeaveStructure({
       ...ctx,
       llm: async () => JSON.stringify({
         bookOutline: "NEW_BOOK",
@@ -2778,6 +2754,36 @@ describe("authoring rework R01-R12", () => {
         ],
       }),
     });
+    await saveHandEditedArtifact(ctx.root, structured.artifactId, [
+      "AUTHOR_BOOK 保留全书纲。",
+      "",
+      "NEW_BOOK",
+      "",
+      "## 第1卷·节点A",
+      "NOTE_KEEP 作者备注。",
+      "",
+      "## 第1卷 纸城（1-4章）",
+      "VOL1 尚未渡海。",
+      "",
+      "## 第 1 章 旧信",
+      "OLD_CH1",
+      "",
+      "## 第2-3章 雨途",
+      "RANGE_KEEP 主角卧病。",
+      "",
+      "## 第 4 章 归港",
+      "OLD_CH4",
+      "",
+      "## 第2卷 寻父（5-8章）",
+      "VOL2 寻找父亲，仍未见面。",
+      "",
+      "## 第3卷 重逢（9-12章）",
+      "VOL3 已经找到父亲，应继续重逢后的故事。",
+      "",
+      "## 第 9 章 见面",
+      "OLD_CH9",
+      "",
+    ].join("\n"));
     const runId = newRunId();
     let calls = 0;
     const paused = await generateWeaveRange({
