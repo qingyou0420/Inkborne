@@ -191,7 +191,7 @@ export function AppMoreMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => nav.toProjectSettings("advanced")}>{isZh ? "高级" : "Advanced"}</DropdownMenuItem>
         {currentBookId && nav.toTruth ? (
-          <DropdownMenuItem onClick={() => nav.toTruth(currentBookId)}>
+          <DropdownMenuItem onClick={() => nav.toTruth?.(currentBookId)}>
             {authoringBook ? (isZh ? "原始资料（只读）" : "Source files (read-only)") : (isZh ? "原始资料" : "Source files")}
           </DropdownMenuItem>
         ) : null}

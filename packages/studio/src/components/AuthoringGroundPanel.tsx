@@ -252,7 +252,7 @@ function AuthoringGroundBook({
     void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
   };
   const retryFailedRun = () => {
-    const action = groundRetryAction(authoringRun.run, generationScope.entryIds.length > 0 || visible.length > 0);
+    const action = groundRetryAction(authoringRun.run ?? undefined, generationScope.entryIds.length > 0 || visible.length > 0);
     if (action === "review") void reviewCurrent();
     else if (action === "catalog") void startCatalog();
     else void generateEntries(generationScope.entryIds, generationScope.regenerate);

@@ -165,7 +165,6 @@ export function BookStudy({
       dueHooks: hooks,
       reviewQueue,
       pendingProposals: proposals,
-      skipPreviousApproval: false,
       isZh,
     });
   }, [data, preflight, volumeMap, hooks, reviewQueue, proposals, isZh]);

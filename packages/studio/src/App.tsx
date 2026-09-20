@@ -292,6 +292,7 @@ export function App() {
             重试 / Retry
           </button>
         </div>
+      </div>
     );
   }
 
