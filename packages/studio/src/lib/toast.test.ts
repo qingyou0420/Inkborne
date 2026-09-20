@@ -5,6 +5,10 @@ import { dismissToast, showToast, subscribeToasts } from "./toast";
 describe("toast actions", () => {
   afterEach(() => {
     vi.useRealTimers();
+    const stop = subscribeToasts((items) => {
+      for (const item of items) dismissToast(item.id);
+    });
+    stop();
   });
   if (typeof globalThis.window === "undefined") {
     Object.defineProperty(globalThis, "window", { value: globalThis, configurable: true });
