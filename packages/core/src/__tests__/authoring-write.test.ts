@@ -1,17 +1,19 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
+import { serializeCanonBrief } from "../authoring/context.js";
 import {
   adoptChapterDraft,
   generateChapterDraft,
   reviewChapterDraft,
   reviseChapterDraft,
+  settleAdoptedChapter,
 } from "../authoring/stages/write.js";
 import { adoptWeave, generateWeaveRange, generateWeaveStructure } from "../authoring/stages/weave.js";
-import { loadManifest, loadReport } from "../authoring/store.js";
+import { listRuns, loadManifest, loadReport, loadRun } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 function project() {
@@ -59,11 +61,14 @@ describe("write stage", () => {
         direction: "",
         openQuestions: [],
         targetChapters: 4,
+        chapterWordCount: 3000,
       },
     });
     const roles: string[] = [];
+    const prompts: string[] = [];
     const llm: AuthoringLlmFn = async (call) => {
       roles.push(call.roleId);
+      prompts.push(call.messages.map((message) => message.content).join("\n"));
       if (call.roleId === "write.review") {
         return JSON.stringify({
           summary: "开头可收紧",
@@ -104,8 +109,14 @@ describe("write stage", () => {
     await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: planned.artifactId });
     const draft = await generateChapterDraft({ ...ctx, chapterNumber: 1, title: "雨" });
     expect(roles).toEqual(["write.main"]);
+    expect(prompts[0]).toContain("目标约 3000 字（±15%）");
+    expect(serializeCanonBrief({
+      title: "夜港", oneLine: "会计", proposition: "", protagonist: "沈砚", conflict: "",
+      voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 4, chapterWordCount: 3000,
+    })).toContain("每章字数：3000");
     const report = await reviewChapterDraft({ ...ctx, artifactId: draft.artifactId });
     expect(report.actualReviewModel).toBe("write-review");
+    expect(prompts.some((prompt) => prompt.includes("核对篇幅：目标约 3000 字（±15%）"))).toBe(true);
     const revised = await reviseChapterDraft({
       ...ctx,
       artifactId: draft.artifactId,
@@ -200,5 +211,112 @@ describe("write stage", () => {
     expect(revisePrompt).toContain("MARK-OUTLINE-R7");
     expect(seen.filter((text) => text.includes("按选中意见"))).toHaveLength(1);
     expect(roles.filter((id) => id === "write.review")).toHaveLength(1);
+  });
+
+  it("records a running run immediately and a failed run when generation throws", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-run-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港", oneLine: "会计", proposition: "", protagonist: "沈砚", conflict: "",
+        voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 4, chapterWordCount: 2800,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const structured = await generateWeaveStructure({
+      root: ctx.root,
+      project: ctx.project,
+      llm: async () => JSON.stringify({
+        bookOutline: "一卷",
+        volumes: [{ volumeNumber: 1, title: "上", startChapter: 1, endChapter: 4, body: "上卷" }],
+      }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: structured.artifactId });
+    const planned = await generateWeaveRange({
+      root: ctx.root,
+      project: ctx.project,
+      startChapter: 1,
+      endChapter: 1,
+      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "雨", summary: "港口开场。" }] }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: planned.artifactId });
+
+    let release!: (text: string) => void;
+    const blocked = new Promise<string>((resolve) => { release = resolve; });
+    const pending = generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "雨",
+      llm: async () => blocked,
+    });
+    await vi.waitFor(async () => {
+      const runs = await listRuns(ctx.root);
+      expect(runs[0]?.status).toBe("running");
+      expect(runs[0]?.operation).toBe("generate");
+    });
+    release("# 第1章\n雨停了。");
+    const draft = await pending;
+    expect((await loadRun(ctx.root, draft.runId))?.status).toBe("completed");
+
+    await expect(generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "雨",
+      llm: async () => { throw new Error("模型中断"); },
+    })).rejects.toThrow("模型中断");
+    const failed = (await listRuns(ctx.root)).find((run) => run.status === "failed");
+    expect(failed?.error).toContain("模型中断");
+  });
+
+  it("can adopt without settling and retry settle later", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-settle-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港", oneLine: "会计", proposition: "", protagonist: "沈砚", conflict: "",
+        voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 4,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const structured = await generateWeaveStructure({
+      root: ctx.root,
+      project: ctx.project,
+      llm: async () => JSON.stringify({
+        bookOutline: "一卷",
+        volumes: [{ volumeNumber: 1, title: "上", startChapter: 1, endChapter: 4, body: "上卷" }],
+      }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: structured.artifactId });
+    const planned = await generateWeaveRange({
+      root: ctx.root,
+      project: ctx.project,
+      startChapter: 1,
+      endChapter: 1,
+      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "雨", summary: "港口开场。" }] }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: planned.artifactId });
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "雨",
+      llm: async () => "# 第1章\n沈砚走在街上。",
+    });
+    const adopted = await adoptChapterDraft({
+      ...ctx,
+      artifactId: draft.artifactId,
+      deferSettle: true,
+      llm: async () => { throw new Error("settle should not run"); },
+    });
+    expect(adopted).toEqual({ adopted: true, settled: false });
+    const settled = await settleAdoptedChapter({
+      ...ctx,
+      artifactId: draft.artifactId,
+      llm: async (call) => {
+        expect(call.messages.some((message) => message.content.includes("整理人物状态"))).toBe(true);
+        return "沈砚已到港口。";
+      },
+    });
+    expect(settled.settled).toBe(true);
+    expect((await loadRun(ctx.root, settled.runId))?.operation).toBe("settle");
   });
 });

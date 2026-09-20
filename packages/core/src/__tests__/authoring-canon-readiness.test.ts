@@ -15,6 +15,7 @@ const canon = {
   title: "旧城来信", genre: "古风", oneLine: "故友寻回失散书信。", proposition: "承担自己的选择。",
   protagonist: "叶川想将遗失的家书归还主人。", conflict: "家书归属与故友立场冲突。",
   voice: "第三人称限知，白描。", boundaries: "不增加超自然能力。", direction: "从第一封来信开始。", openQuestions: [],
+  targetChapters: 80, chapterWordCount: 2800,
 };
 const project = ProjectConfigSchema.parse({
   name: "readiness-test", version: "0.1.0",
@@ -59,6 +60,7 @@ describe("unadopted Ask candidate readiness", () => {
     await adoptAskCanon({ root, project, artifactId: created.artifactId });
     const context = await assembleAuthoringContext(root, { stage: "weave" });
     expect(context.text).toContain(canon.protagonist);
+    expect(context.text).toContain("每章字数：2800");
     expect(context.refs).toContainEqual({ kind: "canon", id: created.artifactId });
     await expect(proposeSettingsCatalog({ root, project, llm: async () => catalogText })).resolves.toMatchObject({
       entries: [{ name: "叶川" }],

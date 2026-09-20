@@ -134,6 +134,7 @@ export {
   reviewChapterDraft,
   reviseChapterDraft,
   adoptChapterDraft,
+  settleAdoptedChapter,
   testAuthoringRole,
   diffLines,
   type AuthoringRoleId,

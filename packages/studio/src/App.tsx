@@ -261,7 +261,7 @@ export function App() {
   const onStageSse = useCallback((message: { event: string; data: unknown }) => {
     const chapterPaths = invalidationPathsForChapterMutationSse(message);
     if (chapterPaths.length) invalidateApiPaths(chapterPaths);
-    if (!shouldInvalidateBookStageEvent(message.event)) return;
+    if (!shouldInvalidateBookStageEvent(message.event, message.data as { status?: string } | null)) return;
     const data = message.data as { bookId?: string } | null;
     invalidateBookStage(typeof data?.bookId === "string" ? data.bookId : activeBookId);
     bumpBookDataVersion();

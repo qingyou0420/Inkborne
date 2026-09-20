@@ -655,6 +655,7 @@ export async function resolveWeaveTargetChapters(root: { projectRoot: string; bo
 
 export async function generateWeaveStructure(input: WeaveRuntime & {
   readonly requirements?: string;
+  readonly runId?: string;
 }): Promise<{ artifactId: string; runId: string; volumes: AssembledVolume[]; bookOutline: string }> {
   if (!input.root.bookId) throw new Error("织卷需要已建的书。");
   const target = await resolveWeaveTargetChapters(input.root);
@@ -674,7 +675,7 @@ export async function generateWeaveStructure(input: WeaveRuntime & {
     stage: "weave",
     outlineOverride: seedMarkdown.trim() ? seedMarkdown : undefined,
   });
-  const runId = newRunId();
+  const runId = input.runId ?? newRunId();
   const startedAt = new Date().toISOString();
   await saveRun(input.root, {
     runId,
@@ -789,15 +790,19 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
   const existingOutline = await loadOutlineText(input.root);
   const manifest = await loadManifest(input.root);
-  if (!input.resumeRunId && await isLightweightAuthoringBook(bookDir) && !manifest.adopted.weave) {
-    throw new Error("请先采用分卷结构，再生成章概要。");
-  }
   const resolved = await resolve(input.project, "weave.main", input.root.projectRoot);
   const { canon } = await loadCanonDocument(input.root);
   const candidateLoaded = manifest.candidates.weave
     ? await loadArtifact(input.root, manifest.candidates.weave)
     : undefined;
   let seedMarkdown = candidateLoaded?.body || existingOutline;
+  if (!input.resumeRunId && await isLightweightAuthoringBook(bookDir)) {
+    const volumes = volumesFromOutline(seedMarkdown);
+    if (!volumes.length) {
+      throw new Error("请先生成分卷结构，再生成章概要。");
+    }
+    validateVolumePlan(volumes, bookTarget);
+  }
   const ctx = await assembleAuthoringContext(input.root, {
     stage: "weave",
     outlineOverride: seedMarkdown.trim() ? seedMarkdown : undefined,
@@ -1046,25 +1051,76 @@ export async function generateWeaveRange(input: WeaveRuntime & {
 export async function reviewWeave(input: WeaveRuntime & {
   readonly artifactId: string;
   readonly coverage: string;
+  readonly runId?: string;
 }): Promise<AuthoringReviewReport> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到规划成果。");
   const resolved = await resolve(input.project, "weave.review", input.root.projectRoot);
-  const ctx = await assembleAuthoringContext(input.root, { stage: "weave" });
-  const text = await completeRole(
-    resolved,
-    reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+  const runId = input.runId ?? newRunId();
+  const startedAt = new Date().toISOString();
+  await saveRun(input.root, {
+    runId,
     stage: "weave",
-    targetRefs: [loaded.meta.artifactId],
-    coverage: input.coverage,
-    model: resolved.modelId,
-    inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
+    operation: "review",
+    roleId: "weave.review",
+    status: "running",
+    bookId: input.root.bookId,
+    progressLabel: "正在审查规划",
+    modelSnapshot: resolved.snapshot,
+    producedArtifactIds: [],
+    createdAt: startedAt,
+    updatedAt: startedAt,
   });
-  await saveReport(input.root, report);
-  return report;
+  try {
+    const ctx = await assembleAuthoringContext(input.root, { stage: "weave" });
+    const text = await completeRole(
+      resolved,
+      reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
+      input.llm,
+    );
+    const report = parseReviewPayload(text, {
+      stage: "weave",
+      targetRefs: [loaded.meta.artifactId],
+      coverage: input.coverage,
+      model: resolved.modelId,
+      runId,
+      inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
+    });
+    await saveReport(input.root, report);
+    await saveRun(input.root, {
+      runId,
+      stage: "weave",
+      operation: "review",
+      roleId: "weave.review",
+      status: "completed",
+      bookId: input.root.bookId,
+      reportId: report.reportId,
+      progressDone: 1,
+      progressTotal: 1,
+      progressLabel: "审查完成",
+      modelSnapshot: resolved.snapshot,
+      producedArtifactIds: [],
+      createdAt: startedAt,
+      updatedAt: new Date().toISOString(),
+    });
+    return report;
+  } catch (error) {
+    await saveRun(input.root, {
+      runId,
+      stage: "weave",
+      operation: "review",
+      roleId: "weave.review",
+      status: "failed",
+      bookId: input.root.bookId,
+      error: error instanceof Error ? error.message : String(error),
+      progressLabel: "审查失败",
+      modelSnapshot: resolved.snapshot,
+      producedArtifactIds: [],
+      createdAt: startedAt,
+      updatedAt: new Date().toISOString(),
+    });
+    throw error;
+  }
 }
 
 export async function adoptWeave(input: WeaveRuntime & { readonly artifactId: string }): Promise<void> {

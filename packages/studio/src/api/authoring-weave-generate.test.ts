@@ -36,7 +36,7 @@ it("does not treat the requested chapter range as the book target", async () => 
   await rm(root, { recursive: true, force: true });
 });
 
-it("rejects chapter generation before the volume structure is adopted", async () => {
+it("allows chapter generation from an unadopted structure candidate", async () => {
   mocks.generate.mockClear();
   const root = await mkdtemp(join(tmpdir(), "studio-weave-gate-"));
   const { writeFile, mkdir } = await import("node:fs/promises");
@@ -51,9 +51,25 @@ it("rejects chapter generation before the volume structure is adopted", async ()
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ bookId: "book-new", startChapter: 1, endChapter: 4, wait: true }),
   });
-  expect(response.status).toBe(400);
-  expect(await response.json()).toMatchObject({ error: expect.stringMatching(/分卷结构/) });
-  expect(mocks.generate).not.toHaveBeenCalled();
+  expect(response.status).toBe(200);
+  expect(mocks.generate).toHaveBeenCalled();
+  await rm(root, { recursive: true, force: true });
+});
+
+it("returns a running runId when wait is omitted", async () => {
+  mocks.generate.mockClear();
+  mocks.generate.mockImplementation(() => new Promise(() => {}));
+  const root = await mkdtemp(join(tmpdir(), "studio-weave-async-"));
+  const project = ProjectConfigSchema.parse({ name: "test", version: "0.1.0", llm: { provider: "custom", model: "unused", baseUrl: "https://unused.invalid/v1" } });
+  const app = new Hono();
+  registerAuthoringRoutes(app, { root, loadProject: async () => project, saveRoles: async () => {} });
+  const response = await app.request("/api/v1/authoring/weave/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bookId: "book-test", startChapter: 1, endChapter: 4 }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ status: "running", runId: expect.any(String) });
   await rm(root, { recursive: true, force: true });
 });
 

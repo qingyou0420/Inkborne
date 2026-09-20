@@ -1,6 +1,6 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appendUnplannedChapter, pollWeaveRun, resolveWeaveVolumeRange, saveOutlineMap } from "./weave-editor-state";
+import { appendUnplannedChapter, pollWeaveRun, readWeaveSegment, replaceWeaveSegment, resolveWeaveVolumeRange, saveOutlineMap } from "./weave-editor-state";
 import { applyOutlineWorkspaceSave, parseVolumeMapTree } from "./volume-map-tree";
 
 function deferred<T>() {
@@ -11,6 +11,32 @@ function deferred<T>() {
 }
 
 afterEach(() => vi.useRealTimers());
+
+describe("candidate segment replace", () => {
+  const markdown = [
+    "卷前备注：这句必须保留。",
+    "",
+    "# 第一卷 起（1-2章）",
+    "上卷目标。",
+    "",
+    "## 第 1 章 雨",
+    "港口开场。",
+    "",
+    "## 第 12 章 旧账",
+    "夜里翻账。",
+    "",
+  ].join("\n");
+
+  it("replaces one chapter without dropping leading notes or other chapters", () => {
+    const next = replaceWeaveSegment(markdown, "chapter:12", { title: "夜深", summary: "只改这一章。" });
+    expect(next).toContain("卷前备注：这句必须保留。");
+    expect(next).toContain("港口开场。");
+    expect(next).toContain("上卷目标。");
+    expect(next).toContain("只改这一章。");
+    expect(next).not.toContain("夜里翻账。");
+    expect(readWeaveSegment(next, "chapter:12")).toMatchObject({ title: "夜深", summary: "只改这一章。" });
+  });
+});
 
 describe("weave generation and revision range", () => {
   const volumes = [{ startChapter: 1, endChapter: 50 }, { startChapter: 51, endChapter: 100 }, { startChapter: 101, endChapter: 260 }];

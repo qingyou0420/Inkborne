@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
@@ -62,6 +63,8 @@ function AuthoringGroundBook({
   const [generation, setGeneration] = useState<{ entryIds: string[]; regenerate?: boolean; issueIds?: ReadonlyArray<string>; reuseStale?: boolean; report?: AuthoringReport } | null>(null);
   const [requirementNotes, setRequirementNotes] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const authoringRun = useAuthoringRun(bookId, activeRunId);
   const decision = useDraftDecision(isZh);
   const visible = entries.filter((entry) => !entry.archived);
   const generationScope = groundGenerationScope(entries, selected);
@@ -79,6 +82,7 @@ function AuthoringGroundBook({
   const artifactRequest = useRef(0);
   const draft = editor.snapshot;
   const report = reportOverride ?? reportForArtifact(data?.reports, draft.baseId) ?? null;
+  const lastGroundRun = data?.runs?.find((item) => item.stage === "ground");
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     if (operationBusy.current || legacyBusy) return;
@@ -99,6 +103,24 @@ function AuthoringGroundBook({
       setBusy(null);
     }
   };
+
+  useEffect(() => {
+    if (activeRunId) return;
+    if (lastGroundRun && (lastGroundRun.status === "running" || lastGroundRun.status === "pausing" || lastGroundRun.status === "failed" || lastGroundRun.status === "partial")) {
+      setActiveRunId(lastGroundRun.runId);
+    }
+  }, [activeRunId, lastGroundRun]);
+
+  useEffect(() => {
+    if (!authoringRun.settled || !authoringRun.run) return;
+    void refetch();
+    artifactRequest.current += 1;
+    editor.generated();
+    setArtifactRetry((value) => value + 1);
+    if (authoringRun.run.status === "failed" || authoringRun.run.status === "partial") {
+      setFailure(authoringRun.run.error ?? (isZh ? "有条目没有生成成功。" : "Some settings failed to generate."));
+    }
+  }, [authoringRun.settled, authoringRun.run, editor, isZh, refetch]);
 
   const generateLabel = !generationScope.regenerate
     ? (isZh ? `补全剩余 ${generationScope.entryIds.length} 项` : `Fill remaining ${generationScope.entryIds.length}`)
@@ -201,18 +223,30 @@ function AuthoringGroundBook({
   const actionIds = batchMode ? selected : focused ? [focused.id] : [];
   const currentAdopted = Boolean(focusedArtifactId && focusedArtifactId === focused?.adoptedArtifactId && !draft.dirty);
   const history = (data?.artifacts ?? []).filter((item) => item.stage === "ground" && item.scope === focused?.id);
-  const blocked = Boolean(busy) || legacyBusy || artifactLoading || Boolean(artifactError) || workspaceLoading || Boolean(workspaceError);
+  const blocked = Boolean(busy) || legacyBusy || authoringRun.active || artifactLoading || Boolean(artifactError) || workspaceLoading || Boolean(workspaceError);
   const reviewCurrent = () => {
     if (blocked || editing || draft.dirty || actionIds.length === 0) return Promise.resolve(undefined);
     setReportOpen(true);
-    return run("review", async () => { const next = await postApi<AuthoringReport>("/authoring/ground/review", { bookId, entryIds: actionIds }); setReport(next); return next; });
+    return run("review", async () => {
+      const next = await postApi<AuthoringReport & { runId?: string; status?: string }>("/authoring/ground/review", { bookId, entryIds: actionIds });
+      if (isBackgroundAuthoringStart(next) && next.runId) { setActiveRunId(next.runId); return next; }
+      setReport(next);
+      return next;
+    });
   };
   const generationNotes = generationReviewNotes(report, (generation?.entryIds ?? []).map((id) => { const item = visible.find((entry) => entry.id === id); return item?.candidateArtifactId ?? item?.adoptedArtifactId; }));
   const generateEntries = (entryIds: string[], regenerate: boolean, requirements = "") => run("generate", async () => {
     await persistIfDirty();
-    await postApi("/authoring/ground/generate", { bookId, entryIds, regenerate, requirements: withGenerationReview(requirements, generationNotes) });
-    artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); setReportOpen(false); return true;
+    const result = await postApi<{ runId?: string; status?: string; generated?: string[] }>("/authoring/ground/generate", { bookId, entryIds, regenerate, requirements: withGenerationReview(requirements, generationNotes) });
+    if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
+    else { artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); }
+    setReportOpen(false); return true;
   });
+  const groundRunStatus = authoringRun.active
+    ? (authoringRun.run?.progressLabel ?? (isZh ? "正在生成设定…" : "Generating settings…"))
+    : authoringRun.run?.status === "failed" || authoringRun.run?.status === "partial"
+      ? (authoringRun.run.error ?? (isZh ? "有条目失败" : "Some entries failed"))
+      : null;
 
   return (
     <section className={`space-y-4 ground-workspace ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-ground-panel">
@@ -221,10 +255,16 @@ function AuthoringGroundBook({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{isZh ? "设定目录" : "Setting catalog"}</button>
-          <p className="text-xs text-muted-foreground">
-            {isZh
+          <p className="text-xs text-muted-foreground" role="status">
+            {groundRunStatus ?? (isZh
               ? `已生成 ${coverage?.settingsGenerated ?? 0}/${coverage?.settingsTarget ?? visible.length} · 已采用 ${coverage?.settingsAdopted ?? 0}`
-              : `Generated ${coverage?.settingsGenerated ?? 0}/${coverage?.settingsTarget ?? visible.length} · adopted ${coverage?.settingsAdopted ?? 0}`}
+              : `Generated ${coverage?.settingsGenerated ?? 0}/${coverage?.settingsTarget ?? visible.length} · adopted ${coverage?.settingsAdopted ?? 0}`)}
+            {authoringRun.run?.error ? <button type="button" className="btn-ghost" onClick={() => setFailure(authoringRun.run?.error ?? null)}>{isZh ? "查看原因" : "See why"}</button> : null}
+            {(authoringRun.run?.status === "failed" || authoringRun.run?.status === "partial") && generationScope.entryIds.length ? (
+              <button type="button" className="btn-ghost" onClick={() => void generateEntries(generationScope.entryIds, generationScope.regenerate)}>
+                {isZh ? "重试" : "Retry"}
+              </button>
+            ) : null}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -232,7 +272,12 @@ function AuthoringGroundBook({
             type="button"
             className="btn-secondary text-sm disabled:opacity-40"
             disabled={blocked}
-            onClick={() => void run("catalog", async () => { await persistIfDirty(); return postApi("/authoring/ground/catalog", { bookId }); })}
+            onClick={() => void run("catalog", async () => {
+              await persistIfDirty();
+              const result = await postApi<{ runId?: string; status?: string }>("/authoring/ground/catalog", { bookId });
+              if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
+              return result;
+            })}
           >
             {busy === "catalog" ? (isZh ? "拟定中…" : "Planning…") : (isZh ? "根据正典拟定设定目录" : "Propose catalog")}
           </button> : <DropdownMenu>
@@ -240,7 +285,11 @@ function AuthoringGroundBook({
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => { setBatchMode((value) => !value); setSelected([]); }}>{batchMode ? (isZh ? "结束多选" : "Finish selecting") : (isZh ? "批量选择" : "Select a batch")}</DropdownMenuItem>
               <DropdownMenuItem disabled={generationScope.entryIds.length === 0} onClick={() => generationScope.regenerate ? setGeneration(generationScope) : void generateEntries(generationScope.entryIds, false, requirementNotes)}>{generateLabel}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void run("catalog", () => postApi("/authoring/ground/catalog", { bookId }))}>{isZh ? "重新拟定目录" : "Rebuild catalog"}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void run("catalog", async () => {
+                const result = await postApi<{ runId?: string; status?: string }>("/authoring/ground/catalog", { bookId });
+                if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
+                return result;
+              })}>{isZh ? "重新拟定目录" : "Rebuild catalog"}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>}
         </div>
@@ -410,9 +459,14 @@ function AuthoringGroundBook({
           if (generation.issueIds) {
             const scope = generation.report ? groundRevisionScope(entries, generation.report, generation.issueIds, generation.reuseStale) : null;
             if (!scope || "error" in scope || scope.entryIds.join("\0") !== generation.entryIds.join("\0")) throw new Error(isZh ? "修订目标已变化，请关闭窗口并重新选择意见。" : "Revision targets changed. Close this window and select the notes again.");
-            await postApi("/authoring/ground/revise", { bookId, reportId: generation.report!.reportId, selectedIssueIds: generation.issueIds, reuseStale: generation.reuseStale, requirements });
-          } else await postApi("/authoring/ground/generate", { bookId, entryIds: generation.entryIds, regenerate: generation.regenerate ?? true, requirements: withGenerationReview(requirements, generationNotes) });
-          artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); setReportOpen(false); return true;
+            const revised = await postApi<{ runId?: string; status?: string }>("/authoring/ground/revise", { bookId, reportId: generation.report!.reportId, selectedIssueIds: generation.issueIds, reuseStale: generation.reuseStale, requirements });
+            if (isBackgroundAuthoringStart(revised) && revised.runId) setActiveRunId(revised.runId);
+          } else {
+            const generated = await postApi<{ runId?: string; status?: string }>("/authoring/ground/generate", { bookId, entryIds: generation.entryIds, regenerate: generation.regenerate ?? true, requirements: withGenerationReview(requirements, generationNotes) });
+            if (isBackgroundAuthoringStart(generated) && generated.runId) setActiveRunId(generated.runId);
+          }
+          if (!activeRunId) { artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); }
+          setReportOpen(false); return true;
         });
         if (ok === true) setGeneration(null);
         return ok === true;

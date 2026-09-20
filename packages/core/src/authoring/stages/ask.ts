@@ -31,6 +31,7 @@ import type {
   AuthoringLlmFn,
   AuthoringArtifactMeta,
   AuthoringReviewReport,
+  AuthoringRunRecord,
   CanonDocument,
   ResolvedAuthoringRole,
 } from "../types.js";
@@ -324,6 +325,8 @@ export async function generateAskCanon(input: AskRuntime & {
   readonly authorRequirement?: string;
   readonly baseCanon?: CanonDocument;
   readonly keepHandEdits?: boolean;
+  readonly runId?: string;
+  readonly onProgress?: (run: AuthoringRunRecord) => void;
 }): Promise<{ artifactId: string; version: number; canon: CanonDocument; runId: string }> {
   const authorContext = await askAuthorContext(input.root, input.conversation, input.authorRequirement);
   const manifest = await loadManifest(input.root);
@@ -332,20 +335,23 @@ export async function generateAskCanon(input: AskRuntime & {
   const baseCanon = input.baseCanon ?? (parent ? parseCanon(parent.body) : undefined);
   const keepHandEdits = input.keepHandEdits ?? Boolean(parent);
   const resolved = await resolve(input.project, "ask.main", input.root.projectRoot);
-  const runId = newRunId();
-  await saveRun(input.root, {
+  const runId = input.runId ?? newRunId();
+  const running = {
     runId,
-    stage: "ask",
-    operation: "generate",
-    roleId: "ask.main",
-    status: "running",
+    stage: "ask" as const,
+    operation: "generate" as const,
+    roleId: "ask.main" as const,
+    status: "running" as const,
     bookId: input.root.bookId,
     draftId: input.root.draftId,
+    progressLabel: "正在整理正典",
     modelSnapshot: resolved.snapshot,
-    producedArtifactIds: [],
+    producedArtifactIds: [] as string[],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  });
+  };
+  await saveRun(input.root, running);
+  input.onProgress?.(running);
   const prompt = [
     "根据对话整理一份故事正典。只输出 JSON。",
     CANON_OUTPUT_INSTRUCTIONS,
@@ -381,35 +387,41 @@ export async function generateAskCanon(input: AskRuntime & {
       candidates: { ...nextManifest.candidates, ask: artifactId },
       lastRunId: runId,
     });
-    await saveRun(input.root, {
+    const completed = {
       runId,
-      stage: "ask",
-      operation: "generate",
-      roleId: "ask.main",
-      status: "completed",
+      stage: "ask" as const,
+      operation: "generate" as const,
+      roleId: "ask.main" as const,
+      status: "completed" as const,
       bookId: input.root.bookId,
       draftId: input.root.draftId,
+      progressLabel: "正典已整理",
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: [artifactId],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    await saveRun(input.root, completed);
+    input.onProgress?.(completed);
     return { artifactId, version, canon, runId };
   } catch (error) {
-    await saveRun(input.root, {
+    const failed = {
       runId,
-      stage: "ask",
-      operation: "generate",
-      roleId: "ask.main",
-      status: "failed",
+      stage: "ask" as const,
+      operation: "generate" as const,
+      roleId: "ask.main" as const,
+      status: "failed" as const,
       error: error instanceof Error ? error.message : String(error),
       bookId: input.root.bookId,
       draftId: input.root.draftId,
+      progressLabel: "整理正典失败",
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    await saveRun(input.root, failed);
+    input.onProgress?.(failed);
     throw error;
   }
 }
@@ -417,12 +429,30 @@ export async function generateAskCanon(input: AskRuntime & {
 export async function reviewAskCanon(input: AskRuntime & {
   readonly artifactId: string;
   readonly conversation?: string;
+  readonly runId?: string;
+  readonly onProgress?: (run: AuthoringRunRecord) => void;
 }): Promise<AuthoringReviewReport> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到要审查的正典。");
   const authorContext = await askAuthorContext(input.root, input.conversation);
   const resolved = await resolve(input.project, "ask.review", input.root.projectRoot);
-  const runId = newRunId();
+  const runId = input.runId ?? newRunId();
+  const running = {
+    runId,
+    stage: "ask" as const,
+    operation: "review" as const,
+    roleId: "ask.review" as const,
+    status: "running" as const,
+    bookId: input.root.bookId,
+    draftId: input.root.draftId,
+    progressLabel: "正在审查正典",
+    modelSnapshot: resolved.snapshot,
+    producedArtifactIds: [] as string[],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await saveRun(input.root, running);
+  input.onProgress?.(running);
   const extras = [
     authorContext.prompt,
     "核对正典是否完整整理了对话已明确的主角与核心欲望、叙事视角与文风、故事边界、初始方向；如有遗漏，请在 evidence 中引用依据，说明应补回什么。没有依据的内容应列为具体待确认问题，不要建议杜撰，也不要把作者主动待定当成缺陷。",
@@ -444,20 +474,23 @@ export async function reviewAskCanon(input: AskRuntime & {
     ],
   });
   await saveReport(input.root, report);
-  await saveRun(input.root, {
+  const completed = {
     runId,
-    stage: "ask",
-    operation: "review",
-    roleId: "ask.review",
-    status: "completed",
+    stage: "ask" as const,
+    operation: "review" as const,
+    roleId: "ask.review" as const,
+    status: "completed" as const,
     reportId: report.reportId,
     bookId: input.root.bookId,
     draftId: input.root.draftId,
+    progressLabel: "审查完成",
     modelSnapshot: resolved.snapshot,
-    producedArtifactIds: [],
+    producedArtifactIds: [] as string[],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  });
+  };
+  await saveRun(input.root, completed);
+  input.onProgress?.(completed);
   return report;
 }
 
@@ -468,7 +501,9 @@ export async function reviseAskCanon(input: AskRuntime & {
   readonly extraRequirement?: string;
   readonly conversation?: string;
   readonly reuseStale?: boolean;
-}): Promise<{ artifactId: string; version: number; canon: CanonDocument }> {
+  readonly runId?: string;
+  readonly onProgress?: (run: AuthoringRunRecord) => void;
+}): Promise<{ artifactId: string; version: number; canon: CanonDocument; runId: string }> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   const report = await loadReport(input.root, input.reportId);
   if (!loaded || !report) throw new Error("修订需要已有正典和审查报告。");
@@ -477,6 +512,24 @@ export async function reviseAskCanon(input: AskRuntime & {
   if (selected.length === 0) throw new Error("先选择要处理的意见。");
   const authorContext = await askAuthorContext(input.root, input.conversation, input.extraRequirement);
   const resolved = await resolve(input.project, "ask.main", input.root.projectRoot);
+  const runId = input.runId ?? newRunId();
+  const running = {
+    runId,
+    stage: "ask" as const,
+    operation: "revise" as const,
+    roleId: "ask.main" as const,
+    status: "running" as const,
+    bookId: input.root.bookId,
+    draftId: input.root.draftId,
+    reportId: input.reportId,
+    progressLabel: "正在按意见修订正典",
+    modelSnapshot: resolved.snapshot,
+    producedArtifactIds: [] as string[],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await saveRun(input.root, running);
+  input.onProgress?.(running);
   const prompt = [
     "按选中的审查意见更新正典。只输出 JSON。",
     CANON_OUTPUT_INSTRUCTIONS,
@@ -486,30 +539,50 @@ export async function reviseAskCanon(input: AskRuntime & {
     "当前正典：",
     loaded.body,
   ].filter(Boolean).join("\n");
-  const text = await completeRole(resolved, prompt, input.llm);
-  const canon = canonFromJson(extractJsonObject(text), parseCanon(loaded.body));
-  const version = loaded.meta.version + 1;
-  const artifactId = newArtifactId("ask", "canon");
-  await saveArtifact(input.root, {
-    artifactId,
-    stage: "ask",
-    scope: "canon",
-    version,
-    parentVersion: loaded.meta.version,
-    parentArtifactId: loaded.meta.artifactId,
-    source: "revise",
-    status: "candidate",
-    bodyPath: `artifacts/${artifactId}/body.md`,
-    inputRefs: [{ kind: "report", id: report.reportId }],
-    createdAt: new Date().toISOString(),
-    label: `正典 v${version}`,
-  }, serializeCanon(canon));
-  const manifest = await loadManifest(input.root);
-  await saveManifest(input.root, {
-    ...manifest,
-    candidates: { ...manifest.candidates, ask: artifactId },
-  });
-  return { artifactId, version, canon };
+  try {
+    const text = await completeRole(resolved, prompt, input.llm);
+    const canon = canonFromJson(extractJsonObject(text), parseCanon(loaded.body));
+    const version = loaded.meta.version + 1;
+    const artifactId = newArtifactId("ask", "canon");
+    await saveArtifact(input.root, {
+      artifactId,
+      stage: "ask",
+      scope: "canon",
+      version,
+      parentVersion: loaded.meta.version,
+      parentArtifactId: loaded.meta.artifactId,
+      source: "revise",
+      status: "candidate",
+      bodyPath: `artifacts/${artifactId}/body.md`,
+      inputRefs: [{ kind: "report", id: report.reportId }],
+      createdAt: new Date().toISOString(),
+      label: `正典 v${version}`,
+    }, serializeCanon(canon));
+    const manifest = await loadManifest(input.root);
+    await saveManifest(input.root, {
+      ...manifest,
+      candidates: { ...manifest.candidates, ask: artifactId },
+    });
+    const completed = {
+      ...running,
+      status: "completed" as const,
+      progressLabel: "正典已修订",
+      producedArtifactIds: [artifactId],
+    };
+    await saveRun(input.root, completed);
+    input.onProgress?.(completed);
+    return { artifactId, version, canon, runId };
+  } catch (error) {
+    const failed = {
+      ...running,
+      status: "failed" as const,
+      error: error instanceof Error ? error.message : String(error),
+      progressLabel: "修订正典失败",
+    };
+    await saveRun(input.root, failed);
+    input.onProgress?.(failed);
+    throw error;
+  }
 }
 
 export async function adoptAskCanon(input: AskRuntime & {

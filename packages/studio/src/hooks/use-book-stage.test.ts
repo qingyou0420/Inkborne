@@ -40,6 +40,14 @@ describe("shouldInvalidateBookStageEvent", () => {
     expect(shouldInvalidateBookStageEvent("book:creating")).toBe(false);
     expect(shouldInvalidateBookStageEvent("session:title")).toBe(false);
   });
+
+  it("invalidates when an authoring run completes and ignores in-flight progress", () => {
+    expect(shouldInvalidateBookStageEvent("authoring:run", { status: "completed" })).toBe(true);
+    expect(shouldInvalidateBookStageEvent("authoring:run", { status: "failed" })).toBe(true);
+    expect(shouldInvalidateBookStageEvent("authoring:run", { status: "partial" })).toBe(true);
+    expect(shouldInvalidateBookStageEvent("authoring:run", { status: "cancelled" })).toBe(true);
+    expect(shouldInvalidateBookStageEvent("authoring:run", { status: "running" })).toBe(false);
+  });
 });
 
 describe("stage reads across weave adoption", () => {

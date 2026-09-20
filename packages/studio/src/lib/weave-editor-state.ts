@@ -1,5 +1,5 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
-import { insertChapterStub, parseVolumeMapTree } from "./volume-map-tree";
+import { applyVolumeMapNodeEdit, findNodeById, parseVolumeMapTree } from "./volume-map-tree";
 
 export interface WeaveChapterRange {
   readonly startChapter: number;
@@ -38,6 +38,34 @@ export async function saveOutlineMap(
   } finally {
     state.pending = false;
   }
+}
+
+export interface WeaveSegment {
+  readonly nodeId: string;
+  readonly kind: "volume" | "chapter" | "range" | "note";
+  readonly title: string;
+  readonly summary: string;
+}
+
+export function readWeaveSegment(markdown: string, nodeId: string): WeaveSegment | null {
+  const node = findNodeById(parseVolumeMapTree(markdown), nodeId);
+  if (!node) return null;
+  if (node.kind === "volume") {
+    return { nodeId: node.id, kind: "volume", title: node.title, summary: node.body || node.okr };
+  }
+  if (node.kind === "note") {
+    return { nodeId: node.id, kind: "note", title: node.title, summary: node.body };
+  }
+  return { nodeId: node.id, kind: node.kind, title: node.title, summary: node.summary };
+}
+
+/** Replace one volume/chapter/note block and keep leading notes and other sections verbatim. */
+export function replaceWeaveSegment(
+  markdown: string,
+  nodeId: string,
+  next: { readonly title?: string; readonly summary?: string },
+): string {
+  return applyVolumeMapNodeEdit(markdown, nodeId, next);
 }
 
 export function appendUnplannedChapter(markdown: string, nextWrittenChapter: number) {

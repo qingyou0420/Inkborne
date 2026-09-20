@@ -121,7 +121,7 @@ function OutlineWorkspaceBook({
   sse: _sse,
 }: OutlineWorkspaceProps) {
   const { data, loading, error } = useApi<BookData>(`/books/${bookId}`);
-  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data: authoring, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const authoringBook = authoring?.authoringBook === true;
   const restoredEdit = useRef(pendingOutlineEdits.get(bookId));
   const [volumeMap, setVolumeMap] = useState("");
@@ -152,7 +152,8 @@ function OutlineWorkspaceBook({
 
   const isZh = data?.book.language !== "en";
   const decision = useDraftDecision(isZh);
-  const tree = useMemo(() => parseVolumeMapTree(volumeMap), [volumeMap]);
+  const outlineSource = authoring?.candidateWeave?.body || volumeMap;
+  const tree = useMemo(() => parseVolumeMapTree(outlineSource), [outlineSource]);
   const written = useMemo(
     () => new Set((data?.chapters ?? []).filter((chapter) => chapter.status).map((chapter) => chapter.number)),
     [data?.chapters],
@@ -306,8 +307,8 @@ function OutlineWorkspaceBook({
 
   const selectNode = async (id: string) => {
     if (id === selectedId || mapState.current.pending) return;
-    if (showingBookOutline && weaveBeforeLeave.current && !(await weaveBeforeLeave.current())) return;
-    if (!showingBookOutline && !(await finishSelected())) return;
+    if (showingBookOutline && !authoringBook && weaveBeforeLeave.current && !(await weaveBeforeLeave.current())) return;
+    if (!showingBookOutline && !authoringBook && !(await finishSelected())) return;
     setEditingSelected(false);
     const node = findNodeById(tree, id);
     if (node?.kind === "volume" && node.startChapter != null && node.endChapter != null) {
@@ -556,21 +557,25 @@ function OutlineWorkspaceBook({
               </div>
 
               <div className="one-document space-y-4 min-h-[360px]" data-testid="outline-detail">
-                <div hidden={!showingBookOutline}>
+                <div hidden={!showingBookOutline && !authoringBook}>
                   <AuthoringWeavePanel
                     bookId={bookId}
                     targetChapters={targetChapters}
                     isZh={isZh}
-                    active={showingBookOutline}
+                    active={showingBookOutline || authoringBook}
                     preferredVolume={preferredVolume}
+                    selectedNodeId={showingBookOutline ? null : selectedId}
+                    adoptedMap={volumeMap}
                     onRegisterBeforeLeave={registerWeaveBeforeLeave}
                     onGoAsk={() => nav.toAsk(bookId)}
+                    onChanged={() => { void refetchAuthoring(); }}
                     onAdopted={() => {
                       void reloadVolumeMap();
+                      void refetchAuthoring();
                     }}
                   />
                 </div>
-                {!showingBookOutline && <div className="space-y-4">
+                {!showingBookOutline && !authoringBook && <div className="space-y-4">
                 <p className="text-xs text-muted-foreground">{isZh ? "已采用卷纲" : "Adopted outline"}{selectedDirty ? (isZh ? " · 未保存修改" : " · Unsaved changes") : ""}</p>
                 {detachedDraft ? (
                   <div className="space-y-3">

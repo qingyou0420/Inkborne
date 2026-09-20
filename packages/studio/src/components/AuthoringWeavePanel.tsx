@@ -14,7 +14,7 @@ import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-works
 import { GenerationRequirements } from "./GenerationRequirements";
 import { resolveAdoptArtifactId, workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
-import { pollWeaveRun, resolveWeaveVolumeRange } from "../lib/weave-editor-state";
+import { pollWeaveRun, readWeaveSegment, replaceWeaveSegment, resolveWeaveVolumeRange } from "../lib/weave-editor-state";
 import { weaveLengthGateCopy } from "../lib/stage-copy";
 import { LiteraryEmpty } from "./LiteraryEmpty";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
@@ -66,6 +66,9 @@ export function AuthoringWeavePanel({
   onRegisterBeforeLeave,
   preferredVolume,
   onGoAsk,
+  selectedNodeId,
+  adoptedMap,
+  onChanged,
 }: {
   readonly bookId: string;
   readonly targetChapters: number;
@@ -75,6 +78,9 @@ export function AuthoringWeavePanel({
   readonly onRegisterBeforeLeave?: (guard: (() => Promise<boolean>) | null) => void;
   readonly preferredVolume?: { readonly startChapter: number; readonly endChapter: number } | null;
   readonly onGoAsk?: () => void;
+  readonly selectedNodeId?: string | null;
+  readonly adoptedMap?: string;
+  readonly onChanged?: () => void;
 }) {
   const { data, error: workspaceError, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const coverage = data?.manifest?.coverage;
@@ -111,8 +117,8 @@ export function AuthoringWeavePanel({
     ? canonTarget
     : (targetChapters || coverage?.chaptersTarget || 0);
   const adoptedId = data?.manifest?.adopted?.weave;
-  const hasAdoptedStructure = Boolean(adoptedId);
-  const plannedVolumes = parseVolumeMapTree(candidate?.body ?? "").volumes
+  const structureBody = candidate?.body || adoptedMap || "";
+  const plannedVolumes = parseVolumeMapTree(structureBody).volumes
     .filter((volume) => volume.startChapter != null && volume.endChapter != null)
     .map((volume) => ({
       volumeNumber: volume.volumeNumber,
@@ -125,6 +131,8 @@ export function AuthoringWeavePanel({
   const filledChapterCount = parseVolumeMapTree(candidate?.body ?? "").chapterCount;
   const isStructureCandidate = currentScope === "structure"
     || (filledChapterCount === 0 && plannedVolumes.length > 0);
+  const hasValidVolumes = plannedVolumes.length > 0;
+  const selectedSegment = selectedNodeId ? readWeaveSegment(editBody || structureBody, selectedNodeId) : null;
   const run = liveRun ?? (activeRunId && lastWeave?.runId === activeRunId ? lastWeave : null);
   const running = busy === "generate" || Boolean(run && (run.status === "running" || run.status === "pausing"));
 
@@ -156,6 +164,7 @@ export function AuthoringWeavePanel({
       },
       settled: async () => {
         await refetch();
+        onChanged?.();
         if (!cancelled) setBusy((current) => current === "generate" ? null : current);
       },
       error: (error) => setPollError(error instanceof Error ? error.message : String(error)),
@@ -164,7 +173,7 @@ export function AuthoringWeavePanel({
       cancelled = true;
       stop();
     };
-  }, [activeRunId, bookId, refetch, pollEpoch]);
+  }, [activeRunId, bookId, onChanged, refetch, pollEpoch]);
 
   const runAction = async (label: string, fn: () => Promise<unknown>, after?: "adopt") => {
     if (actionRef.current) return undefined;
@@ -174,6 +183,7 @@ export function AuthoringWeavePanel({
     try {
       const result = await fn();
       await refetch();
+      onChanged?.();
       if (after === "adopt") onAdopted?.();
       return result;
     } catch (error) {
@@ -204,6 +214,17 @@ export function AuthoringWeavePanel({
     if (pendingWeaveEdits.get(bookId) === savingDraft) pendingWeaveEdits.delete(bookId);
     await refetch();
     return saved.artifactId;
+  };
+
+  const changeSegment = (title: string, summary: string) => {
+    if (!selectedSegment || actionRef.current || running) return;
+    const next = replaceWeaveSegment(editBody || structureBody, selectedSegment.nodeId, { title, summary });
+    const changed = next !== savedBodyRef.current;
+    dirtyRef.current = changed;
+    setDirty(changed);
+    setEditBody(next);
+    if (changed && editBaseId.current) pendingWeaveEdits.set(bookId, { body: next, baseId: editBaseId.current, savedBody: savedBodyRef.current });
+    else pendingWeaveEdits.delete(bookId);
   };
 
   const applyVolumeRange = (volume?: { startChapter: number; endChapter: number }) => {
@@ -366,8 +387,13 @@ export function AuthoringWeavePanel({
         })) === true
           : generation.mode === "structure"
             ? (await runAction("generate", async () => {
-              await postApi("/authoring/weave/structure", { bookId, requirements });
+              const result = await postApi<{ runId?: string; status?: string }>("/authoring/weave/structure", { bookId, requirements });
               pendingSavedId.current = undefined;
+              if (result.runId) {
+                setActiveRunId(result.runId);
+                setPollEpoch((epoch) => epoch + 1);
+                setLiveRun({ runId: result.runId, status: result.status ?? "running" });
+              }
               return true;
             })) === true
             : await startGenerate(withGenerationReview(requirements, generationNotes));
@@ -422,7 +448,29 @@ export function AuthoringWeavePanel({
         )}
       </RegenerateDialog>
       {candidate || editBaseId.current ? (
-        editing ? <textarea
+        editing && selectedSegment ? <div className="space-y-3" data-testid="weave-segment-editor">
+          <label className="block text-sm">
+            {isZh ? (selectedSegment.kind === "volume" ? "卷题" : "章题") : "Title"}
+            <input
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-serif"
+              value={selectedSegment.title}
+              disabled={Boolean(busy) || running}
+              onChange={(event) => changeSegment(event.target.value, selectedSegment.summary)}
+              data-testid="weave-segment-title"
+            />
+          </label>
+          <label className="block text-sm">
+            {isZh ? (selectedSegment.kind === "volume" ? "本卷说明" : "章概要") : "Summary"}
+            <textarea
+              className="prose-body mt-1 min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2"
+              value={selectedSegment.summary}
+              readOnly={Boolean(busy) || running}
+              aria-label={isZh ? "当前选中节段" : "Selected outline segment"}
+              onChange={(event) => changeSegment(selectedSegment.title, event.target.value)}
+              data-testid="weave-candidate-body"
+            />
+          </label>
+        </div> : editing ? <textarea
           className="prose-body min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2"
           value={editBody}
           readOnly={Boolean(busy) || running}
@@ -438,12 +486,12 @@ export function AuthoringWeavePanel({
             else pendingWeaveEdits.delete(bookId);
           }}
           data-testid="weave-candidate-body"
-        /> : <ManuscriptView body={editBody} />
+        /> : <ManuscriptView body={selectedSegment ? `${selectedSegment.title}\n\n${selectedSegment.summary}` : editBody} />
       ) : (
         <p className="text-sm text-muted-foreground">
           {isZh
-            ? (hasAdoptedStructure ? "还没有本章概要候选。可按卷或章范围生成。" : `还没有分卷规划。先生成全书与分卷结构（全书 ${target || "—"} 章）。`)
-            : (hasAdoptedStructure ? "No chapter-summary candidate yet." : "Generate the book/volume structure first.")}
+            ? (hasValidVolumes ? "还没有本章概要候选。可按卷或章范围生成。" : `还没有分卷规划。先生成全书与分卷结构（全书 ${target || "—"} 章）。`)
+            : (hasValidVolumes ? "No chapter-summary candidate yet." : "Generate the book/volume structure first.")}
         </p>
       )}
       {failure ? <p role="alert" className="text-sm text-destructive">{failure}</p> : null}
@@ -462,10 +510,10 @@ export function AuthoringWeavePanel({
               onClick: () => goBookAuthoringStage(bookId, "write"),
             }); return result;
           }, "adopt")}>{currentId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
-          {hasAdoptedStructure ? <button type="button" data-testid="outline-weave-chapters" disabled={Boolean(busy) || running || dirty || currentId !== adoptedId} onClick={openChapterGeneration}>{isZh ? "生成本卷章概要" : "Plan chapter summaries"}</button> : null}
+          {hasValidVolumes ? <button type="button" data-testid="outline-weave-chapters" disabled={Boolean(busy) || running || dirty} onClick={openChapterGeneration}>{isZh ? "生成本卷章概要" : "Plan chapter summaries"}</button> : null}
           <span className="text-xs text-muted-foreground">{isZh ? "作用于整份规划" : "Applies to the entire outline"}</span>
           <DropdownMenu><DropdownMenuTrigger className="quiet" aria-label={isZh ? "成果操作" : "Manuscript actions"} disabled={Boolean(busy) || running || dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger><DropdownMenuContent align="end">
-            <DropdownMenuItem disabled={!hasAdoptedStructure || currentId !== adoptedId} onClick={openChapterGeneration}>{isZh ? "生成本次章概要" : "Plan chapter range"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!hasValidVolumes} onClick={openChapterGeneration}>{isZh ? "生成本次章概要" : "Plan chapter range"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setGeneration({ mode: "structure" })}>{isZh ? "重新规划分卷" : "Replan volumes"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!report} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
@@ -476,22 +524,27 @@ export function AuthoringWeavePanel({
           className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
           disabled={Boolean(busy) || running}
           onClick={() => {
-            if (hasAdoptedStructure) {
+            if (hasValidVolumes) {
               openChapterGeneration();
               return;
             }
             void runAction("generate", async () => {
-              await postApi("/authoring/weave/structure", { bookId, requirements: requirementNotes.trim() || undefined });
+              const result = await postApi<{ runId?: string; status?: string }>("/authoring/weave/structure", { bookId, requirements: requirementNotes.trim() || undefined });
               pendingSavedId.current = undefined;
+              if (result.runId) {
+                setActiveRunId(result.runId);
+                setPollEpoch((epoch) => epoch + 1);
+                setLiveRun({ runId: result.runId, status: result.status ?? "running" });
+              }
             });
           }}
         >
           {running
             ? (isZh ? `正在规划… ${run?.progressLabel ?? ""}` : `Planning… ${run?.progressLabel ?? ""}`)
-            : hasAdoptedStructure
+            : hasValidVolumes
               ? (isZh ? "生成本卷章概要" : "Plan chapter summaries")
               : (isZh ? "生成分卷规划" : "Plan volumes")}
-        </button>{!hasAdoptedStructure ? <GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={Boolean(busy) || running} /> : null}</>}
+        </button>{!hasValidVolumes ? <GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={Boolean(busy) || running} /> : null}</>}
         {canResume && !running ? (
           <button
             type="button"

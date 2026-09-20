@@ -83,10 +83,13 @@ export interface AuthoringWorkspace {
     readonly runId: string;
     readonly stage: string;
     readonly status: string;
+    readonly operation?: string;
     readonly progressDone?: number;
     readonly progressTotal?: number;
     readonly progressLabel?: string;
     readonly error?: string;
+    readonly createdAt?: string;
+    readonly producedArtifactIds?: ReadonlyArray<string>;
     readonly checkpoint?: {
       readonly requestedStart?: number;
       readonly requestedEnd?: number;
