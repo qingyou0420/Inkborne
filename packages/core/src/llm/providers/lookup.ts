@@ -12,10 +12,29 @@ const PROVIDER_PRIORITY: readonly string[] = [
   "openrouter", "aihubmix", "novita",
 ];
 
+// Explicit gateway IDs only: never strip arbitrary vendor prefixes. These
+// limits were checked against ZenMux's route metadata on 2026-09-17. Gemini's
+// gateway limit is one token below Google's native API limit (65,536).
+// https://zenmux.ai/google/gemini-3.1-pro-preview
+// https://zenmux.ai/anthropic/claude-opus-5
+const VERIFIED_GATEWAY_MODELS: readonly InkosModel[] = [
+  {
+    id: "google/gemini-3.1-pro-preview",
+    maxOutput: 65_535,
+    contextWindowTokens: 1_048_576,
+  },
+  {
+    id: "anthropic/claude-opus-5",
+    maxOutput: 128_000,
+    contextWindowTokens: 1_000_000,
+  },
+];
+
 /**
- * 两层 lookup：
+ * 三层 lookup：
  * - Layer 1: 已知 provider 精确查（整串比较，不拆斜线）
  * - Layer 2: 全局扫所有 provider 的 models，按 provider id 优先级取第一条
+ * - Layer 3: 已核实的精确聚合商 ID（保留完整请求 ID，不拆斜线）
  * - 都 miss: 返回 undefined，调用方走保守默认
  *
  * 不做斜线前缀拆分。lobe 的 processModelList 证实了"靠调用入口带 provider 消歧"
@@ -38,7 +57,9 @@ export function lookupModel(
     const hit = p.models.find((m) => m.id.toLowerCase() === lowerId);
     if (hit) matches.push({ model: hit, providerId: p.id });
   }
-  if (matches.length === 0) return undefined;
+  if (matches.length === 0) {
+    return VERIFIED_GATEWAY_MODELS.find((model) => model.id.toLowerCase() === lowerId);
+  }
 
   matches.sort((a, b) => {
     const ai = PROVIDER_PRIORITY.indexOf(a.providerId);

@@ -575,6 +575,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           activeBookId,
           sessionKind,
           playMode,
+          authoringStage: options?.authoringStage,
           actionSource,
           requestedIntent: options?.requestedIntent,
           actionPayload: options?.actionPayload,

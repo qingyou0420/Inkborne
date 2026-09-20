@@ -1375,6 +1375,7 @@ describe("chat message actions", () => {
 
     await store.getState().sendMessage(sessionId, "写下一章", {
       sessionKind: "book",
+      authoringStage: "ask",
       requestedSkills: ["style-guard"],
     });
 
@@ -1384,6 +1385,8 @@ describe("chat message actions", () => {
     expect(agentCalls).toHaveLength(2);
     const firstBody = JSON.parse((agentCalls[0]?.[1] as { body: string }).body);
     const retryBody = JSON.parse((agentCalls[1]?.[1] as { body: string }).body);
+    expect(firstBody.authoringStage).toBe("ask");
+    expect(retryBody.authoringStage).toBe("ask");
     expect(retryBody.clientRequestId).toEqual(expect.any(String));
     expect(retryBody.clientRequestId).not.toBe(firstBody.clientRequestId);
     const { clientRequestId: firstRequestId, ...firstBusinessParams } = firstBody;

@@ -1,6 +1,6 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appendUnplannedChapter, pollWeaveRun, saveOutlineMap } from "./weave-editor-state";
+import { appendUnplannedChapter, pollWeaveRun, resolveWeaveVolumeRange, saveOutlineMap } from "./weave-editor-state";
 import { applyOutlineWorkspaceSave, parseVolumeMapTree } from "./volume-map-tree";
 
 function deferred<T>() {
@@ -11,6 +11,19 @@ function deferred<T>() {
 }
 
 afterEach(() => vi.useRealTimers());
+
+describe("weave generation and revision range", () => {
+  const volumes = [{ startChapter: 1, endChapter: 50 }, { startChapter: 51, endChapter: 100 }, { startChapter: 101, endChapter: 260 }];
+
+  it("starts with the selected volume instead of the full 260 chapters", () => {
+    expect(resolveWeaveVolumeRange(volumes, volumes[1], 260)).toEqual({ startChapter: 51, endChapter: 100 });
+    expect(resolveWeaveVolumeRange(volumes, null, 260)).toEqual({ startChapter: 1, endChapter: 50 });
+  });
+
+  it("keeps the selected volume when its end chapter changed after replanning", () => {
+    expect(resolveWeaveVolumeRange(volumes, { startChapter: 51, endChapter: 120 }, 260)).toEqual({ startChapter: 51, endChapter: 100 });
+  });
+});
 
 describe("adopted outline writes", () => {
   it("keeps the edited chapter when adding a new chapter to the same saved file", async () => {
@@ -57,6 +70,20 @@ describe("adopted outline writes", () => {
 });
 
 describe("weave run polling", () => {
+  it("surfaces a revision failure reason and refreshes its saved partial candidate", async () => {
+    vi.useFakeTimers();
+    const result = { runId: "revision", status: "partial", error: "模型达到输出上限，请继续剩余范围。", progressDone: 4, progressTotal: 50 };
+    const read = vi.fn().mockResolvedValue(result);
+    const update = vi.fn();
+    const settled = vi.fn().mockResolvedValue(undefined);
+    const stop = pollWeaveRun({ read, update, settled, error: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(update).toHaveBeenCalledExactlyOnceWith(result);
+    expect(settled).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(1);
+    stop();
+  });
   it("never overlaps slow reads and stops once the terminal result is refreshed", async () => {
     vi.useFakeTimers();
     const slow = deferred<{ status: string }>();

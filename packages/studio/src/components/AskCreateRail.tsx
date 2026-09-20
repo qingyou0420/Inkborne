@@ -8,40 +8,39 @@ import { useMemo, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AskStoryCard } from "./AskStoryCard";
 import {
-  createBookInstruction,
   extractStoryCardDraft,
-  mergeStoryCard,
   storyCardReady,
   type StoryCardDraft,
 } from "../lib/story-card";
+import { buildAskCreateRequest } from "../lib/ask-create-request";
 import { showToast } from "../lib/toast";
 import { chatSelectors, useChatStore } from "../store/chat";
-import { getProposedActionDetails } from "./chat/ToolExecutionSteps";
+import { getProposedActionDetails, type ProposedActionDetails } from "./chat/ToolExecutionSteps";
 
 export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
+  const sessionId = useChatStore((state) => state.activeSessionId);
+  return <AskCreateSessionRail key={sessionId ?? "pending"} isZh={isZh} />;
+}
+
+function AskCreateSessionRail({ isZh }: { readonly isZh: boolean }) {
   const messages = useChatStore(chatSelectors.activeMessages);
-  const activeSession = useChatStore(chatSelectors.activeSession);
   const activeSessionId = useChatStore((state) => state.activeSessionId);
   const sendMessage = useChatStore((state) => state.sendMessage);
   const createSession = useChatStore((state) => state.createSession);
   const [local, setLocal] = useState<Partial<StoryCardDraft>>({});
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmCard, setConfirmCard] = useState<StoryCardDraft | null>(null);
+  const [confirmProposal, setConfirmProposal] = useState<ProposedActionDetails | null>(null);
+  const [confirmEdits, setConfirmEdits] = useState<Partial<StoryCardDraft>>({});
   const [pending, setPending] = useState(false);
 
   const proposed = useMemo(() => {
     const execs = messages.flatMap((message) => message.toolExecutions ?? []);
     for (let i = execs.length - 1; i >= 0; i -= 1) {
+      if (execs[i]!.status !== "completed") continue;
       const details = getProposedActionDetails(execs[i]!);
       if (details?.action === "create_book") {
-        const payload = details.actionPayload?.createBook;
-        return {
-          title: payload?.title ?? details.title,
-          genre: payload?.genre,
-          oneLine: payload?.oneLine,
-          synopsis: payload?.synopsis,
-          tone: payload?.tone,
-        };
+        return details;
       }
     }
     return null;
@@ -49,14 +48,21 @@ export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
 
   const card = extractStoryCardDraft({
     messages: messages.map((message) => ({ role: message.role, content: message.content })),
-    proposed,
+    proposed: proposed ? { ...proposed.actionPayload?.createBook, title: proposed.actionPayload?.createBook?.title ?? proposed.title } : null,
     local,
   });
 
   const openConfirm = () => {
     if (!storyCardReady(card)) return;
     setConfirmCard(card);
+    setConfirmProposal(proposed);
+    setConfirmEdits({ ...local });
     setConfirmOpen(true);
+  };
+
+  const editConfirmation = (key: keyof StoryCardDraft, value: string) => {
+    setConfirmCard((prev) => prev ? { ...prev, [key]: value } : prev);
+    setConfirmEdits((prev) => ({ ...prev, [key]: value }));
   };
 
   const confirmCreate = async () => {
@@ -68,20 +74,13 @@ export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
       if (!sessionId) {
         sessionId = await createSession(null, "book-create");
       }
-      await sendMessage(sessionId, createBookInstruction(next, isZh), {
+      const request = buildAskCreateRequest({ card: next, isZh, proposal: confirmProposal, edits: confirmEdits });
+      await sendMessage(sessionId, request.instruction, {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
-        actionPayload: {
-          createBook: {
-            title: next.workingTitle,
-            ...(next.genre ? { genre: next.genre } : {}),
-            language: isZh ? "zh" : "en",
-            oneLine: next.oneLine,
-            synopsis: next.synopsis,
-            ...(next.tone ? { tone: next.tone } : {}),
-          },
-        },
+        actionPayload: request.actionPayload,
+        requestedSkills: request.requestedSkills,
       });
       setConfirmOpen(false);
     } catch (error) {
@@ -99,14 +98,14 @@ export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
         isZh={isZh}
         confirmEnabled
         confirmPending={pending}
-        onChange={(patch) => setLocal((prev) => mergeStoryCard({ ...card, ...prev }, patch))}
+        onChange={(patch) => setLocal((prev) => ({ ...prev, ...patch }))}
         onConfirm={openConfirm}
       />
       <ConfirmDialog
         open={confirmOpen}
-        title={isZh ? "就此建书" : "Create this book"}
-        message={isZh ? "确认后会按这三项建书，并写入故事卡。" : "Confirm to create the book from these three fields."}
-        confirmLabel={pending ? (isZh ? "建书中…" : "Creating…") : (isZh ? "确认建书" : "Confirm")}
+        title={isZh ? "建书并整理正典" : "Create book and prepare canon"}
+        message={isZh ? "保留完整问心约定，按本次修改建书并整理候选正典，待你核对采用。" : "Preserve the full Ask requirements, apply these edits, and prepare a canon candidate for your review and adoption."}
+        confirmLabel={pending ? (isZh ? "整理正典中…" : "Preparing canon…") : (isZh ? "建书并整理正典" : "Create and prepare canon")}
         cancelLabel={isZh ? "再改改" : "Edit more"}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => void confirmCreate()}
@@ -116,20 +115,20 @@ export function AskCreateRail({ isZh }: { readonly isZh: boolean }) {
             <ConfirmField
               label={isZh ? "暂定书名" : "Title"}
               value={confirmCard.workingTitle}
-              onChange={(value) => setConfirmCard((prev) => prev ? { ...prev, workingTitle: value } : prev)}
+              onChange={(value) => editConfirmation("workingTitle", value)}
               testId="confirm-card-title"
             />
             <ConfirmField
               label={isZh ? "一句话故事" : "One-liner"}
               value={confirmCard.oneLine}
-              onChange={(value) => setConfirmCard((prev) => prev ? { ...prev, oneLine: value } : prev)}
+              onChange={(value) => editConfirmation("oneLine", value)}
               testId="confirm-card-one-line"
             />
             <ConfirmField
               label={isZh ? "初步梗概" : "Synopsis"}
               value={confirmCard.synopsis}
               multiline
-              onChange={(value) => setConfirmCard((prev) => prev ? { ...prev, synopsis: value } : prev)}
+              onChange={(value) => editConfirmation("synopsis", value)}
               testId="confirm-card-synopsis"
             />
           </div>

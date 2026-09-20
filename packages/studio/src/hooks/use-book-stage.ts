@@ -35,18 +35,19 @@ export function invalidateBookStage(bookId?: string): void {
   for (const notify of listeners) notify();
 }
 
-function loadStage(bookId: string, version: number): Promise<BookStageView | null> {
+export function loadBookStage(bookId: string, version: number): Promise<BookStageView | null> {
   const key = `${bookId}@${version}`;
   const existing = inflight.get(key);
   if (existing) return existing;
   const promise = fetchJson<BookStageView>(`/books/${encodeURIComponent(bookId)}/stage`)
     .then((data) => {
-      cache.set(bookId, { version, data });
+      // A pre-adoption request may finish after invalidation and a newer read.
+      if (inflight.get(key) === promise) cache.set(bookId, { version, data });
       return data;
     })
     .catch(() => null)
     .finally(() => {
-      inflight.delete(key);
+      if (inflight.get(key) === promise) inflight.delete(key);
     });
   inflight.set(key, promise);
   return promise;
@@ -79,7 +80,7 @@ export function useBookStage(bookId: string | undefined): BookStageView | null {
       return;
     }
     let cancelled = false;
-    void loadStage(bookId, version).then((next) => {
+    void loadBookStage(bookId, version).then((next) => {
       if (!cancelled) setData(next);
     });
     return () => {

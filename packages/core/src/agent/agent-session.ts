@@ -54,7 +54,7 @@ import {
   createNarrativeForecastGetTool,
   createNarrativeForecastSelectTool,
 } from "./forecast-tools.js";
-import { createBookContextTransform, createInteractiveFilmContextTransform } from "./context-transform.js";
+import { createAskContextTransform, createBookContextTransform, createInteractiveFilmContextTransform } from "./context-transform.js";
 import {
   appendTranscriptEvents,
   readTranscriptEvents,
@@ -105,6 +105,8 @@ export interface AgentSessionConfig {
   bookId: string | null;
   /** Studio conversation surface. Used to narrow the visible tools. */
   sessionKind?: SessionKind;
+  /** Four-stage Ask chat discusses source material; production stays in stage actions. */
+  authoringStage?: "ask";
   /** Play interaction mode chosen by the player at launch (guided = choice-only, open = free text). */
   playMode?: PlayMode;
   /** Where this turn came from. Button/slash turns can execute confirmed production actions. */
@@ -187,6 +189,7 @@ interface CachedAgent {
   bookId: string | null;
   activeBookRef: { current: string | null };
   sessionKind: SessionKind;
+  authoringStage: AgentSessionConfig["authoringStage"];
   actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
   requestedIntent: AgentSessionConfig["requestedIntent"];
   actionPayloadKey: string;
@@ -367,20 +370,22 @@ function attachmentImages(attachments: ReadonlyArray<AgentSessionAttachment> | u
     }));
 }
 
-function localAssistantStopStream(model: Model<Api>): AssistantMessageEventStream {
+function localAssistantStopStream(model: Model<Api>, errorMessage?: string): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   const message: AssistantMessage = {
     role: "assistant",
-    content: [],
+    content: errorMessage ? [{ type: "text", text: errorMessage }] : [],
     api: model.api,
     provider: model.provider,
     model: model.id,
     usage: EMPTY_USAGE,
-    stopReason: "stop",
+    stopReason: errorMessage ? "error" : "stop",
+    ...(errorMessage ? { errorMessage } : {}),
     timestamp: Date.now(),
   };
   queueMicrotask(() => {
-    stream.push({ type: "done", reason: "stop", message });
+    if (errorMessage) stream.push({ type: "error", reason: "error", error: message });
+    else stream.push({ type: "done", reason: "stop", message });
     stream.end(message);
   });
   return stream;
@@ -409,25 +414,49 @@ export function isTerminalProductionToolName(toolName: unknown): boolean {
     || toolName === "select_narrative_branch";
 }
 
-function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
+const MAX_PROPOSAL_REPAIR_ATTEMPTS = 2;
+
+type TerminalToolOutcome = "continue" | "stop" | "proposal-repair-exhausted";
+
+function terminalToolOutcome(messages: AgentMessage[]): TerminalToolOutcome {
   let assistantTextAfterTool = false;
+  let latestTerminalOutcome: TerminalToolOutcome | undefined;
+  let failedProposals = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message || typeof message !== "object" || !("role" in message)) continue;
     const role = (message as { role?: unknown }).role;
-    if (role === "user") return false;
+    if (role === "user") break;
     if (role === "assistant") {
       const text = extractTextFromAssistant(message as AssistantMessage).trim();
       if (text) assistantTextAfterTool = true;
       continue;
     }
     if (role !== "toolResult") continue;
-    const toolName = (message as { toolName?: unknown }).toolName;
+    const { toolName, isError } = message as { toolName?: unknown; isError?: boolean };
+    if (toolName === "propose_action" && isError === true) failedProposals += 1;
     if (isTerminalProductionToolName(toolName)) {
-      return !assistantTextAfterTool;
+      if (latestTerminalOutcome === undefined) {
+        // A rejected proposal has no production side effects. Let the model
+        // correct its arguments, while retaining the one-shot boundary for
+        // successful proposals and all real production tools (even failures).
+        latestTerminalOutcome = assistantTextAfterTool
+          || (toolName === "propose_action" && isError === true)
+          ? "continue"
+          : "stop";
+      }
     }
   }
-  return false;
+  if (latestTerminalOutcome === "continue" && failedProposals > MAX_PROPOSAL_REPAIR_ATTEMPTS) {
+    return "proposal-repair-exhausted";
+  }
+  return latestTerminalOutcome ?? "continue";
+}
+
+function proposalRepairFailureMessage(language: string): string {
+  return language === "zh"
+    ? "模型生成的确认卡参数格式不正确，自动纠正两次后仍未通过校验。本次没有执行建书或其他创作操作；请重试生成确认卡。"
+    : "The model returned invalid confirmation-card arguments after two automatic repair attempts. No book creation or other production action was executed. Please retry generating the confirmation card.";
 }
 
 async function runInAgentSessionQueue<T>(
@@ -792,6 +821,7 @@ type CreateAgentToolsForModeParams = {
   readonly resolveActiveBookId: () => string | null;
   readonly sessionId: string;
   readonly sessionKind: SessionKind;
+  readonly authoringStage: AgentSessionConfig["authoringStage"];
   readonly actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
   readonly requestedIntent: AgentSessionConfig["requestedIntent"];
   readonly actionPayload: AgentSessionConfig["actionPayload"];
@@ -843,6 +873,12 @@ function createModeTools(params: CreateAgentToolsForModeParams) {
     return (params.actionSource === "button" || params.actionSource === "slash")
       && params.requestedIntent === intent;
   };
+
+  // This check precedes every confirmed-action branch. Replayed legacy cards
+  // must never turn Ask discussion into foundation/chapter production.
+  if (params.authoringStage === "ask") {
+    return [scopedReadTool, createGrepTool(params.projectRoot, { activeBookId: resolveActiveBookId }), scopedLsTool, materialRetrievalTool];
+  }
 
   if (params.sessionKind === "chat") {
     if (isConfirmed("translation_create")) {
@@ -1073,6 +1109,7 @@ async function runAgentSessionUnlocked(
     }
   }
   const sessionKind: SessionKind = config.sessionKind ?? (bookId ? "book" : "chat");
+  const authoringStage = config.authoringStage;
   const playMode = config.playMode;
   const actionSource = config.actionSource ?? "free-text";
   const requestedIntent = config.requestedIntent;
@@ -1108,6 +1145,7 @@ async function runAgentSessionUnlocked(
     const projectRootChanged = cached.projectRoot !== projectRoot;
     const bookChanged = cached.bookId !== bookId;
     const sessionKindChanged = cached.sessionKind !== sessionKind;
+    const authoringStageChanged = cached.authoringStage !== authoringStage;
     const actionSourceChanged = cached.actionSource !== actionSource;
     const requestedIntentChanged = cached.requestedIntent !== requestedIntent;
     const actionPayloadChanged = cached.actionPayloadKey !== actionPayloadKey;
@@ -1126,6 +1164,7 @@ async function runAgentSessionUnlocked(
       projectRootChanged ||
       bookChanged ||
       sessionKindChanged ||
+      authoringStageChanged ||
       actionSourceChanged ||
       requestedIntentChanged ||
       actionPayloadChanged ||
@@ -1170,7 +1209,7 @@ async function runAgentSessionUnlocked(
       : initialMessages && initialMessages.length > 0
         ? plainToAgentMessages(initialMessages)
         : [];
-    let terminalToolResultTail = false;
+    let terminalToolResultTail: TerminalToolOutcome = "continue";
     const turnSkills = new Map<string, ActivatedSkillGuidance>(
       skillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
     );
@@ -1180,6 +1219,7 @@ async function runAgentSessionUnlocked(
     const allowIntentSkillSelection = actionSource === "free-text"
       && skillResolution.forcedSkillIds.length === 0;
     const baseSystemPrompt = buildAgentSystemPrompt(bookId, language, sessionKind, {
+      authoringStage,
       actionSource,
       requestedIntent,
       playWorldExists,
@@ -1200,6 +1240,7 @@ async function runAgentSessionUnlocked(
       resolveActiveBookId: () => activeBookRef.current,
       sessionId,
       sessionKind,
+      authoringStage,
       actionSource,
       requestedIntent,
       actionPayload,
@@ -1232,17 +1273,23 @@ async function runAgentSessionUnlocked(
           : agentTools,
         messages: initialAgentMessages,
       },
-      transformContext: sessionKind === "interactive-film-authoring" && bookId
-        ? createInteractiveFilmContextTransform(bookId, projectRoot)
-        : createBookContextTransform(bookId, projectRoot, { onContextCompression }),
+      transformContext: authoringStage === "ask" && bookId
+        ? createAskContextTransform(bookId, projectRoot)
+        : sessionKind === "interactive-film-authoring" && bookId
+          ? createInteractiveFilmContextTransform(bookId, projectRoot)
+          : createBookContextTransform(bookId, projectRoot, { onContextCompression }),
       convertToLlm: (messages) => {
-        terminalToolResultTail = hasUnansweredTerminalToolResult(messages);
+        terminalToolResultTail = terminalToolOutcome(messages);
         return convertAgentMessagesForModel(messages, model);
       },
       streamFn: (streamModel, context, options) => {
-        if (terminalToolResultTail) {
-          terminalToolResultTail = false;
-          return localAssistantStopStream(streamModel);
+        if (terminalToolResultTail !== "continue") {
+          const outcome = terminalToolResultTail;
+          terminalToolResultTail = "continue";
+          return localAssistantStopStream(
+            streamModel,
+            outcome === "proposal-repair-exhausted" ? proposalRepairFailureMessage(language) : undefined,
+          );
         }
         if (isLlmStubEnabled()) return stubAgentStream(streamModel, context);
         return guardedPiStream(
@@ -1265,6 +1312,7 @@ async function runAgentSessionUnlocked(
       bookId,
       activeBookRef,
       sessionKind,
+      authoringStage,
       actionSource,
       requestedIntent,
       actionPayloadKey,

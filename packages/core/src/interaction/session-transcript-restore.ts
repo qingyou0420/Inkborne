@@ -370,6 +370,56 @@ function requestKindMap(events: TranscriptEvent[]): Map<string, SessionKind | un
   );
 }
 
+function bookCreationMigrationSequence(events: TranscriptEvent[]): number | undefined {
+  let beganBookCreation = false;
+  for (const event of events) {
+    if ((event.type === "session_created" || event.type === "request_started") && event.sessionKind === "book-create") {
+      beganBookCreation = true;
+    }
+    if (beganBookCreation && event.type === "session_metadata_updated"
+      && event.sessionKind === "book" && typeof event.bookId === "string" && event.bookId.length > 0) {
+      return event.seq;
+    }
+  }
+  return undefined;
+}
+
+/** Failed model output is discarded; a submitted author brief is still source material. */
+function authoringMessageEvents(events: TranscriptEvent[], sessionKind?: SessionKind): MessageEvent[] {
+  const committed = committedMessageEvents(events, sessionKind);
+  const present = new Set(committed.map((event) => event.uuid));
+  const kinds = requestKindMap(events);
+  const migrationSeq = sessionKind === "book" ? bookCreationMigrationSequence(events) : undefined;
+  const committedRequests = new Set(committedMessageEvents(events).map((event) => event.requestId));
+  const failedRequests = new Set<string>();
+  const abortedRequests = new Set<string>();
+  let metadataKind: SessionKind | undefined;
+  for (const event of events) {
+    if ((event.type === "session_created" || event.type === "session_metadata_updated") && event.sessionKind) {
+      metadataKind = event.sessionKind;
+    }
+    if (event.type === "request_started" && !event.sessionKind && metadataKind) kinds.set(event.requestId, metadataKind);
+    if (event.type === "request_failed") {
+      failedRequests.add(event.requestId);
+      if (/\babort(?:ed|error)?\b|\bcancel(?:led|ed|lation)?\b|已取消|用户取消|用户停止/i.test(event.error)) {
+        abortedRequests.add(event.requestId);
+      }
+    }
+    if (event.type === "message" && event.role === "assistant" && isObject(event.message)
+      && event.message.stopReason === "aborted") abortedRequests.add(event.requestId);
+  }
+  const recovered = events.filter((event): event is MessageEvent => {
+    if (event.type !== "message" || event.role !== "user" || present.has(event.uuid)) return false;
+    const kind = kinds.get(event.requestId);
+    if (kind !== "book-create" && kind !== "book") return false;
+    const migratedAuthorInput = kind === "book-create" && migrationSeq !== undefined && event.seq < migrationSeq;
+    if (sessionKind && kind !== sessionKind && !migratedAuthorInput) return false;
+    if (committedRequests.has(event.requestId)) return migratedAuthorInput;
+    return failedRequests.has(event.requestId) && !abortedRequests.has(event.requestId);
+  });
+  return [...committed, ...recovered].sort((a, b) => a.seq - b.seq);
+}
+
 function textOnlyAgentMessage(event: MessageEvent): AgentMessage | null {
   const raw = event.message as Record<string, unknown>;
   if (!isObject(raw) || event.role === "toolResult") return null;
@@ -504,22 +554,32 @@ export async function restoreAgentMessagesFromTranscript(
 ): Promise<AgentMessage[]> {
   const events = await readTranscriptEvents(projectRoot, sessionId);
   const summary = buildHistoricalToolSummary(events, sessionKind);
-  const committed = committedMessageEvents(events, sessionKind);
-  const toolRequestIds = requestIdsWithToolActivity(committed);
-  const kinds = requestKindMap(events);
-  const dialogue = committed
+  const messages = authoringMessageEvents(events, sessionKind);
+  const toolRequestIds = requestIdsWithToolActivity(messages);
+  const allDialogue = messages
     .filter((event) => {
       if (!toolRequestIds.has(event.requestId)) return true;
-      // Legacy events have no sessionKind. Keep the user's own words as
-      // conversation memory, but do not replay the old tool call/result.
-      return Boolean(sessionKind && kinds.get(event.requestId) === undefined && event.role === "user");
+      // A tool call (including a failed proposal) must not erase the author's
+      // input from that turn. Fold tool output, not the story it was based on.
+      return event.role === "user";
     })
     .map((event) => textOnlyAgentMessage(event))
-    .filter((message): message is AgentMessage => message !== null)
-    .slice(-MAX_RESTORED_DIALOGUE_MESSAGES);
+    .filter((message): message is AgentMessage => message !== null);
+  const dialogue = allDialogue.slice(-MAX_RESTORED_DIALOGUE_MESSAGES);
+  // Keep the original book-create source after clarification and book migration.
+  // Ordinary book chats retain their bounded dialogue window.
+  const kinds = requestKindMap(events);
+  const creationSource = sessionKind === "book" && bookCreationMigrationSequence(events) !== undefined
+    ? new Set(messages.filter((event) => event.role === "user" && kinds.get(event.requestId) === "book-create")
+      .map((event) => isObject(event.message) ? textFromContent(event.message.content) : ""))
+    : new Set<string>();
+  const earlierAuthorInput = allDialogue.slice(0, -MAX_RESTORED_DIALOGUE_MESSAGES).filter((message) => (
+    message.role === "user" && (sessionKind === "book-create" || creationSource.has(textFromContent(message.content)))
+  ));
 
   return [
     ...(summary ? [summary] : []),
+    ...earlierAuthorInput,
     ...dialogue,
   ];
 }
@@ -865,7 +925,7 @@ export async function deriveBookSessionFromTranscript(
     updatedAt = Math.max(updatedAt, event.updatedAt);
   }
 
-  const messages = messageEventsToInteractionMessages(committedMessageEvents(events));
+  const messages = messageEventsToInteractionMessages(authoringMessageEvents(events));
 
   if (title === null) {
     title = firstUserMessageTitle(messages);

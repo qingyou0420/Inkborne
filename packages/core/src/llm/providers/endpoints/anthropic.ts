@@ -21,6 +21,15 @@ export const ANTHROPIC: InkosEndpoint = {
   writingTemperature: 1.0,
   temperatureHint: "不要同时改 temperature 和 top_p",
   models: [
+    // https://platform.claude.com/docs/en/models/opus-5/overview
+    // Thinking and visible output share this total output limit.
+    {
+      id: "claude-opus-5",
+      maxOutput: 128_000,
+      contextWindowTokens: 1_000_000,
+      enabled: true,
+      releasedAt: "2026-07-24",
+    },
     {
       id: "claude-opus-4-6",
       maxOutput: 128_000,

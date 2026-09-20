@@ -46,6 +46,7 @@ function AuthoringGroundBook({
 }) {
   const { data, error: workspaceError, loading: workspaceLoading, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const entries = data?.catalog?.entries ?? [];
+  const showLegacy = !workspaceLoading && data?.authoringBook === false && legacySections.length > 0;
   const coverage = data?.manifest?.coverage;
   const [selected, setSelected] = useState<string[]>([]);
   const [focusedId, setFocusedId] = useState<string | null>(() => pendingGroundEntry(bookId) ?? null);
@@ -283,7 +284,7 @@ function AuthoringGroundBook({
               })}
             </div>
           ))}
-          {legacySections.length > 0 ? <div data-testid="ground-toc" className="ground-legacy-directory">
+          {showLegacy ? <div data-testid="ground-toc" className="ground-legacy-directory">
             <div className="group">{isZh ? "已采用资料" : "Adopted materials"}</div>
             {legacySections.map((item) => <button
               key={item.id}

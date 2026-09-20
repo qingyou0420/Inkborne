@@ -114,6 +114,7 @@ import {
   createSpinoffBookTool,
   createImitationBookTool,
   createSubAgentTool,
+  createAskBookCandidate,
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
@@ -1304,6 +1305,8 @@ function toolResultText(result: unknown, lang: StudioLanguage = "zh"): string {
 
 async function executeConfirmedProductionAction(args: {
   readonly pipeline: PipelineRunner;
+  readonly project: ProjectConfig;
+  readonly conversation?: string;
   readonly root: string;
   readonly sessionId: string;
   readonly bookId: string | null;
@@ -1356,11 +1359,35 @@ async function executeConfirmedProductionAction(args: {
   if (args.requestedIntent === "create_book") {
     const payload = actionPayload?.createBook;
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createSubAgentTool(args.pipeline, null, args.root, {
-      actionPayload,
-      workerSkills: (worker) => worker === "architect" ? productionSkills("longWriting") : [],
-    });
-    agent = "architect";
+    // Keep the task lifecycle, but creating a book belongs to 问心. The
+    // legacy architect chain also generates settings and outline before the
+    // author can review canon, and must not run from this confirmation.
+    tool = {
+      ...createSubAgentTool(args.pipeline, null, args.root),
+      name: "ask_create",
+      async execute() {
+        const result = await createAskBookCandidate({
+          projectRoot: args.root,
+          project: args.project,
+          conversation: args.conversation?.trim() || args.instruction,
+          requirements: [
+            "作者原文是人物、国名、情节与结局的依据。确认卡只是摘要，未提及不代表删除；仅作者明确的改动可以覆盖此前约定。",
+            "只整理故事正典候选，不创作另一个故事，不生成设定或卷纲，缺失信息列为待确认。",
+            `本次确认指令：\n${args.instruction}`,
+            `确认卡字段：\n${JSON.stringify(payload)}`,
+          ].join("\n\n"),
+          book: { ...payload, title },
+          signal: args.signal,
+        });
+        return {
+          content: [{ type: "text" as const, text: pick(lang,
+            `《${title}》已建书，故事正典已整理为候选。请核对、审查并采用后再进入研墨。`,
+            `Created "${title}" with a canon candidate. Review and adopt it before generating settings.`) }],
+          details: { kind: "book_created", bookId: result.bookId, title, artifactId: result.artifactId, adopted: false },
+        };
+      },
+    };
+    agent = "ask";
     params = {
       agent,
       instruction: args.instruction,
@@ -1654,7 +1681,7 @@ async function executeConfirmedProductionAction(args: {
     id,
     tool: tool.name,
     agent,
-    label: resolveToolLabel(tool.name, agent, lang),
+    label: tool.name === "ask_create" ? pick(lang, "问心 · 整理正典", "Ask · Organize canon") : resolveToolLabel(tool.name, agent, lang),
     status: "running",
     args: params,
     stages: tool.name === "short_fiction_run"
@@ -1829,6 +1856,7 @@ function deriveBookIdFromTitle(title: string): string {
 }
 
 async function completeBookExists(bookDir: string): Promise<boolean> {
+  if (await isLightweightAuthoringBook(bookDir)) return true;
   try {
     await access(join(bookDir, "book.json"));
     await access(join(bookDir, "story", "story_bible.md"));
@@ -5504,6 +5532,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId: reqSessionId,
       clientRequestId: reqClientRequestId,
       sessionKind: reqSessionKind,
+      authoringStage: reqAuthoringStage,
       actionSource: reqActionSource,
       requestedIntent: reqRequestedIntent,
       actionPayload: reqActionPayload,
@@ -5521,6 +5550,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId?: string;
       clientRequestId?: unknown;
       sessionKind?: string;
+      authoringStage?: unknown;
       actionSource?: string;
       requestedIntent?: string;
       actionPayload?: unknown;
@@ -5534,6 +5564,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionServiceOverride?: string;
     }>();
     const sessionId = reqSessionId;
+    if (reqAuthoringStage !== undefined && reqAuthoringStage !== "ask") {
+      throw new ApiError(400, "INVALID_AUTHORING_STAGE", "Invalid authoringStage");
+    }
     if (!instruction?.trim()) {
       return c.json({ error: "No instruction provided" }, 400);
     }
@@ -5587,6 +5620,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         reqSessionKind,
         bookSession.sessionKind ?? (agentBookId ? "book" : "chat"),
       );
+      // Old desktop clients do not send the surface yet. Existing four-stage
+      // books still need Ask isolation when their generic book chat is resumed.
+      const authoringStage = reqAuthoringStage === "ask"
+        || (agentBookId && sessionKind === "book" && await isLightweightAuthoringBook(join(root, "books", agentBookId)))
+        ? "ask" as const
+        : undefined;
+      if (authoringStage && (!agentBookId || sessionKind !== "book")) {
+        throw new ApiError(400, "INVALID_ASK_SURFACE", "问心讨论需要绑定当前作品，请返回问心页面继续。");
+      }
+      if (authoringStage && requestedIntent && isConfirmedProductionAction(actionSource, requestedIntent)) {
+        throw new ApiError(409, "ASK_STAGE_ACTION_REQUIRED", "问心聊天只讨论故事。请在右侧正典面板整理或重新生成正典，再审查并采用；设定、大纲和正文请在对应阶段生成。");
+      }
       if (bookSession.sessionKind !== sessionKind || (playMode && bookSession.playMode !== playMode)) {
         const updatedSession = await createAndPersistBookSession(
           root,
@@ -5842,6 +5887,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
           const exec = await executeConfirmedProductionAction({
             pipeline,
+            project: config,
+            conversation: bookSession.messages
+              .filter((message) => message.role === "user" || message.role === "assistant")
+              .map((message) => `${message.role === "user" ? "用户消息（含原始讨论和确认指令，摘要省略不代表删除原约定）" : "助手建议（未经作者确认不算事实）"}：\n${message.content}`)
+              .join("\n\n"),
             root,
             sessionId: bookSession.sessionId,
             bookId: agentBookId,
@@ -5889,7 +5939,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               bookCreateStatus.delete(createdBookId);
               const createPayload = actionPayload?.createBook;
               try {
-                await persistAskArtifacts({
+                if (exec.tool !== "ask_create") await persistAskArtifacts({
                   bookDir: join(root, "books", createdBookId),
                   card: {
                     workingTitle: createPayload?.title ?? book?.title ?? createdBookId,
@@ -5907,6 +5957,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               broadcast("book:created", {
                 bookId: createdBookId,
                 sessionId: bookSession.sessionId,
+                ...(exec.tool === "ask_create" ? { canonCandidate: true } : {}),
                 ...(book ? { book } : {}),
               });
             }
@@ -5997,6 +6048,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           projectRoot: root,
           bookId: agentBookId,
           sessionKind,
+          authoringStage,
           playMode,
           actionSource,
           requestedIntent,
@@ -6678,6 +6730,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       content = normalizeVolumeMapChapterHeadings(content, {
         language: book?.language === "en" ? "en" : "zh",
       });
+      if (await isLightweightAuthoringBook(state.bookDir(id))) {
+        return c.json({ error: "请在织卷中编辑候选并采用，不要直接改已采用卷纲。" }, 400);
+      }
     }
     const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
     const { dirname: dirnameFs } = await import("node:path");

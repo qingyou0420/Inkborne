@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, FileCheck2, MoreHorizontal, PanelRightClose, PanelRightOpen, PencilLine, Save } from "lucide-react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { invalidateBookStage } from "../hooks/use-book-stage";
 import { showToast } from "../lib/toast";
 import { registerNavigationGuard } from "../lib/edit-navigation";
 import { chatSelectors, useChatStore } from "../store/chat";
@@ -45,7 +46,9 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const adoptedCopy = useApi<CanonVersion>(adoptedOnlyId ? `/authoring/artifacts/${encodeURIComponent(adoptedOnlyId)}?${query}` : "");
   const candidate = data?.candidateAsk ?? (adoptedCopy.data && adoptedCopy.data.meta.artifactId === adoptedOnlyId
     ? { artifactId: adoptedCopy.data.meta.artifactId, version: adoptedCopy.data.meta.version, body: adoptedCopy.data.body, status: "adopted" } : undefined);
-  const adopted = data?.canon;
+  // A new draft's compatibility placeholder is not a manuscript.
+  const adopted = bookId || data?.canonSource === "canon" ? data?.canon : undefined;
+  const canPrepare = Boolean(adopted && !candidate && !data?.adoptedAskId);
   const editor = useRef(createAskCanonEditor(askCanonScopeKey(bookId, session?.sessionId)));
   const [editState, setEditState] = useState(editor.current.snapshot);
   const { body: editBody, dirty, editBaseId, pendingSavedId } = editState;
@@ -73,7 +76,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const conversation = askConversation(session, bookId);
   const scope = { bookId, draftId: bookId ? undefined : draftId };
   const awaitingNewBody = Boolean(pendingSavedId && pendingSavedId !== editBaseId && pendingSavedId !== candidate?.artifactId);
-  const ready = Boolean(query && data && !loading && !error && !adoptedCopy.loading && !awaitingNewBody);
+  const ready = Boolean(query && data && !loading && !error && !adoptedCopy.loading && !adoptedCopy.error && !awaitingNewBody);
   const hasManuscript = Boolean(candidate || editBaseId || adopted);
   const isAdopted = Boolean(!dirty && currentArtifactId && currentArtifactId === data?.adoptedAskId);
   const fields = readCanonFields(editBody);
@@ -157,20 +160,39 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     finally { if (mounted.current && request === historyRequest.current) setHistoryLoading(false); }
   };
   const openHistory = (id?: string) => { setReportOpen(false); setHistoryOpen(true); if (id) void loadVersion(id); };
+  const prepareCurrentArtifact = async (): Promise<string> => {
+    if (candidate) return resolveAdoptArtifactId(currentArtifactId, candidate.artifactId);
+    if (!canPrepare) throw new Error(isZh ? "暂无可操作的正典，请先整理正典。" : "Create a canon first.");
+    // Preserve old-book text as a candidate only after an explicit action.
+    const prepared = await postApi<CanonVersion>("/authoring/ask/prepare", scope);
+    editor.current.load({ artifactId: prepared.meta.artifactId, version: prepared.meta.version, status: prepared.meta.status, body: prepared.body });
+    editor.current.expectCandidate(prepared.meta.artifactId);
+    if (mounted.current) setEditState(editor.current.snapshot);
+    return prepared.meta.artifactId;
+  };
+  const startEditing = () => {
+    if (!ready || busyRef.current) return;
+    if (candidate) { setEditing(true); setExpanded(true); setActionError(undefined); return; }
+    void run("prepare", async () => {
+      await prepareCurrentArtifact();
+      if (mounted.current) { setEditing(true); setExpanded(true); }
+    });
+  };
   const review = () => {
     setReportOpen(true); setExpanded(true);
     void run("review", async () => {
-      await postApi("/authoring/ask/review", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), conversation });
+      const artifactId = await prepareCurrentArtifact();
+      await postApi("/authoring/ask/review", { ...scope, artifactId, conversation });
     });
   };
-  const regenerate = (requirements: string) => run(revision ? "revise" : "generate", async () => {
+  const regenerate = (requirements: string, authorRequirement = requirements) => run(revision ? "revise" : "generate", async () => {
     const generated = revision
-      ? await postApi<{ artifactId: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, requirements, extraRequirement: requirements })
-      : await postApi<{ artifactId: string }>("/authoring/ask/generate", { ...scope, conversation, requirements });
+      ? await postApi<{ artifactId: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
+      : await postApi<{ artifactId: string }>("/authoring/ask/generate", { ...scope, conversation, requirements, authorRequirement });
     editor.current.expectCandidate(generated.artifactId);
     if (mounted.current) { setEditState(editor.current.snapshot); setExpanded(true); setReportOpen(false); }
   });
-  const busyLabels: Record<string, string> = { save: isZh ? "保存中…" : "Saving…", generate: isZh ? "整理正典中…" : "Generating…", review: isZh ? "审查中…" : "Reviewing…", adopt: isZh ? "采用中…" : "Adopting…", revise: isZh ? "修订中…" : "Revising…", restore: isZh ? "恢复为候选中…" : "Restoring candidate…" };
+  const busyLabels: Record<string, string> = { prepare: isZh ? "读取文稿中…" : "Preparing manuscript…", save: isZh ? "保存中…" : "Saving…", generate: isZh ? "整理正典中…" : "Generating…", review: isZh ? "审查中…" : "Reviewing…", adopt: isZh ? "采用中…" : "Adopting…", revise: isZh ? "修订中…" : "Revising…", restore: isZh ? "恢复为候选中…" : "Restoring candidate…" };
   const status = busy ? busyLabels[busy] : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : isAdopted ? (isZh ? "已采用" : "Adopted") : candidate ? (isZh ? "候选已保存" : "Candidate saved") : "";
   const labels: Record<typeof canonFieldNames[number], string> = isZh
     ? { title: "书名", genre: "类型", targetChapters: "预计章节", chapterWordCount: "每章字数" }
@@ -199,10 +221,13 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
         <div className="ask-canon-actions">{editing ? <>
           <button type="button" className="ask-canon-primary" disabled={!editBaseId || !dirty || Boolean(busy) || !ready} onClick={() => void save()}><Save size={15} />{isZh ? "保存" : "Save"}</button><button type="button" disabled={Boolean(busy)} onClick={cancelEditing}>{isZh ? "取消" : "Cancel"}</button>
         </> : hasManuscript ? <>
-          <button type="button" disabled={!candidate || Boolean(busy) || !ready} onClick={() => { setEditing(true); setExpanded(true); setActionError(undefined); }}><PencilLine size={15} />{isZh ? "编辑" : "Edit"}</button>
-          <button type="button" disabled={!candidate || Boolean(busy) || !ready || session?.isChatStreaming} onClick={report && !reportOpen ? () => { setReportOpen(true); setExpanded(true); } : review}><FileCheck2 size={15} />{isZh ? "审查" : "Review"}</button>
-          <button type="button" className="ask-canon-primary" disabled={!candidate || Boolean(busy) || !ready || isAdopted} onClick={() => void run("adopt", async () => {
-            const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId) });
+          <button type="button" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready} onClick={startEditing}><PencilLine size={15} />{isZh ? "编辑" : "Edit"}</button>
+          <button type="button" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || session?.isChatStreaming} onClick={report && !reportOpen ? () => { setReportOpen(true); setExpanded(true); } : review}><FileCheck2 size={15} />{isZh ? "审查" : "Review"}</button>
+          <button type="button" className="ask-canon-primary" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || isAdopted} onClick={() => void run("adopt", async () => {
+            const artifactId = await prepareCurrentArtifact();
+            const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId });
+            invalidateBookStage(result.bookId ?? bookId);
+            useChatStore.getState().bumpBookDataVersion();
             showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"));
             if (mounted.current && result.bookId && !bookId) onAdopted?.(result.bookId);
           })}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
@@ -226,7 +251,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       <RegenerateDialog open={generateOpen || Boolean(revision)} title={isZh ? "重新整理正典" : "Regenerate canon"} scopeLabel={isZh ? "当前作品 · 整份故事正典" : "Current book · Entire story canon"} isZh={isZh} busy={Boolean(busy)} error={actionError} reportSummary={report && !report.incomplete && (revision?.reuseStale || !stale) ? [report.summary, ...(revision ? report.issues.filter((issue) => revision.selectedIssueIds.includes(issue.issueId)).map((issue) => `${issue.title}：${issue.suggestion ?? issue.evidence ?? ""}`) : [])].join("\n") : undefined} onClose={() => { if (!busyRef.current) { setGenerateOpen(false); setRevision(undefined); } }} onConfirm={async (requirements) => {
         const chosen = report?.issues.filter((issue) => generationIssueIds.includes(issue.issueId)) ?? [];
         const applicable = report && !report.incomplete && !stale && !revision && chosen.length ? [report.summary, ...chosen.map((issue) => `${issue.title}：${issue.suggestion ?? issue.evidence ?? ""}`)].join("\n") : "";
-        return regenerate([requirements, applicable ? `${isZh ? "当前稿审查意见" : "Current review"}：\n${applicable}` : ""].filter(Boolean).join("\n\n"));
+        return regenerate([requirements, applicable ? `${isZh ? "当前稿审查意见" : "Current review"}：\n${applicable}` : ""].filter(Boolean).join("\n\n"), requirements);
       }}>
         {generateOpen && report && (stale || report.incomplete) ? <p className="text-sm text-muted-foreground">{isZh ? "已有报告对应旧稿或未完成，本次不会自动带入。" : "The previous review is outdated or incomplete and will not be included."}</p> : null}
         {generateOpen && report && !stale && !report.incomplete && report.issues.length ? <fieldset className="ask-regenerate-issues"><legend>{isZh ? "带入哪些审查意见" : "Include review notes"}</legend>{report.issues.map((issue) => <label key={issue.issueId}><input type="checkbox" checked={generationIssueIds.includes(issue.issueId)} disabled={Boolean(busy)} onChange={(event) => setGenerationIssueIds((ids) => event.target.checked ? [...ids, issue.issueId] : ids.filter((id) => id !== issue.issueId))} /><span>{issue.title}{issue.suggestion ? <small>{issue.suggestion}</small> : null}</span></label>)}</fieldset> : null}

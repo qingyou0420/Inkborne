@@ -14,6 +14,7 @@ export * from "./drafts.js";
 export * from "./llm.js";
 export * from "./chapter-index.js";
 export * from "./book-create.js";
+export * from "./ask-book-create.js";
 export * from "./workflow.js";
 export * from "./stages/ask.js";
 export * from "./stages/ground.js";

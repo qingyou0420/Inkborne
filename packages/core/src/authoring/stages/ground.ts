@@ -6,7 +6,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from "../context.js";
+import { assertAdoptedCanonReady, assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from "../context.js";
 import { asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
@@ -124,6 +124,7 @@ function mergeCatalogIdentities(
 
 export async function proposeSettingsCatalog(input: GroundRuntime): Promise<SettingsCatalog> {
   if (!input.root.bookId) throw new Error("研墨需要先采用正典并建书。");
+  await assertAdoptedCanonReady(input.root);
   const existing = await loadSettingsCatalog(input.root);
   const { canon } = await loadCanonDocument(input.root);
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
@@ -162,6 +163,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
   readonly requirements?: string;
 }): Promise<{ generated: string[]; failed: string[]; runId: string }> {
   if (!input.root.bookId) throw new Error("研墨需要已建的书。");
+  await assertAdoptedCanonReady(input.root);
   const catalog = await loadSettingsCatalog(input.root);
   const targets = catalog.entries.filter((entry) => {
     if (entry.archived) return false;

@@ -3,11 +3,79 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  createAskContextTransform,
   createBookContextTransform,
   createInteractiveFilmContextTransform,
 } from "../agent/context-transform.js";
 import { saveStoryGraph } from "../interactive-film/graph-store.js";
 import { StoryGraphSchema } from "../interactive-film/graph-schema.js";
+import { authoringRootDir, loadManifest, saveArtifact, saveManifest } from "../authoring/store.js";
+
+describe("createAskContextTransform", () => {
+  let projectRoot: string;
+  beforeEach(async () => { projectRoot = await mkdtemp(join(tmpdir(), "ask-ctx-test-")); });
+  afterEach(async () => { await rm(projectRoot, { recursive: true, force: true }); });
+
+  it("reads complete author sources and current candidate without legacy architecture instructions, refreshing each turn", async () => {
+    const root = { projectRoot, bookId: "test-book" };
+    const storyDir = join(projectRoot, "books", root.bookId, "story");
+    const workflowDir = authoringRootDir(root);
+    const draftDir = authoringRootDir({ projectRoot, draftId: "original-draft" });
+    await mkdir(join(workflowDir, "source-conversations"), { recursive: true });
+    await mkdir(draftDir, { recursive: true });
+    await writeFile(join(storyDir, "story_bible.md"), "OLD_WRONG_FANTASY_STORY");
+    await writeFile(join(storyDir, "author_intent.md"), "AUTHOR_INTENT：共七卷，不能合并。");
+    await writeFile(join(storyDir, "brief.md"), "BRIEF：琴荒与苍夏的家国战火。");
+    await writeFile(join(draftDir, "source-conversation.md"), "DRAFT_ORIGIN：四位书院少年。");
+    const original = `# 作者原始长稿\n${"人物动机必须保留。".repeat(1200)}\nTAIL_ORIGINAL：最终战火尽熄。`;
+    await writeFile(join(workflowDir, "source-conversation.md"), original);
+    for (const [timestamp, conversation] of [[1, "结局A"], [2, "结局B"], [3, "结局A"]] as const) {
+      await writeFile(join(workflowDir, "source-conversations", `${timestamp}.json`), JSON.stringify({ timestamp, conversation, kind: "author-requirement" }));
+    }
+    await saveArtifact(root, { artifactId: "ask-1", stage: "ask", scope: "canon", version: 1, source: "generate", status: "candidate", bodyPath: "body.md", inputRefs: [], createdAt: new Date().toISOString() }, "CANDIDATE_V1：婉兮为天下不负本心。");
+    await saveManifest(root, { ...await loadManifest(root), draftId: "original-draft", candidates: { ask: "ask-1", ground: [], write: {} } });
+    const transform = createAskContextTransform(root.bookId, projectRoot);
+    const messages = [{ role: "user" as const, content: "补充流渊的动机", timestamp: 4 }];
+    const result = await transform(messages);
+    const body = (result[0] as { content: string }).content;
+    expect(result[1]).toBe(messages[0]);
+    expect(body).toContain(original);
+    expect(body).toContain("DRAFT_ORIGIN");
+    expect(body).toContain("AUTHOR_INTENT");
+    expect(body).toContain("BRIEF");
+    expect(body).toContain("CANDIDATE_V1");
+    expect(body).toContain("尚未采用");
+    expect(body.match(/结局[AB]/g)).toEqual(["结局A", "结局B", "结局A"]);
+    expect(body).not.toContain("OLD_WRONG_FANTASY_STORY");
+    expect(body).not.toContain("sub_agent");
+    expect(body).not.toContain("Markdown 目录索引");
+
+    await writeFile(join(workflowDir, "artifacts", "ask-1", "body.md"), "CURRENT_CANDIDATE_EDIT");
+    const refreshed = (await transform(messages))[0] as { content: string };
+    expect(refreshed.content).toContain("CURRENT_CANDIDATE_EDIT");
+    expect(refreshed.content).not.toContain("CANDIDATE_V1");
+  });
+
+  it("labels adopted canon separately and does not quietly replace a missing candidate with a legacy story", async () => {
+    const root = { projectRoot, bookId: "test-book" };
+    const storyDir = join(projectRoot, "books", root.bookId, "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(join(storyDir, "canon.md"), "ADOPTED_AUTHOR_CANON");
+    const transform = createAskContextTransform(root.bookId, projectRoot);
+    const legacyBody = ((await transform([]))[0] as { content: string }).content;
+    expect(legacyBody).toContain("未记录采用状态");
+    expect(legacyBody).not.toContain("已采用故事正典");
+    await saveArtifact(root, { artifactId: "adopted-1", stage: "ask", scope: "canon", version: 1, source: "generate", status: "adopted", bodyPath: "body.md", inputRefs: [], createdAt: new Date().toISOString() }, "ADOPTED_AUTHOR_CANON");
+    await saveManifest(root, { ...await loadManifest(root), adopted: { ask: "adopted-1", ground: [], write: {} } });
+    const body = ((await transform([]))[0] as { content: string }).content;
+    expect(body).toContain("已采用故事正典");
+    expect(body).toContain("ADOPTED_AUTHOR_CANON");
+    await saveManifest(root, { ...await loadManifest(root), candidates: { ask: "missing-candidate", ground: [], write: {} } });
+    await expect(transform([])).rejects.toThrow("当前问心正典候选无法读取");
+    await saveManifest(root, { ...await loadManifest(root), candidates: { ground: [], write: {} }, adopted: { ask: "missing-adopted", ground: [], write: {} } });
+    await expect(transform([])).rejects.toThrow("已采用故事正典无法读取");
+  });
+});
 
 describe("createBookContextTransform", () => {
   let projectRoot: string;

@@ -1,6 +1,24 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
 import { insertChapterStub, parseVolumeMapTree } from "./volume-map-tree";
 
+export interface WeaveChapterRange {
+  readonly startChapter: number;
+  readonly endChapter: number;
+}
+
+/** Generation and review-based revision start with the volume the author is reading. */
+export function resolveWeaveVolumeRange(
+  volumes: readonly WeaveChapterRange[],
+  preferred: WeaveChapterRange | null | undefined,
+  target: number,
+): WeaveChapterRange {
+  const selected = preferred
+    ? volumes.find((volume) => volume.startChapter === preferred.startChapter && volume.endChapter === preferred.endChapter)
+      ?? volumes.find((volume) => preferred.startChapter >= volume.startChapter && preferred.startChapter <= volume.endChapter)
+    : undefined;
+  return selected ?? volumes[0] ?? { startChapter: 1, endChapter: target || 36 };
+}
+
 /** One writer for all adopted-outline mutations; transforms see the last saved map. */
 export interface OutlineMapState { current: string; pending: boolean }
 export async function saveOutlineMap(

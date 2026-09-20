@@ -5,6 +5,7 @@ import {
   chatCompletion,
   DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  PartialResponseError,
   type LLMClient,
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
@@ -1507,8 +1508,8 @@ describe("stream interruption detection", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写正文" }]))
-      .rejects.toThrow(/output limit|length|Stream interrupted/i);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+      .rejects.toMatchObject({ name: "PartialResponseError", reason: "output-limit", partialContent: "写到上限的正文" });
+    expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 
@@ -1563,7 +1564,23 @@ describe("stream interruption detection", () => {
     ]) as never);
 
     await expect(chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]))
-      .rejects.toThrow(/output limit|length|Stream interrupted/i);
-    expect(mockStreamSimple).toHaveBeenCalledTimes(3);
+      .rejects.toMatchObject({ name: "PartialResponseError", reason: "output-limit", partialContent: "只写到一半" });
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
+  });
+
+  it.each([401, 403, 429, 14031])("preserves length diagnostics when the character count is %i", async (count) => {
+    const text = "文".repeat(count);
+    const message = { ...makeAssistantMessage(text), stopReason: "length" } as AssistantMessage;
+    mockStreamSimple.mockImplementation(() => makeEventStream([
+      { type: "text_delta", contentIndex: 0, delta: text, partial: message },
+      { type: "done", reason: "length", message },
+    ]) as never);
+
+    const error = await chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }])
+      .catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(PartialResponseError);
+    expect(error).toMatchObject({ reason: "output-limit", partialContent: text });
+    expect((error as Error).message).toContain("回复未完成");
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 });

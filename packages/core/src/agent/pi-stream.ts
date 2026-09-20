@@ -1,4 +1,5 @@
 import { streamSimple } from "@mariozechner/pi-ai";
+import { constrainClaudeSamplingOptions } from "../llm/claude-sampling.js";
 import type {
   Api,
   AssistantMessageEventStream,
@@ -80,11 +81,14 @@ export function guardedPiStream<TApi extends Api>(
   });
   return guardAssistantMessageStream(
     model,
-    (signal) => streamSimple(model, context, {
+    (signal) => streamSimple(model, context, constrainClaudeSamplingOptions(model.id, {
       ...options,
+      // pi-ai otherwise silently caps its default at 32,000. Use the same
+      // output budget we reserved above and preserve explicit caller limits.
+      maxTokens: reservedOutputTokens,
       headers: { ...(options?.headers ?? {}), ...traceHeaders },
       signal,
-    }),
+    })),
     options?.signal,
     deadlineOptions,
   );

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateToolArguments } from "@mariozechner/pi-ai";
 import { StateManager } from "../state/manager.js";
 import { ArchitectIncompleteFoundationError } from "../agents/architect.js";
 import {
@@ -356,6 +357,19 @@ describe("agent deterministic writing tools", () => {
     if (en.content[0]?.type === "text") {
       expect(en.content[0].text).toContain("Generate cover");
       expect(en.content[0].text).toContain("After confirmation");
+    }
+  });
+
+  it("validates nested creation objects and preserves Chinese quotation marks without double serialization", async () => {
+    const tool = createProposeActionTool("zh");
+    const createBook = { title: "渡河记", genre: "古风", platform: "tomato" as const, language: "zh" as const, targetChapters: 260, chapterWordCount: 5000, synopsis: '关于三种"守约"的选择。' };
+    const args = { action: "create_book" as const, instruction: "按作者约定建立新书。", createBook };
+    const validated = validateToolArguments(tool, { type: "toolCall", id: "structured-proposal", name: "propose_action", arguments: args });
+    const result = await tool.execute("structured-proposal", validated);
+    expect(result.details).toMatchObject({ kind: "proposed_action", actionPayload: { createBook } });
+    for (const invalid of [JSON.stringify(createBook), '{"title":"渡河记","synopsis":"三种"守约""}', null, []]) {
+      expect(() => validateToolArguments(tool, { type: "toolCall", id: "invalid-proposal", name: "propose_action", arguments: { ...args, createBook: invalid } }))
+        .toThrow(/createBook: must be object/);
     }
   });
 

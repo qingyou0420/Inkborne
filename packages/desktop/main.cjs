@@ -33,7 +33,7 @@ const {
 const {
   collectUpdateSearchDirs,
   parseCheckUpdateRequest,
-  shouldUseRemoteUpdateCheck,
+  checkUpdateSources,
 } = require("./lib/update-search.cjs");
 const { resolveStudioEntry, resolveEngineRoot } = require("./lib/studio-entry.cjs");
 
@@ -951,36 +951,35 @@ function registerIpc() {
   ipcMain.handle("app:checkUpdate", async (_e, payload) => {
     const { kind } = parseCheckUpdateRequest(payload);
     const current = app.getVersion();
-    const allowRemote = shouldUseRemoteUpdateCheck(kind);
-    if (allowRemote) {
-      try {
-        return await checkGithubLatest(current);
-      } catch (e) {
-        appendLog(`GitHub latest 失败: ${e}`);
-      }
-    }
-    const { candidates, searchedDirs, allCount } = await findLatestInstaller(current, kind);
-    if (!candidates.length) {
-      return {
-        ok: true,
-        current,
-        latest: null,
-        hasUpdate: false,
-        message: `未找到安装包。主目录：${getPrimaryUpdateDir()}`,
-        searchedDirs,
-      };
-    }
-    const best = candidates[0];
-    return {
-      ok: true,
-      current,
-      latest: best.version,
-      hasUpdate: compareVersions(best.version, current) > 0,
-      installerPath: best.path,
-      source: best.source,
-      searchedDirs,
-      allCount,
-    };
+    return checkUpdateSources({
+      kind,
+      readLocal: async () => {
+        const { candidates, searchedDirs, allCount } = await findLatestInstaller(current, kind);
+        if (!candidates.length) {
+          return {
+            ok: true,
+            current,
+            latest: null,
+            hasUpdate: false,
+            message: `未找到安装包。主目录：${getPrimaryUpdateDir()}`,
+            searchedDirs,
+          };
+        }
+        const best = candidates[0];
+        return {
+          ok: true,
+          current,
+          latest: best.version,
+          hasUpdate: compareVersions(best.version, current) > 0,
+          installerPath: best.path,
+          source: best.source,
+          searchedDirs,
+          allCount,
+        };
+      },
+      readRemote: () => checkGithubLatest(current),
+      onRemoteError: (error) => appendLog(`GitHub latest 失败: ${error}`),
+    });
   });
   ipcMain.handle("app:downloadUpdate", async (_e, payload) => {
     const opts = payload && typeof payload === "object" ? payload : { downloadUrl: payload };

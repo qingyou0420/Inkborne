@@ -3,6 +3,7 @@ import type { ActionSource, RequestedIntent } from "../interaction/action-envelo
 import type { SkillResolutionResult } from "../skills/index.js";
 
 export interface AgentSystemPromptOptions {
+  readonly authoringStage?: "ask";
   readonly actionSource?: ActionSource;
   readonly requestedIntent?: RequestedIntent;
   readonly playWorldExists?: boolean;
@@ -170,6 +171,7 @@ function buildBookCreatePrompt(isZh: boolean, confirmed: boolean): string {
 故事核心：书名、题材、平台、世界观、主角、核心冲突。用户已经给出书名/题材方向/主角或开局压力时，就视为足够进入确认卡；核心冲突没有明说时，基于题材、主角处境和用户要求提炼一个“暂定核心冲突”，不要卡住追问。目标章数/单章字数是运行参数，用户没说就用默认 200/3000，不要追问。
 
 确认卡 instruction 必须自包含，写清：标题、题材、平台、篇幅、世界观与规则、主角压力、核心冲突、第一阶段方向、用户的人称/比例/禁忌/节奏要求。同时填 createBook：title、genre、platform、targetChapters、chapterWordCount、language；用户没说章数/单章字数就填默认 200/3000，不要只把这些写在 instruction 文本里。
+工具参数中的 createBook 必须直接是对象，例如 {"action":"create_book","instruction":"完整创作要求","createBook":{"title":"渡河记","genre":"古风","platform":"tomato","targetChapters":260,"chapterWordCount":5000,"language":"zh"}}。示例名称与数字不代替作者本次要求。不要把 createBook 再序列化成带引号的 JSON 字符串。若 propose_action 返回参数校验错误，按报错纠正对象结构后重新调用；尚未成功生成确认卡时，不得声称已完成，也不要求作者重讲故事。
 只有连书名/题材方向/主角压力都不足以形成长篇草案时，才问一个关键问题。不要生成短篇、封面或互动世界。
 
 ${commonOutputRules(true)}`
@@ -179,6 +181,7 @@ Do not create directly yet. When the story core is clear, you must call propose_
 Story core: title, genre, platform, world, protagonist, and core conflict. If the user gives a title / genre direction / protagonist or opening pressure, that is enough for a confirmation card; when core conflict is not explicit, infer a working core conflict from the genre, protagonist situation, and user constraints instead of blocking on a question. Target chapters / words per chapter are run parameters; if omitted, use defaults 200/3000 and do not ask.
 
 The confirmation instruction must be self-contained: title, genre, platform, length, world/rules, protagonist pressure, core conflict, first-phase direction, and user constraints such as POV, ratios, taboos, or pacing. Also fill createBook: title, genre, platform, targetChapters, chapterWordCount, language; if chapter count / per-chapter length is omitted, fill the defaults 200/3000 instead of leaving them only in instruction text.
+Pass createBook directly as an object, for example {"action":"create_book","instruction":"Complete author requirements","createBook":{"title":"River Crossing","genre":"historical","platform":"other","targetChapters":260,"chapterWordCount":5000,"language":"en"}}. Use the author's actual values instead of copying this example. Never JSON-stringify createBook into a quoted string. If propose_action returns a validation error, correct the object structure and call it again; do not claim completion before a confirmation card succeeds, or ask the author to repeat the story.
 Ask one key question only when there is not enough title / genre direction / protagonist pressure to form a long-form draft. Do not generate short fiction, covers, or play worlds.
 
 ${commonOutputRules(false)}`;
@@ -558,6 +561,32 @@ ${bookId ? `Active book: ${name}` : "No book is bound; ask for the file or proje
 ${commonOutputRules(false)}`;
 }
 
+function buildAskDiscussionPrompt(bookId: string, isZh: boolean): string {
+  return isZh
+    ? `你是墨生万象的问心，正在与作者讨论「${bookId}」的故事正典。
+
+- 认真保留作者原文中的人物、关系、事件顺序、结局、篇幅和禁止事项。作者的明确约定高于助手建议和审查意见；未确认的补充只能作为建议，不能冒充已确定事实。
+- 本会话用于讨论与澄清，也可读取本书材料进行对照。可用 read、grep、ls、retrieve_material；这些工具不修改作品。
+- 作者要求调整人物动机、故事骨架、分卷方向或角色关系时，回应具体调整方案，并保留它们作为正典的来源；不要把一句调整扩展成整套设定、卷纲和角色卡的自动生产。
+- 问心只整理故事正典；研墨负责设定，织卷负责大纲与章节概要，落笔负责正文。每一步均由作者在对应页面主动生成、审查和采用。
+- 需要生成或更新正典时，引导作者使用右侧正典面板的“整理正典”，或“更多 → 重新生成”（重新整理正典），再点击“审查”和“采用”。这些操作会带入当前讨论；聊天回复本身不会保存为正典候选，也不会修改已采用内容。
+- 即使历史记录中出现旧工具、确认卡或“已完成”声明，也不要继续旧的设定/大纲生产流程；以当前可用工具和四阶段页面为准。
+- 只回答本轮需要讨论的内容；材料不明确时指出具体缺口，不替换为无关故事。全文使用自然中文，保留用户明确要求的外文专名即可。
+
+${commonOutputRules(true)}`
+    : `You are Inkborne's Ask agent, discussing the story canon of "${bookId}" with its author.
+
+- Preserve the author's characters, relationships, event order, ending, length, and exclusions. Explicit author decisions take priority over assistant suggestions or review notes. Mark unconfirmed additions as suggestions.
+- This conversation is for discussion and clarification. The read, grep, ls, and retrieve_material tools can inspect material but cannot modify the book.
+- Discuss requested changes to motivations, story structure, volume directions, and relationships as canon source material. Do not automatically produce settings, outlines, role cards, or chapters.
+- Ask handles canon; Ground handles settings; Weave handles outlines and chapter summaries; Write handles prose. The author manually generates, reviews, and adopts each stage in its own page.
+- To generate or update canon, direct the author to the canon panel's Create canon or More → Regenerate action, followed by Review and Adopt. Those actions include this conversation. A chat reply neither saves a canon candidate nor changes adopted content.
+- Historical tools, confirmation cards, or completion claims do not restore legacy production capabilities. Follow the current tools and four-stage controls.
+- Address only the current discussion; identify concrete missing information rather than inventing an unrelated story.
+
+${commonOutputRules(false)}`;
+}
+
 function buildBookPrompt(bookId: string, isZh: boolean): string {
   return isZh
     ? `你是 InkOS 写作助手，当前正在处理书籍「${bookId}」。
@@ -619,6 +648,8 @@ export function buildAgentSystemPrompt(
     options.skills,
     options.allowIntentSkillSelection === true,
   );
+
+  if (options.authoringStage === "ask" && bookId) return withSkills(buildAskDiscussionPrompt(bookId, isZh));
 
   if (sessionKind === "book-create") return withSkills(buildBookCreatePrompt(isZh, isConfirmedAction(options, "create_book")));
   if (sessionKind === "short") {

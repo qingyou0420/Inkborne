@@ -15,6 +15,7 @@ import type {
 import { resolveServicePreset } from "./service-presets.js";
 import { getEndpoint } from "./providers/index.js";
 import { lookupModel } from "./providers/lookup.js";
+import { applyClaudeSamplingConstraints, constrainClaudeSamplingOptions } from "./claude-sampling.js";
 import {
   applyKimiK3RequestConstraints,
   resolveMoonshotLockedTemperature,
@@ -537,8 +538,8 @@ function parseEnvHeaders(): Record<string, string> | undefined {
 }
 
 // === Partial Response（流式生成中途被掐断）===
-// 语义：内容不完整、不可信。由 withTransientLLMRetry 整体重新生成；
-// 重试耗尽后如实抛错。绝不把半截内容当成功返回（那会产出写到一半就
+// 语义：内容不完整、不可信。网络中断由 withTransientLLMRetry 整体重新生成；
+// 输出上限耗尽不能以相同额度盲目重试。绝不把半截内容当成功返回（那会产出写到一半就
 // 结束的章节/设定文件）。partialContent 仅用于错误诊断。
 
 export class PartialResponseError extends Error {
@@ -550,7 +551,9 @@ export class PartialResponseError extends Error {
     cause: unknown,
     reason: "output-limit" | "interrupted" = "interrupted",
   ) {
-    super(`Stream interrupted after ${partialContent.length} chars: ${String(cause)}`);
+    super(reason === "output-limit"
+      ? `模型达到单次输出上限（length），回复未完成（已接收 ${partialContent.length} 个字符）。请检查模型输出额度，或将本次生成拆成更小的任务。`
+      : `Stream interrupted after ${partialContent.length} chars: ${String(cause)}`);
     this.name = "PartialResponseError";
     this.partialContent = partialContent;
     this.reason = reason;
@@ -737,6 +740,9 @@ function isLlmTimeoutError(error: unknown, msg: string): boolean {
 }
 
 function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string }): Error {
+  // Keep structured truncation diagnostics, even when a character count or
+  // upstream cause happens to contain an HTTP status such as 401 or 403.
+  if (error instanceof PartialResponseError) return error;
   const msg = String(error);
   const ctxLine = context
     ? `\n  (baseUrl: ${context.baseUrl}, model: ${context.model})`
@@ -902,10 +908,10 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
 }
 
 function isRetryableLLMError(error: unknown): boolean {
-  // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
-  // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
-  return error instanceof PartialResponseError
-    || isIncompleteLLMResponseError(error)
+  // Retry interrupted transport as a whole, but do not repeat a length-limited
+  // response with exactly the same output budget. Never treat its partial as success.
+  if (error instanceof PartialResponseError) return error.reason === "interrupted";
+  return isIncompleteLLMResponseError(error)
     || isTransientLLMTransportError(error)
     || isTransientLLMHttpError(error);
 }
@@ -1207,6 +1213,7 @@ async function chatCompletionViaCustomAnthropicCompatible(
   }, model);
   const system = joinSystemPrompt(messages);
   if (system) payload.system = system;
+  applyClaudeSamplingConstraints(payload, model);
 
   const apiKey = sanitizeHeaderApiKey(client._apiKey);
   const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/messages`, {
@@ -1343,6 +1350,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     }, model);
     const instructions = joinSystemPrompt(messages);
     if (instructions) payload.instructions = instructions;
+    applyClaudeSamplingConstraints(payload, model);
 
     const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/responses`, {
       method: "POST",
@@ -1445,6 +1453,7 @@ async function chatCompletionViaCustomOpenAICompatible(
   if (client.stream) {
     payload.stream_options = { include_usage: true };
   }
+  applyClaudeSamplingConstraints(payload, model);
 
   const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
@@ -1758,13 +1767,13 @@ async function chatCompletionViaPiAi(
 ): Promise<LLMResponse> {
   const piModel = resolvePiModel(client, model);
   const context = toPiContext(messages);
-  const streamOpts = {
+  const streamOpts = constrainClaudeSamplingOptions(model, {
     temperature: resolved.temperature,
     maxTokens: resolved.maxTokens,
     apiKey: client._apiKey,
     headers: mergeUserAgent({ ...(piModel.headers ?? {}), ...traceHeaders }),
     signal,
-  };
+  });
 
   if (!client.stream) {
     const response = await piCompleteSimple(piModel, context, streamOpts);

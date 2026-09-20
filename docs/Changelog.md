@@ -4,6 +4,30 @@
 
 ## Unreleased
 
+## 2.2.7
+
+织卷采用成功后统一失效 book-stage 缓存并递增 bookDataVersion；阶段请求按 promise 身份阻止旧结果回写与误删新请求。落笔在阶段信息就绪后才显示缺纲空态。仅修正界面状态衔接，保留正式规划与作品数据格式。安装包 `Inkborne-Setup-2.2.7.exe`。
+
+## 2.2.6
+
+织卷修订范围与生成共用当前卷选择；章节修订按已有概要分批（每批最多四章），记录修订专用检查点、审查意见和作者要求。修订异步返回 runId，支持同一修订任务续跑，失败显示中文原因。旧修订记录无上下文时引导从原审查意见重新发起。安装包 `Inkborne-Setup-2.2.6.exe`。
+
+## 2.2.5
+
+织卷 JSON 解析增加已知正文类字段的成对英文引号兼容，合法转义不变，缺逗号/截断等仍拒绝；增加部分失败续跑回归。安装包 `Inkborne-Setup-2.2.5.exe`。
+
+## 2.2.4
+
+织卷后卷备注保全、新书零卷/跳号采用拒绝、长设定核心约束与别名进入请求、落笔门禁中文 400、修订独立失败 run。安装包 `Inkborne-Setup-2.2.4.exe`。
+
+## 2.2.3
+
+修复 FoundationReviewer 的 per-call temperature=0.3 覆盖角色温度后被 Opus 5 拒绝的问题。Claude Opus 4.7/4.8/5 与 Sonnet 5 在 native Chat/Responses/Anthropic 及 Pi 普通生成和工具调用的最终请求中省略弃用采样参数；保留调用方 onPayload 钩子。安装包 `Inkborne-Setup-2.2.3.exe`。
+
+## 2.2.2
+
+修复本地更新被 GitHub 旧 Release 遮蔽的问题；Windows 发布脚本识别重定向桌面并投放新旧品牌安装包名称。安装包 `Inkborne-Setup-2.2.2.exe`。
+
 ## 2.2.1
 
 中国水墨界面与四阶段创作更新。具体用户可见变化见根目录 [CHANGELOG.md](../CHANGELOG.md)。安装包 `Inkborne-Setup-2.2.1.exe`；统一配置入口，明确编辑、审查与采用，并保留旧文件名的更新兼容。

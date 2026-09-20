@@ -10,6 +10,7 @@ import {
   reviewChapterDraft,
   reviseChapterDraft,
 } from "../authoring/stages/write.js";
+import { adoptWeave, generateWeaveRange, generateWeaveStructure } from "../authoring/stages/weave.js";
 import { loadManifest, loadReport } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
@@ -57,6 +58,7 @@ describe("write stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 4,
       },
     });
     const roles: string[] = [];
@@ -83,6 +85,23 @@ describe("write stage", () => {
       return "# 第1章\n沈砚走在街上。";
     };
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
+    const structured = await generateWeaveStructure({
+      root: ctx.root,
+      project: ctx.project,
+      llm: async () => JSON.stringify({
+        bookOutline: "一卷",
+        volumes: [{ volumeNumber: 1, title: "上", startChapter: 1, endChapter: 4, body: "上卷" }],
+      }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: structured.artifactId });
+    const planned = await generateWeaveRange({
+      root: ctx.root,
+      project: ctx.project,
+      startChapter: 1,
+      endChapter: 1,
+      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "雨", summary: "港口开场。" }] }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: planned.artifactId });
     const draft = await generateChapterDraft({ ...ctx, chapterNumber: 1, title: "雨" });
     expect(roles).toEqual(["write.main"]);
     const report = await reviewChapterDraft({ ...ctx, artifactId: draft.artifactId });
@@ -120,6 +139,7 @@ describe("write stage", () => {
         boundaries: "MARK-BOUND-R7",
         direction: "",
         openQuestions: [],
+        targetChapters: 4,
       },
     });
     await mkdir(join(created.bookDir, "story", "settings"), { recursive: true });
@@ -128,8 +148,6 @@ describe("write stage", () => {
       entries: [{ id: "rule", category: "规则", name: "铁律", file: "story/settings/rule.md", adoptedArtifactId: "g1" }],
     }), "utf-8");
     await writeFile(join(created.bookDir, "story", "settings", "rule.md"), "MARK-SETTING-R7 魔法有代价。\n", "utf-8");
-    await mkdir(join(created.bookDir, "story", "outline"), { recursive: true });
-    await writeFile(join(created.bookDir, "story", "outline", "volume_map.md"), "## 第 1 章 雨\n\nMARK-OUTLINE-R7 港口开场。\n", "utf-8");
     const seen: string[] = [];
     const roles: string[] = [];
     const llm: AuthoringLlmFn = async (call) => {
@@ -150,6 +168,23 @@ describe("write stage", () => {
       return "# 第1章\n沈砚走在街上。";
     };
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
+    const structured = await generateWeaveStructure({
+      root: ctx.root,
+      project: ctx.project,
+      llm: async () => JSON.stringify({
+        bookOutline: "一卷",
+        volumes: [{ volumeNumber: 1, title: "上", startChapter: 1, endChapter: 4, body: "上卷" }],
+      }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: structured.artifactId });
+    const planned = await generateWeaveRange({
+      root: ctx.root,
+      project: ctx.project,
+      startChapter: 1,
+      endChapter: 1,
+      llm: async () => JSON.stringify({ chapters: [{ chapterNumber: 1, title: "雨", summary: "MARK-OUTLINE-R7 港口开场。" }] }),
+    });
+    await adoptWeave({ root: ctx.root, project: ctx.project, artifactId: planned.artifactId });
     const draft = await generateChapterDraft({ ...ctx, chapterNumber: 1, title: "雨" });
     const report = await reviewChapterDraft({ ...ctx, artifactId: draft.artifactId });
     await reviseChapterDraft({

@@ -3,6 +3,7 @@ import type { Model, Api } from "@mariozechner/pi-ai";
 import { resolveServicePiProvider, resolveServicePreset } from "./service-presets.js";
 import { getServiceApiKey } from "./secrets.js";
 import { getEndpoint } from "./providers/index.js";
+import { lookupModel } from "./providers/lookup.js";
 import type { InkosEndpoint } from "./providers/types.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
 
@@ -47,6 +48,10 @@ export async function resolveServiceModel(
 
   // Get pi-ai Model — may return undefined for model IDs not in the built-in registry
   const piModel = getModel(piProvider as any, modelId as any) as Model<Api> | undefined;
+  // Keep existing pi-ai registrations and endpoint-specific overrides intact.
+  // New gateway model IDs can still use the same verified limits as authoring
+  // calls instead of silently falling back to a 16k chat output budget.
+  const fallbackModel = piModel ? undefined : lookupModel(service, modelId);
   const effectiveBaseUrl = configuredBaseUrl || piModel?.baseUrl || "";
   const compat = apiType === "openai-completions"
     ? resolveProviderCompat(endpoint, effectiveBaseUrl)
@@ -76,8 +81,8 @@ export async function resolveServiceModel(
     reasoning: piModel?.reasoning ?? false,
     input: piModel?.input ?? ["text"] as ("text" | "image")[],
     cost: piModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: endpointModel?.contextWindowTokens ?? piModel?.contextWindow ?? 0,
-    maxTokens: endpointModel?.maxOutput ?? piModel?.maxTokens ?? 16384,
+    contextWindow: endpointModel?.contextWindowTokens ?? piModel?.contextWindow ?? fallbackModel?.contextWindowTokens ?? 0,
+    maxTokens: endpointModel?.maxOutput ?? piModel?.maxTokens ?? fallbackModel?.maxOutput ?? 16384,
     ...(compat ? { compat: compat as Model<Api>["compat"] } : {}),
   };
 

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { join } from "node:path";
 import type { Hono } from "hono";
 import {
   AUTHORING_ROLE_IDS,
@@ -20,6 +21,8 @@ import {
   generateChapterDraft,
   generateGroundEntries,
   generateWeaveRange,
+  generateWeaveStructure,
+  isLightweightAuthoringBook,
   listArtifacts,
   listReports,
   listRuns,
@@ -34,6 +37,7 @@ import {
   saveWriteBody,
   selectWriteCandidate,
   parseCanon,
+  prepareAskCanon,
   proposeSettingsCatalog,
   loadRoleApiKeys,
   resolveAuthoringRole,
@@ -66,6 +70,22 @@ function storeRoot(projectRoot: string, body: { bookId?: string; draftId?: strin
     bookId: body.bookId,
     draftId: body.bookId ? body.draftId : (body.draftId || undefined),
   };
+}
+
+async function recordWeaveFailure(root: AuthoringStoreRoot, runId: string, error: unknown): Promise<void> {
+  const current = await loadRun(root, runId);
+  if (current && (current.status === "running" || current.status === "pausing")) {
+    await saveRun(root, {
+      ...current,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+}
+
+function weaveRevisionError(error: unknown): string {
+  return `织卷修订失败：${error instanceof Error ? error.message : String(error)}`;
 }
 
 export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): void {
@@ -157,11 +177,13 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const candidateAsk = candidateAskId ? await loadArtifact(root, candidateAskId) : undefined;
     const candidateWeaveId = manifest.candidates.weave;
     const candidateWeave = candidateWeaveId ? await loadArtifact(root, candidateWeaveId) : undefined;
+    const authoringBook = bookId ? await isLightweightAuthoringBook(join(deps.root, "books", bookId)) : false;
     return c.json({
       manifest,
       artifacts,
       reports,
       catalog,
+      authoringBook,
       runs,
       canon: canon?.canon,
       canonSource: canon?.source,
@@ -181,6 +203,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
           version: candidateWeave.meta.version,
           status: candidateWeave.meta.status,
           body: candidateWeave.body,
+          scope: candidateWeave.meta.scope,
         }
         : undefined,
       roles: fillMissingAuthoringRoles(project),
@@ -252,38 +275,78 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/runs/:runId/resume", async (c) => {
-    const body = await c.req.json<{ bookId?: string; draftId?: string }>();
+    const body = await c.req.json<{ bookId?: string; draftId?: string; wait?: boolean }>();
     const root = storeRoot(deps.root, body);
     const run = await loadRun(root, c.req.param("runId"));
     if (!run) return c.json({ error: "找不到运行记录" }, 404);
-    await saveRunControl(root, run.runId, "none");
     const project = await deps.loadProject();
     if (run.stage !== "weave") return c.json({ error: "目前仅织卷支持继续剩余范围" }, 400);
+    if (run.operation === "revise") {
+      const checkpoint = run.checkpoint;
+      if (!run.reportId || !checkpoint?.revisionArtifactId || !checkpoint.revisionIssueIds?.length
+        || !checkpoint.requestedStart || !checkpoint.requestedEnd) {
+        return c.json({ error: "这次旧修订没有可恢复的审查记录，请打开审查意见，重新选择意见发起修订。已保存的书稿不会被替换。" }, 400);
+      }
+      await saveRunControl(root, run.runId, "none");
+      await saveRun(root, { ...run, status: "running", error: undefined, updatedAt: new Date().toISOString() });
+      const work = reviseWeave({
+        root,
+        project,
+        artifactId: checkpoint.revisionArtifactId,
+        reportId: run.reportId,
+        selectedIssueIds: checkpoint.revisionIssueIds,
+        startChapter: checkpoint.requestedStart,
+        endChapter: checkpoint.requestedEnd,
+        requirements: checkpoint.requirements,
+        reuseStale: checkpoint.revisionReuseStale,
+        reviseStructure: checkpoint.producedScope === "structure",
+        resumeRunId: run.runId,
+      });
+      if (body.wait) {
+        try {
+          return c.json({ artifactId: await work });
+        } catch (error) {
+          await recordWeaveFailure(root, run.runId, error);
+          return c.json({ error: weaveRevisionError(error) }, 400);
+        }
+      }
+      void work.catch((error: unknown) => recordWeaveFailure(root, run.runId, error));
+      return c.json({ runId: run.runId, status: "running", operation: "revise", progressLabel: "继续修订" });
+    }
     const requestedStart = run.checkpoint?.requestedStart;
     const requestedEnd = run.checkpoint?.requestedEnd;
     const missing = run.checkpoint?.missingChapters ?? [];
     if (!requestedStart && missing.length === 0) {
       return c.json({ error: "没有可恢复的范围，请重新指定章节。" }, 400);
     }
+    await saveRunControl(root, run.runId, "none");
     const result = await generateWeaveRange({
       root,
       project,
       startChapter: requestedStart ?? Math.min(...missing),
       endChapter: requestedEnd ?? Math.max(...missing),
+      targetChapters: run.checkpoint?.targetChapters,
       resumeRunId: run.runId,
       missingChapters: missing.length ? missing : undefined,
     });
     return c.json(result);
   });
 
+  app.post("/api/v1/authoring/ask/prepare", async (c) => {
+    const body = await c.req.json<{ bookId?: string; draftId?: string }>();
+    const result = await prepareAskCanon({ root: storeRoot(deps.root, body) });
+    return c.json(result);
+  });
+
   app.post("/api/v1/authoring/ask/generate", async (c) => {
-    const body = await c.req.json<{ bookId?: string; draftId?: string; conversation: string; requirements?: string }>();
+    const body = await c.req.json<{ bookId?: string; draftId?: string; conversation: string; requirements?: string; authorRequirement?: string }>();
     const project = await deps.loadProject();
     const result = await generateAskCanon({
       root: storeRoot(deps.root, body),
       project,
       conversation: body.conversation ?? "",
       requirements: body.requirements,
+      authorRequirement: body.authorRequirement,
     });
     return c.json(result);
   });
@@ -308,6 +371,8 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       reportId: string;
       selectedIssueIds: string[];
       extraRequirement?: string;
+      authorRequirement?: string;
+      conversation?: string;
       reuseStale?: boolean; requirements?: string;
     }>();
     const project = await deps.loadProject();
@@ -317,7 +382,8 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       artifactId: body.artifactId,
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
-      extraRequirement: body.requirements ?? body.extraRequirement,
+      extraRequirement: body.authorRequirement ?? body.extraRequirement ?? body.requirements,
+      conversation: body.conversation,
       reuseStale: body.reuseStale,
     });
     return c.json(result);
@@ -402,10 +468,27 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     return c.json(result);
   });
 
+  app.post("/api/v1/authoring/weave/structure", async (c) => {
+    const body = await c.req.json<{ bookId: string; requirements?: string }>();
+    const project = await deps.loadProject();
+    const result = await generateWeaveStructure({
+      root: storeRoot(deps.root, body),
+      project,
+      requirements: body.requirements,
+    });
+    return c.json(result);
+  });
+
   app.post("/api/v1/authoring/weave/generate", async (c) => {
     const body = await c.req.json<{ bookId: string; startChapter: number; endChapter: number; targetChapters?: number; wait?: boolean; requirements?: string }>();
     const project = await deps.loadProject();
     const root = storeRoot(deps.root, body);
+    if (body.bookId && await isLightweightAuthoringBook(join(deps.root, "books", body.bookId))) {
+      const manifest = await loadManifest(root);
+      if (!manifest.adopted.weave) {
+        return c.json({ error: "请先采用分卷结构，再生成章概要。" }, 400);
+      }
+    }
     const runId = newRunId();
     const start = Math.max(1, body.startChapter || 1);
     const end = Math.max(start, body.endChapter || start);
@@ -421,7 +504,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       progressTotal: end - start + 1,
       progressLabel: `本次 0/${end - start + 1}`,
       modelSnapshot: {},
-      checkpoint: { requestedStart: start, requestedEnd: end, missingChapters: [], producedScope: `chapters:${start}-${end}`, requirements: body.requirements },
+      checkpoint: { requestedStart: start, requestedEnd: end, missingChapters: [], producedScope: `chapters:${start}-${end}`, requirements: body.requirements, targetChapters: body.targetChapters },
       createdAt: now,
       updatedAt: now,
     });
@@ -430,7 +513,8 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       project,
       startChapter: start,
       endChapter: end,
-      targetChapters: body.targetChapters, requirements: body.requirements,
+      targetChapters: body.targetChapters && body.targetChapters !== end ? body.targetChapters : undefined,
+      requirements: body.requirements,
       runId,
     });
     if (body.wait) {
@@ -469,11 +553,34 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       selectedIssueIds: string[];
       startChapter: number;
       endChapter: number;
-      reuseStale?: boolean; requirements?: string;
+      reuseStale?: boolean; requirements?: string; reviseStructure?: boolean; wait?: boolean;
     }>();
     const project = await deps.loadProject();
-    const artifactId = await reviseWeave({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    if (!body.artifactId || !body.reportId || !body.selectedIssueIds?.length) {
+      return c.json({ error: "请先打开当前稿件的审查意见，选择需要修订的问题。" }, 400);
+    }
+    if (!Number.isInteger(body.startChapter) || !Number.isInteger(body.endChapter)
+      || body.startChapter < 1 || body.endChapter < body.startChapter) {
+      return c.json({ error: "请输入有效的修订章范围，结束章不能小于开始章。" }, 400);
+    }
+    const [artifact, report] = await Promise.all([loadArtifact(root, body.artifactId), loadReport(root, body.reportId)]);
+    if (!artifact || !report) return c.json({ error: "找不到待修订稿件或审查报告，请刷新后重新发起修订。" }, 400);
+    const runId = newRunId();
+    const now = new Date().toISOString();
+    const scope = body.reviseStructure ? "structure" : `chapters:${body.startChapter}-${body.endChapter}`;
+    await saveRun(root, {
+      runId, stage: "weave", operation: "revise", roleId: "weave.main", status: "running", bookId: body.bookId,
+      reportId: body.reportId, scope, progressDone: 0, progressLabel: "准备修订", modelSnapshot: {},
+      checkpoint: {
+        requestedStart: body.startChapter, requestedEnd: body.endChapter, requirements: body.requirements,
+        producedScope: scope, revisionArtifactId: body.artifactId,
+        revisionIssueIds: body.selectedIssueIds, revisionReuseStale: body.reuseStale,
+      },
+      createdAt: now, updatedAt: now,
+    });
+    const work = reviseWeave({
+      root,
       project,
       artifactId: body.artifactId,
       reportId: body.reportId,
@@ -481,8 +588,19 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       startChapter: body.startChapter,
       endChapter: body.endChapter, requirements: body.requirements,
       reuseStale: body.reuseStale,
+      reviseStructure: body.reviseStructure,
+      runId,
     });
-    return c.json({ artifactId });
+    if (body.wait) {
+      try {
+        return c.json({ artifactId: await work });
+      } catch (error) {
+        await recordWeaveFailure(root, runId, error);
+        return c.json({ error: weaveRevisionError(error) }, 400);
+      }
+    }
+    void work.catch((error: unknown) => recordWeaveFailure(root, runId, error));
+    return c.json({ runId, status: "running", operation: "revise", progressLabel: "准备修订" });
   });
 
   app.post("/api/v1/authoring/weave/adopt", async (c) => {
@@ -525,14 +643,20 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   app.post("/api/v1/authoring/write/generate", async (c) => {
     const body = await c.req.json<{ bookId: string; chapterNumber: number; title?: string; requirements?: string }>();
     const project = await deps.loadProject();
-    const result = await generateChapterDraft({
-      root: storeRoot(deps.root, body),
-      project,
-      chapterNumber: body.chapterNumber,
-      title: body.title,
-      requirements: body.requirements,
-    });
-    return c.json(result);
+    try {
+      const result = await generateChapterDraft({
+        root: storeRoot(deps.root, body),
+        project,
+        chapterNumber: body.chapterNumber,
+        title: body.title,
+        requirements: body.requirements,
+      });
+      return c.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/请先/.test(message)) return c.json({ error: message }, 400);
+      throw error;
+    }
   });
 
   app.post("/api/v1/authoring/write/review", async (c) => {

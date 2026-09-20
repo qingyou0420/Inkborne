@@ -141,6 +141,7 @@ export type ChatRequestedIntent = RequestedIntent;
 export type ChatActionPayload = ActionPayload;
 
 export interface SendMessageOptions {
+  readonly authoringStage?: "ask";
   readonly activeBookId?: string;
   readonly sessionKind?: ChatSessionKind;
   readonly actionSource?: ChatActionSource;

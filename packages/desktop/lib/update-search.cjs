@@ -48,6 +48,18 @@ function shouldUseRemoteUpdateCheck(kind) {
   return kind !== "silent";
 }
 
+/** A ready local upgrade must not be hidden by an older GitHub release. */
+async function checkUpdateSources({ kind, readLocal, readRemote, onRemoteError }) {
+  const local = await readLocal();
+  if (local.hasUpdate || !shouldUseRemoteUpdateCheck(kind)) return local;
+  try {
+    return await readRemote();
+  } catch (error) {
+    onRemoteError?.(error);
+    return local;
+  }
+}
+
 /**
  * @param {string[]} out
  * @param {unknown} d
@@ -85,5 +97,6 @@ module.exports = {
   MANUAL_DIR_KEYS,
   parseCheckUpdateRequest,
   shouldUseRemoteUpdateCheck,
+  checkUpdateSources,
   collectUpdateSearchDirs,
 };

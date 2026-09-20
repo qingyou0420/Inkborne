@@ -76,6 +76,9 @@ export const InputRefSchema = z.object({
   kind: z.string().min(1),
   id: z.string().min(1),
   version: z.number().int().min(1).optional(),
+  usage: z.enum(["index", "full", "excerpt"]).optional(),
+  reason: z.string().optional(),
+  snippet: z.string().optional(),
 });
 export type InputRef = z.infer<typeof InputRefSchema>;
 
@@ -152,6 +155,10 @@ export const AuthoringRunCheckpointSchema = z.object({
   missingChapters: z.array(z.number().int().min(1)).default([]),
   completedChapters: z.array(z.number().int().min(1)).default([]),
   producedScope: z.string().optional(),
+  targetChapters: z.number().int().min(1).optional(),
+  revisionArtifactId: z.string().optional(),
+  revisionIssueIds: z.array(z.string()).optional(),
+  revisionReuseStale: z.boolean().optional(),
 });
 export type AuthoringRunCheckpoint = z.infer<typeof AuthoringRunCheckpointSchema>;
 

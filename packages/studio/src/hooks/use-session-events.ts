@@ -16,8 +16,9 @@ import { clearBookCreateSessionId, getBookCreateSessionId } from "../pages/chat-
 export function bookCreatedRoute(
   page: HashRoute["page"],
   bookId: string,
+  canonCandidate = false,
 ): HashRoute | null {
-  if (page === "book-create") return { page: "book", bookId };
+  if (page === "book-create") return { page: canonCandidate ? "book-ask" : "book", bookId };
   return null;
 }
 
@@ -42,7 +43,7 @@ export function useSessionEvents(
     }
 
     if (recent.event === "book:created") {
-      const data = recent.data as { sessionId?: string; bookId?: string } | null;
+      const data = recent.data as { sessionId?: string; bookId?: string; canonCandidate?: boolean } | null;
       if (!data?.sessionId || !data.bookId) return;
       const { sessionId, bookId } = data;
 
@@ -52,7 +53,7 @@ export function useSessionEvents(
         const previousKey = bookKey(session.bookId);
         const nextKey = bookKey(bookId);
         return {
-          sessions: updateSession(state.sessions, sessionId, () => ({ bookId })),
+          sessions: updateSession(state.sessions, sessionId, () => ({ bookId, sessionKind: "book" })),
           sessionIdsByBook: {
             ...state.sessionIdsByBook,
             [previousKey]: (state.sessionIdsByBook[previousKey] ?? []).filter((id) => id !== sessionId),
@@ -63,7 +64,7 @@ export function useSessionEvents(
 
       if (getBookCreateSessionId() === sessionId) {
         clearBookCreateSessionId();
-        const next = bookCreatedRoute(route.page, bookId);
+        const next = bookCreatedRoute(route.page, bookId, data.canonCandidate === true);
         if (next) setRoute(next);
       }
     }

@@ -111,18 +111,30 @@ export function parseCanon(markdown: string): CanonDocument {
 export function canonFromCompat(input: {
   readonly title: string;
   readonly genre?: string;
+  readonly targetChapters?: number;
+  readonly chapterWordCount?: number;
   readonly storyCard?: string;
   readonly authorIntent?: string;
   readonly storyFrame?: string;
+  readonly storyBible?: string;
 }): CanonDocument {
-  const card = input.storyCard?.trim() ?? "";
-  const intent = input.authorIntent?.trim() ?? "";
-  const frame = input.storyFrame?.trim() ?? "";
+  // Legacy documents have their own headings. Keep their full text inside a
+  // canon field without letting an embedded ## become a new canon section.
+  const nested = (text?: string) => (text?.trim() ?? "").replace(/^#{1,2}(?=\s)/gm, "###");
+  const card = nested(input.storyCard);
+  const intent = nested(input.authorIntent);
+  const frame = nested(input.storyFrame);
+  const bible = nested(input.storyBible);
+  const proposition = frame && bible
+    ? `### 故事框架\n\n${frame}\n\n### 故事资料\n\n${bible}`
+    : frame || bible;
   return CanonDocumentSchema.parse({
     title: input.title,
     genre: input.genre,
-    oneLine: firstNonEmpty(card, intent).slice(0, 200),
-    proposition: frame.slice(0, 800),
+    targetChapters: input.targetChapters,
+    chapterWordCount: input.chapterWordCount,
+    oneLine: firstNonEmpty(card, intent),
+    proposition,
     protagonist: "",
     conflict: "",
     voice: "",

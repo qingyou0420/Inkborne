@@ -44,6 +44,7 @@ export function BookAskPage({
         activeBookId={bookId}
         resumeSessionId={resumeSessionId}
         mode="book"
+        authoringStage="ask"
         nav={nav}
         theme={theme}
         t={t}

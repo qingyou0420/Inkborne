@@ -86,6 +86,7 @@ export {
   loadRoleApiKeysSync,
   DEFAULT_ROLE_INSTRUCTIONS,
   createLightweightBook,
+  createAskBookCandidate,
   isBookPresent,
   isLightweightAuthoringBook,
   loadCanonDocument,
@@ -110,6 +111,7 @@ export {
   bindDraftToBook,
   reviseGroundEntry,
   generateAskCanon,
+  prepareAskCanon,
   reviewAskCanon,
   reviseAskCanon,
   adoptAskCanon,
@@ -118,6 +120,9 @@ export {
   reviewGroundEntries,
   adoptGroundEntries,
   generateWeaveRange,
+  generateWeaveStructure,
+  resolveWeaveTargetChapters,
+  validateVolumePlan,
   reviewWeave,
   reviseWeave,
   adoptWeave,
@@ -134,6 +139,8 @@ export {
   type AuthoringStoreRoot,
   type CanonDocument,
   type AuthoringLlmFn,
+  type AskBookCreateInput,
+  type AskBookCreateResult,
 } from "./authoring/index.js";
 export { type CurrentState, type ParticleLedger, type PendingHooks, type PendingHook, type LedgerEntry } from "./models/state.js";
 export { type GenreProfile, type ParsedGenreProfile, GenreProfileSchema, parseGenreProfile } from "./models/genre-profile.js";

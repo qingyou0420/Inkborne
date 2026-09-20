@@ -62,6 +62,16 @@ describe("authoring four-agent IA", () => {
     expect(read("src/components/AskCanonPanel.tsx")).toMatch(/persistIfDirty/);
     expect(read("src/components/AuthoringGroundPanel.tsx")).toMatch(/persistIfDirty/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/persistIfDirty/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/生成分卷规划/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/outline-weave-chapters/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/reviseStructure: isStructureCandidate/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/openChapterGeneration/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/const openChapterGeneration = \(\) => \{\s*applyVolumeRange\(\);/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).not.toMatch(/applyVolumeRange\(plannedVolumes\[0\]\)/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).not.toMatch(/targetChapters: Number\(endChapter\)/);
+    expect(read("src/pages/OutlineWorkspace.tsx")).toMatch(/authoringBook \?/);
+    expect(read("src/pages/OutlineWorkspace.tsx")).toMatch(/preferredVolume/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/请先/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/outline-weave-pause/);
     expect(read("src/components/AskCanonPanel.tsx")).toMatch(/ask-candidate-body/);
     expect(read("src/components/AuthoringRolesPanel.tsx")).toMatch(/测试此配置/);

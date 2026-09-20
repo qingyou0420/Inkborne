@@ -6,9 +6,53 @@ import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
 import { parseCanon, serializeCanon } from "../authoring/canon.js";
 import { generateGroundEntries, proposeSettingsCatalog, reviewGroundEntries, reviseGroundEntry } from "../authoring/stages/ground.js";
-import { generateWeaveRange, reviewWeave, reviseWeave } from "../authoring/stages/weave.js";
-import { generateChapterDraft } from "../authoring/stages/write.js";
+import { adoptWeave, generateWeaveRange as generateWeaveRangeCore, generateWeaveStructure, resolveWeaveTargetChapters, reviewWeave, reviseWeave } from "../authoring/stages/weave.js";
+import { generateChapterDraft as generateChapterDraftCore } from "../authoring/stages/write.js";
 import { loadArtifact, loadManifest, loadRun, newRunId, saveRunControl } from "../authoring/store.js";
+
+async function generateWeaveRange(input: Parameters<typeof generateWeaveRangeCore>[0]) {
+  const manifest = await loadManifest(input.root);
+  if (!manifest.adopted.weave && input.root.bookId) {
+    const target = await resolveWeaveTargetChapters(input.root, input.targetChapters);
+    const structured = await generateWeaveStructure({
+      root: input.root,
+      project: input.project,
+      llm: async () => JSON.stringify({
+        bookOutline: "测试结构",
+        volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: target, body: "测试卷目标" }],
+      }),
+    });
+    await adoptWeave({ root: input.root, project: input.project, artifactId: structured.artifactId });
+  }
+  return generateWeaveRangeCore(input);
+}
+
+async function generateChapterDraft(input: Parameters<typeof generateChapterDraftCore>[0]) {
+  const manifest = await loadManifest(input.root);
+  if (!manifest.adopted.weave && input.root.bookId) {
+    const target = await resolveWeaveTargetChapters(input.root);
+    const structured = await generateWeaveStructure({
+      root: input.root,
+      project: input.project,
+      llm: async () => JSON.stringify({
+        bookOutline: "测试结构",
+        volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: target, body: "测试卷目标" }],
+      }),
+    });
+    await adoptWeave({ root: input.root, project: input.project, artifactId: structured.artifactId });
+    const planned = await generateWeaveRangeCore({
+      root: input.root,
+      project: input.project,
+      startChapter: input.chapterNumber,
+      endChapter: input.chapterNumber,
+      llm: async () => JSON.stringify({
+        chapters: [{ chapterNumber: input.chapterNumber, title: "渡口", summary: "测试章概要，含视角地点冲突转折。" }],
+      }),
+    });
+    await adoptWeave({ root: input.root, project: input.project, artifactId: planned.artifactId });
+  }
+  return generateChapterDraftCore(input);
+}
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 const project = ProjectConfigSchema.parse({ name:"test", version:"0.1.0", llm:{ provider:"custom", service:"test", configSource:"studio", baseUrl:"https://example.invalid/v1", model:"test", apiKey:"test" } });

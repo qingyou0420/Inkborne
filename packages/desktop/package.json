@@ -1,6 +1,6 @@
 {
   "name": "@fantawriter/desktop",
-  "version": "2.2.1",
+  "version": "2.2.7",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Inkborne / 墨生万象 desktop shell around the InkOS Studio engine",

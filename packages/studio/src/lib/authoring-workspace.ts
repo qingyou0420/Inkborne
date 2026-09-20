@@ -75,6 +75,7 @@ export interface AuthoringWorkspace {
     readonly version: number;
     readonly status: string;
     readonly body: string;
+    readonly scope?: string;
   };
   readonly runs?: ReadonlyArray<{
     readonly runId: string;
@@ -94,6 +95,7 @@ export interface AuthoringWorkspace {
     readonly categories: ReadonlyArray<string>;
     readonly entries: ReadonlyArray<AuthoringCatalogEntry>;
   };
+  readonly authoringBook?: boolean;
   readonly artifacts?: ReadonlyArray<AuthoringArtifact>;
   readonly reports?: ReadonlyArray<AuthoringReport>;
   readonly manifest?: {

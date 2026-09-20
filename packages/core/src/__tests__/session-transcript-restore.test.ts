@@ -2,7 +2,10 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { appendTranscriptEvent } from "../interaction/session-transcript.js";
+import { Agent } from "@mariozechner/pi-agent-core";
+import { createAssistantMessageEventStream, type Api, type Message, type Model } from "@mariozechner/pi-ai";
+import { appendTranscriptEvent, appendTranscriptEvents } from "../interaction/session-transcript.js";
+import { createAndPersistBookSession, deleteBookSession, loadBookSession, migrateBookSession } from "../interaction/book-session-store.js";
 import {
   adaptRestoredAgentMessagesForModel,
   appendRestoredHistoryBoundary,
@@ -10,7 +13,7 @@ import {
   restoreAgentMessagesFromTranscript,
   TOOL_RESULT_BRIDGE_TEXT,
 } from "../interaction/session-transcript-restore.js";
-import type { MessageEvent } from "../interaction/session-transcript-schema.js";
+import type { MessageEvent, SessionKind } from "../interaction/session-transcript-schema.js";
 
 const usage = {
   input: 0,
@@ -30,6 +33,228 @@ describe("session transcript restore", () => {
 
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  async function appendRecoveryTurn(input: {
+    requestId: string; kind: SessionKind; text: string;
+    terminal: "request_failed" | "request_committed" | "unfinished";
+    error?: string; assistantAborted?: boolean;
+  }) {
+    await appendTranscriptEvents(projectRoot, "s-recover", ({ nextSeq }) => {
+      const base = { version: 1 as const, sessionId: "s-recover", requestId: input.requestId };
+      const toolId = `tool-${input.requestId}`;
+      return [
+        { ...base, type: "request_started", seq: nextSeq, timestamp: nextSeq, sessionKind: input.kind, input: input.text },
+        {
+          ...base, type: "message", seq: nextSeq + 1, timestamp: nextSeq + 1, uuid: `u-${input.requestId}`, parentUuid: null, role: "user",
+          message: { role: "user", content: input.text, timestamp: nextSeq + 1 },
+        },
+        {
+          ...base, type: "message", seq: nextSeq + 2, timestamp: nextSeq + 2, uuid: `a-${input.requestId}`, parentUuid: `u-${input.requestId}`, role: "assistant",
+          message: {
+            role: "assistant", content: [
+              { type: "text", text: "FAILED_ASSISTANT_MUST_NOT_REPLAY" },
+              { type: "toolCall", id: toolId, name: "propose_action", arguments: { wrong: "FAILED_TOOL_ARGUMENT" } },
+            ], api: "openai-completions", provider: "openai", model: "synthetic", usage,
+            stopReason: input.assistantAborted ? "aborted" : "toolUse", timestamp: nextSeq + 2,
+          },
+        },
+        {
+          ...base, type: "message", seq: nextSeq + 3, timestamp: nextSeq + 3, uuid: `t-${input.requestId}`, parentUuid: `a-${input.requestId}`, role: "toolResult",
+          message: { role: "toolResult", toolCallId: toolId, toolName: "propose_action", isError: true, content: [{ type: "text", text: "FAILED_TOOL_RESULT" }], timestamp: nextSeq + 3 },
+        },
+        ...(input.terminal === "unfinished" ? [] : input.terminal === "request_failed" ? [{
+          ...base, type: "request_failed" as const, seq: nextSeq + 4, timestamp: nextSeq + 4,
+          error: input.error ?? "Tool validation retries exhausted",
+        }] : [{ ...base, type: "request_committed" as const, seq: nextSeq + 4, timestamp: nextSeq + 4 }]),
+      ];
+    });
+  }
+
+  it.each(["book", "book-create"] as const)("retains failed %s author input in SDK retry and loadBookSession without replaying failed output", async (kind) => {
+    await createAndPersistBookSession(projectRoot, kind === "book" ? "existing-book" : null, "s-recover", kind);
+    const authorText = "合成原文：柳吟寻找家书，保持女主限知。" + "夜".repeat(4200) + "终章保留作者的结局。";
+    await appendRecoveryTurn({ requestId: "failed", kind, text: authorText, terminal: "request_failed" });
+    const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s-recover", kind);
+    expect(restored).toMatchObject([{ role: "user", content: authorText }]);
+    const loaded = await loadBookSession(projectRoot, "s-recover");
+    expect(loaded?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([{ role: "user", content: authorText }]);
+    expect(JSON.stringify(loaded)).not.toContain("FAILED_");
+
+    const model: Model<Api> = {
+      id: "retry-model", name: "Offline retry", api: "openai-completions", provider: "openai",
+      baseUrl: "https://unused.invalid/v1", reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 100,
+    };
+    const calls: Message[][] = [];
+    const agent = new Agent({
+      initialState: { model, messages: adaptRestoredAgentMessagesForModel(restored, model) },
+      streamFn: (_model, context) => {
+        calls.push(context.messages);
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "done", reason: "stop", message: {
+          role: "assistant", content: [{ type: "text", text: "依据原文重试。" }],
+          api: model.api, provider: model.provider, model: model.id, usage, stopReason: "stop", timestamp: 100,
+        } });
+        return stream;
+      },
+    });
+    await agent.prompt("保留刚才约定，再试一次。");
+    expect(calls[0]).toContainEqual(expect.objectContaining({ role: "user", content: authorText }));
+    expect(JSON.stringify(calls)).not.toContain("FAILED_");
+    await appendRecoveryTurn({ requestId: "retry", kind, text: "保留刚才约定，再试一次。", terminal: "request_committed" });
+    expect((await loadBookSession(projectRoot, "s-recover"))?.messages[0]?.content).toBe(authorText);
+    expect(JSON.stringify(await restoreAgentMessagesFromTranscript(projectRoot, "s-recover", kind))).toContain(authorText);
+  });
+
+  it("does not recover cancelled, unfinished, non-authoring or deleted requests", async () => {
+    await createAndPersistBookSession(projectRoot, null, "s-recover", "book-create");
+    await appendRecoveryTurn({ requestId: "cancelled", kind: "book-create", text: "CANCELLED_INPUT", terminal: "request_failed", error: "This operation was aborted" });
+    await appendRecoveryTurn({ requestId: "aborted-assistant", kind: "book-create", text: "ABORTED_INPUT", terminal: "request_failed", assistantAborted: true });
+    await appendRecoveryTurn({ requestId: "pending", kind: "book-create", text: "UNFINISHED_INPUT", terminal: "unfinished" });
+    await appendRecoveryTurn({ requestId: "chat", kind: "chat", text: "OTHER_MODE_INPUT", terminal: "request_failed" });
+    expect(await restoreAgentMessagesFromTranscript(projectRoot, "s-recover", "book-create")).toEqual([]);
+    expect((await loadBookSession(projectRoot, "s-recover"))?.messages).toEqual([]);
+    await appendRecoveryTurn({ requestId: "failed-author", kind: "book-create", text: "RECOVERABLE_INPUT", terminal: "request_failed" });
+    expect((await loadBookSession(projectRoot, "s-recover"))?.messages).toHaveLength(1);
+    await deleteBookSession(projectRoot, "s-recover");
+    expect(await restoreAgentMessagesFromTranscript(projectRoot, "s-recover", "book-create")).toEqual([]);
+    expect(await loadBookSession(projectRoot, "s-recover")).toBeNull();
+  });
+
+  it("keeps pre-book author source after a real migration and later book dialogue without replaying creation tools", async () => {
+    await createAndPersistBookSession(projectRoot, null, "s-recover", "book-create");
+    await appendRecoveryTurn({ requestId: "original", kind: "book-create", text: "最初作者原文不可丢失。", terminal: "request_failed" });
+    await appendRecoveryTurn({ requestId: "proposal", kind: "book-create", text: "补充约定：七卷不可合并。", terminal: "request_committed" });
+    // A different request kind alone must not import pre-book material.
+    expect(await restoreAgentMessagesFromTranscript(projectRoot, "s-recover", "book")).toEqual([]);
+    await migrateBookSession(projectRoot, "s-recover", "adopted-book");
+    for (let index = 0; index < 14; index += 1) {
+      await appendRecoveryTurn({ requestId: `later-${index}`, kind: "book", text: `书中讨论 ${index}`, terminal: "request_committed" });
+    }
+    const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s-recover", "book");
+    const inputs = restored.filter((message) => message.role === "user").map((message) => message.content);
+    expect(inputs).toContain("最初作者原文不可丢失。");
+    expect(inputs).toContain("补充约定：七卷不可合并。");
+    expect(inputs).toContain("书中讨论 13");
+    expect(JSON.stringify(restored)).not.toContain("FAILED_ASSISTANT");
+    expect(JSON.stringify(restored)).not.toContain("FAILED_TOOL_ARGUMENT");
+    expect(restored.some((message) => message.role === "toolResult")).toBe(false);
+    expect((await loadBookSession(projectRoot, "s-recover"))?.messages[0]?.content).toBe("最初作者原文不可丢失。");
+  });
+
+  it.each(["openai-completions", "anthropic-messages"] as const)(
+    "keeps a 4259-character author brief after a failed book-create proposal and SDK reload using %s",
+    async (api) => {
+      // Synthetic material only; do not commit any author's manuscript here.
+      const opening = "合成故事：北川与南泽隔河相望。柳吟想救出被困的师父。";
+      const ending = "末尾约定：坚持女主限知视角；最后一封信到终章才揭开。";
+      const authorText = opening + "景".repeat(4259 - opening.length - ending.length) + ending;
+      const retry = "继续生成确认卡，保留刚才全部约定。";
+      const appendProposalTurn = async (requestId: string, input: string, failed: boolean) => {
+        await appendTranscriptEvents(projectRoot, "s1", ({ nextSeq }) => {
+          const base = { version: 1 as const, sessionId: "s1", requestId };
+          const toolId = `proposal-${requestId}`;
+          return [
+            { ...base, type: "request_started", seq: nextSeq, timestamp: nextSeq, sessionKind: "book-create", input },
+            {
+              ...base, type: "message", seq: nextSeq + 1, timestamp: nextSeq + 1,
+              uuid: `u-${requestId}`, parentUuid: null, role: "user",
+              message: { role: "user", content: [{ type: "text", text: input }], timestamp: nextSeq + 1 },
+            },
+            {
+              ...base, type: "message", seq: nextSeq + 2, timestamp: nextSeq + 2,
+              uuid: `a-${requestId}`, parentUuid: `u-${requestId}`, role: "assistant", toolCallId: toolId,
+              message: {
+                role: "assistant", content: [{ type: "toolCall", id: toolId, name: "propose_action", arguments: {
+                  action: "create_book", instruction: "TOOL_ARGUMENT_SHOULD_NOT_BE_REPLAYED",
+                  createBook: failed ? "invalid nested object" : { title: "合成故事" },
+                } }], api: "openai-completions", provider: "openai", model: "original-main", usage,
+                stopReason: "toolUse", timestamp: nextSeq + 2,
+              },
+            },
+            {
+              ...base, type: "message", seq: nextSeq + 3, timestamp: nextSeq + 3,
+              uuid: `t-${requestId}`, parentUuid: `a-${requestId}`, role: "toolResult", toolCallId: toolId,
+              message: {
+                role: "toolResult", toolCallId: toolId, toolName: "propose_action", isError: failed,
+                content: [{ type: "text", text: failed ? "createBook: must be object" : "确认卡已准备" }],
+                timestamp: nextSeq + 3,
+              },
+            },
+            { ...base, type: "request_committed", seq: nextSeq + 4, timestamp: nextSeq + 4 },
+          ];
+        });
+      };
+      await appendProposalTurn("failed", authorText, true);
+      const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1", "book-create");
+      expect(restored.filter((message) => message.role === "user")).toMatchObject([{ content: authorText }]);
+      expect(JSON.stringify(restored)).toContain("createBook: must be object");
+      expect(JSON.stringify(restored)).not.toContain("TOOL_ARGUMENT_SHOULD_NOT_BE_REPLAYED");
+
+      const model: Model<Api> = {
+        id: api === "openai-completions" ? "original-main" : "changed-model",
+        name: "Offline SDK regression", api, provider: api === "openai-completions" ? "openai" : "anthropic",
+        baseUrl: "https://unused.invalid/v1", reasoning: false, input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 100,
+      };
+      const calls: Message[][] = [];
+      const agent = new Agent({
+        initialState: {
+          model,
+          messages: appendRestoredHistoryBoundary(adaptRestoredAgentMessagesForModel(restored, model), "zh"),
+        },
+        // The app represents historical system notes as ordinary context for
+        // the SDK. The author's own messages must survive this conversion.
+        convertToLlm: (messages) => messages.flatMap((message): Message[] => {
+          const raw = message as { role: string; content?: unknown; timestamp?: number };
+          if (raw.role === "system" && typeof raw.content === "string") {
+            return [{ role: "user", content: raw.content, timestamp: raw.timestamp ?? 0 }];
+          }
+          return raw.role === "user" || raw.role === "assistant" || raw.role === "toolResult"
+            ? [message as Message] : [];
+        }),
+        streamFn: (_model, context) => {
+          calls.push(context.messages);
+          const stream = createAssistantMessageEventStream();
+          stream.push({ type: "done", reason: "stop", message: {
+            role: "assistant", content: [{ type: "text", text: "已保留原始构思。" }],
+            api: model.api, provider: model.provider, model: model.id, usage, stopReason: "stop", timestamp: 100,
+          } });
+          return stream;
+        },
+      });
+      await agent.prompt(retry);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContainEqual(expect.objectContaining({ role: "user", content: authorText }));
+      expect(JSON.stringify(calls[0])).toContain(retry);
+      expect(calls[0]!.some((message) => message.role === "toolResult")).toBe(false);
+      expect(JSON.stringify(calls[0])).not.toContain('"toolCall"');
+
+      await appendProposalTurn("retry", retry, false);
+      const again = await restoreAgentMessagesFromTranscript(projectRoot, "s1", "book-create");
+      expect(again.filter((message) => message.role === "user")).toMatchObject([{ content: authorText }, { content: retry }]);
+      expect(JSON.stringify(again)).toContain("确认卡已准备");
+    },
+  );
+
+  it("keeps the original book-create author intent beyond twelve later clarification messages", async () => {
+    const inputs = ["最早的构思必须保留", ...Array.from({ length: 15 }, (_, index) => `后续补充 ${index + 1}`)];
+    for (const [index, input] of inputs.entries()) {
+      await appendTranscriptEvents(projectRoot, "s1", ({ nextSeq }) => {
+        const base = { version: 1 as const, sessionId: "s1", requestId: `r${index}` };
+        return [
+          { ...base, type: "request_started", seq: nextSeq, timestamp: nextSeq, sessionKind: "book-create", input },
+          {
+            ...base, type: "message", seq: nextSeq + 1, timestamp: nextSeq + 1,
+            uuid: `u${index}`, parentUuid: null, role: "user", message: { role: "user", content: input, timestamp: nextSeq + 1 },
+          },
+          { ...base, type: "request_committed", seq: nextSeq + 2, timestamp: nextSeq + 2 },
+        ];
+      });
+    }
+    const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1", "book-create");
+    expect(restored.map((message) => (message as { content: string }).content)).toEqual(inputs);
   });
 
   it("只恢复已 committed request 内的 message", async () => {
@@ -377,7 +602,8 @@ describe("session transcript restore", () => {
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1", "book");
     const body = JSON.stringify(restored);
 
-    expect(restored.map((message) => message.role)).toEqual(["system", "user", "assistant"]);
+    expect(restored.map((message) => message.role)).toEqual(["system", "user", "user", "assistant"]);
+    expect(body).toContain("写下一章");
     expect(body).toContain("历史状态摘要");
     expect(body).toContain("sub_agent");
     expect(body).toContain("Chapter 12 written.");
@@ -601,7 +827,7 @@ describe("session transcript restore", () => {
     expect(lines.some((line) => /工具结果 10$/.test(line))).toBe(true);
   });
 
-  it("恢复中断工具轮次时只保留历史摘要和后续自然输入", async () => {
+  it("恢复中断工具轮次时保留作者输入、历史摘要和后续自然输入", async () => {
     await appendTranscriptEvent(projectRoot, {
       type: "request_started",
       version: 1,
@@ -729,7 +955,7 @@ describe("session transcript restore", () => {
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1");
 
     const body = JSON.stringify(restored);
-    expect(restored.map((message) => message.role)).toEqual(["system", "user"]);
+    expect(restored.map((message) => message.role)).toEqual(["system", "user", "user"]);
     expect(body).toContain("历史状态摘要");
     expect(body).toContain("资料");
     expect(body).toContain("继续");

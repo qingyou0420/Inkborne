@@ -9,10 +9,13 @@ import { persistAdoptedChapter, chapterFileName, findChapterRelativePath, resolv
 import {
   assembleAuthoringContext,
   invalidateChapterState,
+  isLightweightAuthoringBook,
   loadChapterText,
+  loadOutlineText,
   resolvePlannedChapterTitle,
   writeChapterState,
 } from "../context.js";
+import { findChapterNode, parseVolumeMapTree } from "../../utils/volume-map-tree.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
 import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
@@ -54,12 +57,23 @@ export async function generateChapterDraft(input: WriteRuntime & {
   readonly requirements?: string;
 }): Promise<{ artifactId: string; runId: string; body: string }> {
   if (!input.root.bookId) throw new Error("落笔需要已建的书。");
+  const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
+  const currentManifest = await loadManifest(input.root);
+  if (await isLightweightAuthoringBook(bookDir)) {
+    if (!currentManifest.adopted.weave) {
+      throw new Error("请先到织卷生成并采用分卷与本章规划，再自动写正文。");
+    }
+    const outline = await loadOutlineText(input.root);
+    const node = findChapterNode(parseVolumeMapTree(outline), input.chapterNumber);
+    if (!node?.summary?.trim() || node.summary.trim() === "（待补概要）") {
+      throw new Error(`第 ${input.chapterNumber} 章还没有已采用的织卷概要，请先到织卷生成并采用本章规划。`);
+    }
+  }
   const resolved = await resolve(input.project, "write.main", input.root.projectRoot);
   const ctx = await assembleAuthoringContext(input.root, { stage: "write", chapterNumber: input.chapterNumber });
   const previous = input.chapterNumber > 1
     ? await loadChapterText(input.root, input.chapterNumber - 1)
     : "";
-  const currentManifest = await loadManifest(input.root);
   const priorId = currentManifest.candidates.write?.[String(input.chapterNumber)];
   const prior = priorId ? await loadArtifact(input.root, priorId) : null;
   const existing = prior?.body ?? await loadChapterText(input.root, input.chapterNumber);

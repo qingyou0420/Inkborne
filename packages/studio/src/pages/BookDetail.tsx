@@ -582,7 +582,7 @@ export function BookDetail({
             onChanged={() => refetch()}
             onRegisterBeforeLeave={registerWriteGuard}
           />
-          {chapters.length === 0 && (emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip)) && (
+          {stage && chapters.length === 0 && (emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip)) && (
             <LiteraryEmpty
               title={emptyCopy.title}
               subtitle={emptyCopy.subtitle}

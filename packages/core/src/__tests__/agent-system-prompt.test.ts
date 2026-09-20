@@ -4,6 +4,19 @@ import { createSkillRegistry } from "../skills/index.js";
 
 describe("buildAgentSystemPrompt", () => {
   describe("mode isolation", () => {
+    it("keeps Ask discussion separate from legacy book production in both languages", () => {
+      const zh = buildAgentSystemPrompt("醉词", "zh", "book", { authoringStage: "ask", actionSource: "button", requestedIntent: "write_next" });
+      const en = buildAgentSystemPrompt("Story", "en", "book", { authoringStage: "ask" });
+      expect(zh).toContain("问心只整理故事正典");
+      expect(zh).toContain("更多 → 重新生成");
+      expect(zh).toContain("作者的明确约定高于助手建议和审查意见");
+      expect(en).toContain("A chat reply neither saves a canon candidate nor changes adopted content");
+      for (const prompt of [zh, en]) {
+        expect(prompt).not.toContain("sub_agent");
+        expect(prompt).not.toContain("必须调用 write_truth_file");
+        expect(prompt).not.toContain("architect");
+      }
+    });
     it("defaults no-book sessions to plain chat, not book creation", () => {
       const prompt = buildAgentSystemPrompt(null, "zh");
       expect(prompt).toContain("普通聊天助手");

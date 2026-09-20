@@ -81,7 +81,29 @@ vi.mock("@mariozechner/pi-ai", async () => {
     const prompt = lastVisibleUserText(context.messages);
     const allUserText = allVisibleUserText(context.messages);
     const timestamp = Date.now();
-    const message = last?.role === "toolResult"
+    const currentUserIndex = context.messages.findLastIndex((item: any) => item.role === "user");
+    const proposalFailures = context.messages.slice(currentUserIndex + 1)
+      .filter((item: any) => item.role === "toolResult" && item.toolName === "propose_action" && item.isError).length;
+    const isProposalRepairCase = prompt.startsWith("propose repair ") || prompt === "propose invalid forever";
+    const proposalRemainsInvalid = prompt === "propose invalid forever"
+      || proposalFailures < (prompt === "propose repair twice" ? 2 : 1);
+    const message = isProposalRepairCase
+      ? assistant([{
+          type: "toolCall",
+          id: `proposal-repair-${timestamp}-${proposalFailures}`,
+          name: "propose_action",
+          arguments: {
+            action: "create_book",
+            title: "确认建书：雨巷旧账",
+            instruction: "建立古风小说《雨巷旧账》，以旧账争夺为冲突。",
+            // The outer arguments are valid JSON; the nested field is a
+            // string containing malformed JSON, as in the provider failure.
+            createBook: proposalRemainsInvalid
+              ? '{"title":"雨巷旧账","synopsis":"三种"醉""}'
+              : { title: "雨巷旧账", language: "zh", targetChapters: 260, chapterWordCount: 5000 },
+          },
+        }], timestamp)
+      : last?.role === "toolResult"
       ? assistant([{ type: "text", text: "ok" }], timestamp)
       : prompt === "model error"
         ? {
@@ -111,6 +133,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
                 title: "生成短篇",
                 summary: "确认后生成一篇短篇。",
                 instruction: "生成一篇短篇。",
+                shortRun: { title: "雨巷旧账", direction: "雨巷里的旧账争夺。" },
               },
             },
           ], timestamp)
@@ -182,6 +205,8 @@ vi.mock("@mariozechner/pi-ai", async () => {
                 arguments: { fileName: "outline/story_frame.md", content: "# 骨架\n" },
               },
             ], timestamp)
+        : prompt === "revise foundation"
+          ? assistant([{ type: "toolCall", id: "architect-legacy-1", name: "sub_agent", arguments: { agent: "architect", revise: true, instruction: "升级大纲与角色卡", feedback: "更新人物动机" } }], timestamp)
         : prompt === "write next" || allUserText.includes("write next")
           ? assistant([
               {
@@ -1031,12 +1056,80 @@ describe("runAgentSession cache — bookId switch", () => {
     );
 
     expect(result.responseText).toBe("");
+    expect(result.errorMessage).toBeUndefined();
     expect(streamCalls).toHaveLength(1);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "toolResult", toolName: "propose_action" }),
+        expect.objectContaining({ role: "toolResult", toolName: "propose_action", isError: false }),
       ]),
     );
+  });
+
+  it.each([ ["once", 1], ["twice", 2] ] as const)(
+    "lets the model repair invalid proposal arguments %s before stopping at the successful card",
+    async (mode, expectedFailures) => {
+      const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+      const pipeline = { initBook: vi.fn() } as any;
+      const sessionId = `proposal-repair-${mode}`;
+      const result = await runAgentSession(
+        { sessionId, bookId: null, sessionKind: "book-create", language: "zh", pipeline, projectRoot, model },
+        `propose repair ${mode}`,
+      );
+
+      const proposals = result.messages.filter((message: any) => message.role === "toolResult" && message.toolName === "propose_action") as any[];
+      expect(proposals.map((message) => message.isError)).toEqual([...Array(expectedFailures).fill(true), false]);
+      expect(proposals.at(-1).details.actionPayload.createBook).toMatchObject({
+        title: "雨巷旧账", targetChapters: 260, chapterWordCount: 5000,
+      });
+      expect(streamCalls).toHaveLength(expectedFailures + 1);
+      expect(JSON.stringify(streamCalls[1].context.messages)).toContain("must be object");
+      expect(result.responseText).toBe("");
+      expect(result.errorMessage).toBeUndefined();
+      expect(pipeline.initBook).not.toHaveBeenCalled();
+      const events = await readTranscriptEvents(projectRoot, sessionId);
+      expect(events.map((event) => event.type)).toContain("request_committed");
+      expect(events.map((event) => event.type)).not.toContain("request_failed");
+    },
+  );
+
+  it.each(["zh", "en"] as const)(
+    "ends repeated proposal validation failures with a visible %s error and request_failed",
+    async (language) => {
+      const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+      const pipeline = { initBook: vi.fn() } as any;
+      const sessionId = `proposal-exhausted-${language}`;
+      const onEvent = vi.fn();
+      const result = await runAgentSession(
+        { sessionId, bookId: null, sessionKind: "book-create", language, pipeline, projectRoot, model, onEvent },
+        "propose invalid forever",
+      );
+
+      expect(streamCalls).toHaveLength(3);
+      expect(result.errorMessage).toContain(language === "zh" ? "自动纠正两次" : "two automatic repair attempts");
+      expect(result.responseText).toBe(result.errorMessage);
+      expect(result.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
+      expect(onEvent.mock.calls.some(([event]) => event.type === "message_end"
+        && event.message.stopReason === "error"
+        && event.message.content[0].text === result.errorMessage)).toBe(true);
+      expect(pipeline.initBook).not.toHaveBeenCalled();
+      const events = await readTranscriptEvents(projectRoot, sessionId);
+      expect(events.map((event) => event.type)).toContain("request_failed");
+      expect(events.map((event) => event.type)).not.toContain("request_committed");
+    },
+  );
+
+  it("resets the proposal repair budget when a new user turn starts in the cached session", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    const config = { sessionId: "proposal-new-turn", bookId: null, sessionKind: "book-create" as const, language: "zh" as const, pipeline: {} as any, projectRoot, model };
+    const first = await runAgentSession(config, "propose repair twice");
+    const second = await runAgentSession(config, "propose repair twice");
+    expect(first.errorMessage).toBeUndefined();
+    expect(second.errorMessage).toBeUndefined();
+    expect(agentInstances).toHaveLength(1);
+    expect(streamCalls).toHaveLength(6);
+    const events = await readTranscriptEvents(projectRoot, config.sessionId);
+    expect(events.filter((event) => event.type === "request_committed")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "request_failed")).toHaveLength(0);
   });
 
   it("exposes only architect in confirmed no-book creation sessions", async () => {
@@ -1319,6 +1412,25 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
       "play_start",
     ]);
+  });
+
+  it("rebuilds a cached legacy book agent as read-only Ask and rejects a legacy architect call", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    const pipeline = { reviseFoundation: vi.fn(), writeNextChapter: vi.fn() } as any;
+    const config = { sessionId: "s1", bookId: "book-a", sessionKind: "book" as const, language: "zh", pipeline, projectRoot, model };
+    await runAgentSession(config, "hi");
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toContain("sub_agent");
+
+    const result = await runAgentSession({ ...config, authoringStage: "ask" }, "revise foundation");
+    expect(agentInstances).toHaveLength(2);
+    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual(["read", "grep", "ls", "retrieve_material", "use_skill"]);
+    expect(agentInstances[1].state.systemPrompt).toContain("问心只整理故事正典");
+    expect(pipeline.reviseFoundation).not.toHaveBeenCalled();
+    expect(result.messages.some((message) => message.role === "toolResult" && message.isError)).toBe(true);
+
+    await runAgentSession({ ...config, authoringStage: "ask", actionSource: "button", requestedIntent: "write_next" }, "hi");
+    expect(agentInstances.at(-1).state.tools.map((tool: any) => tool.name)).toEqual(["read", "grep", "ls", "retrieve_material"]);
+    expect(pipeline.writeNextChapter).not.toHaveBeenCalled();
   });
 
   it("does not expose generic write/edit tools to active-book chat agents", async () => {
@@ -1740,7 +1852,7 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(body).toContain("资料");
   });
 
-  it("final assistant error writes request_failed instead of request_committed", async () => {
+  it("final assistant error writes request_failed but keeps the author input for retry", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
 
@@ -1757,7 +1869,8 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(events.map((event) => event.type)).not.toContain("request_committed");
 
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s-error");
-    expect(restored).toEqual([]);
+    expect(restored).toMatchObject([{ role: "user", content: "model error" }]);
+    expect(JSON.stringify(restored)).not.toContain("400 status code");
 
     const instancesAfterError = agentInstances.length;
     await runAgentSession(
@@ -1765,7 +1878,8 @@ describe("runAgentSession cache — bookId switch", () => {
       "again",
     );
     expect(agentInstances).toHaveLength(instancesAfterError + 1);
-    expect(JSON.stringify(streamCalls.at(-1)?.context.messages)).not.toContain("model error");
+    expect(JSON.stringify(streamCalls.at(-1)?.context.messages)).toContain("model error");
+    expect(JSON.stringify(streamCalls.at(-1)?.context.messages)).not.toContain("400 status code");
   });
 
   it("aborts and evicts an active cached agent session", async () => {

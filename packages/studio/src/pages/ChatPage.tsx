@@ -89,6 +89,7 @@ export interface ChatPageProps {
   readonly activeBookId?: string;
   readonly resumeSessionId?: string;
   readonly mode?: "book" | "book-create" | "project-chat" | "interactive-film-authoring";
+  readonly authoringStage?: "ask";
   readonly nav: Nav;
   readonly theme: Theme;
   readonly t: TFunction;
@@ -302,7 +303,7 @@ function SkillPickerPanel({
 
 // -- Component --
 
-export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? "book" : "book-create", authoringStage, nav, theme, t, sse: _sse }: ChatPageProps) {
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -316,7 +317,11 @@ export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? 
   // -- Store actions --
   const setInput = useChatStore((s) => s.setInput);
   const createDraftSession = useChatStore((s) => s.createDraftSession);
-  const sendMessage = useChatStore((s) => s.sendMessage);
+  const sendStoredMessage = useChatStore((s) => s.sendMessage);
+  const sendMessage: typeof sendStoredMessage = (sessionId, text, options) => sendStoredMessage(sessionId, text, {
+    ...options,
+    ...(authoringStage === "ask" ? { authoringStage } : {}),
+  });
   const retryLastSend = useChatStore((s) => s.retryLastSend);
   const abortSession = useChatStore((s) => s.abortSession);
   const setSelectedModel = useChatStore((s) => s.setSelectedModel);
@@ -756,6 +761,10 @@ export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? 
   };
 
   const handleProposedAction = async (details: ProposedActionDetails) => {
+    if (authoringStage === "ask") {
+      showToast(isZh ? "这张旧操作卡不再执行。请在右侧整理正典，或进入对应创作阶段。" : "This legacy action is no longer available in Ask. Use the canon panel or the corresponding authoring stage.", "error");
+      return;
+    }
     // Lock the proposal card so the production action can't be re-fired.
     markProposalResolved(details.execId, "confirmed");
     const targetPlayMode = details.targetSessionKind === "play"
@@ -787,6 +796,10 @@ export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? 
   };
 
   const handleConfirmTruthDiff = async (details: ProposedTruthDiffDetails) => {
+    if (authoringStage === "ask") {
+      showToast(isZh ? "请在右侧正典面板编辑或重新生成，再审查并采用。旧设定确认卡不适用于问心。" : "Edit or regenerate canon in the canon panel, then review and adopt. Legacy setting proposals do not apply to Ask.", "error");
+      return;
+    }
     markProposalResolved(details.execId, "confirmed");
     try {
       await postApi(`/books/${details.bookId}/truth-proposals/${details.proposalId}/apply`);

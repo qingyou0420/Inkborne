@@ -86,6 +86,16 @@ export async function collectBookStageFacts(input: {
   const authorIntent = await readText(join(storyDir, "author_intent.md"));
   const storyCardExists = await pathExists(join(storyDir, "story_card.md"));
   const canonExists = await pathExists(join(storyDir, "canon.md"));
+  let askCandidatePending = false;
+  try {
+    const manifest = JSON.parse(await readText(join(storyDir, "workflow", "manifest.json"))) as {
+      candidates?: { ask?: string };
+      adopted?: { ask?: string };
+    };
+    askCandidatePending = Boolean(manifest.candidates?.ask && !manifest.adopted?.ask && !canonExists);
+  } catch {
+    // Old books without a manifest retain their file-based stage inference.
+  }
   const storyFrame = (await readText(join(storyDir, "outline", "story_frame.md"))).trim()
     || (await readText(join(storyDir, "story_bible.md"))).trim();
   const volumeMap = (await readText(join(storyDir, "outline", "volume_map.md"))).trim()
@@ -108,6 +118,7 @@ export async function collectBookStageFacts(input: {
     authorIntentNonEmpty: authorIntent.trim().length > 0,
     storyCardExists,
     canonExists,
+    askCandidatePending,
     settingsAdoptedCount,
     storyFrameNonEmpty: storyFrame.length > 0,
     storyFrameFourSectionsNonEmpty: storyFrameHasFourSections(storyFrame),

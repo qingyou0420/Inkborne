@@ -387,7 +387,7 @@ const ProposeActionParams = Type.Object({
     tone: Type.Optional(Type.String({
       description: "Working tone/mood for the story card.",
     })),
-  }, { description: "Structured execution args for action=create_book. Put platform/length here; do not leave them only in instruction text." })),
+  }, { description: 'Structured execution args for action=create_book. Must be a JSON object, never a JSON-encoded string. Example: {"title":"渡河记","platform":"tomato","targetChapters":260,"chapterWordCount":5000,"language":"zh"}. Put platform/length here; do not leave them only in instruction text.' })),
   shortRun: Type.Optional(Type.Object({
     title: Type.String({
       description: "Confirmed standalone short title or working title. The host uses it as the stable project identity.",
@@ -854,7 +854,8 @@ export function createProposeActionTool(
     name: "propose_action",
     description:
       "Ask the user to confirm a production action from general chat. " +
-      "Use this before creating books, generating shorts/covers, or starting play worlds when the user has not clicked a confirmation.",
+      "Use this before creating books, generating shorts/covers, or starting play worlds when the user has not clicked a confirmation. " +
+      "Pass nested execution arguments as objects, not JSON-encoded strings. If validation fails, correct the arguments and retry; no confirmation card exists until this tool succeeds.",
     label: "Confirm Action",
     parameters: ProposeActionParams,
     async execute(_toolCallId: string, params: ProposeActionParamsType): Promise<AgentToolResult<unknown>> {

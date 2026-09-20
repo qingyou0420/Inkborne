@@ -58,7 +58,8 @@ describe("P2-2 研墨", () => {
     expect(ground).toMatch(/待定项/);
     expect(ground).toMatch(/基础设定/);
     expect(ground).toMatch(/故事概要/);
-    expect(read("src/components/AuthoringGroundPanel.tsx")).toMatch(/ground-toc/);
+    expect(read("src/components/AuthoringGroundPanel.tsx")).toMatch(/showLegacy/);
+    expect(read("src/components/AuthoringGroundPanel.tsx")).toMatch(/authoringBook === false/);
     expect(ground).toMatch(/legacySections=/);
     expect(ground).toMatch(/AuthoringGroundPanel/);
     expect(ground).toMatch(/\/books\/\$\{bookId\}\/story-card/);

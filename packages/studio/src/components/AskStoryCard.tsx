@@ -82,7 +82,7 @@ export function AskStoryCard({
           onClick={onConfirm}
           className="btn-primary mt-5"
         >
-          {confirmPending ? (isZh ? "建书中…" : "Creating…") : (isZh ? "就此建书" : "Create book")}
+          {confirmPending ? (isZh ? "整理正典中…" : "Preparing canon…") : (isZh ? "建书并整理正典" : "Create and prepare canon")}
         </button>
       ) : !editable ? (
         <div className="mt-5 flex flex-wrap gap-2">

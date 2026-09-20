@@ -5,13 +5,12 @@
  */
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
 
 const require = createRequire(import.meta.url);
 const { SETUP_RE } = require("./setup-artifact.cjs");
-const { setupNamesForVersion } = require("./alias-legacy-setup.cjs");
+const { createUpdatePublishPlan } = require("./publish-update-paths.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -77,28 +76,15 @@ function findLatestSetup() {
 }
 
 const latest = findLatestSetup();
-const names = setupNamesForVersion(latest.version);
-
-const desktop = path.join(os.homedir(), "Desktop");
-const desktopUpdatesNew = path.join(desktop, "FantaWriter-Updates");
-const appDataUpdates = path.join(
-  process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"),
-  "fantawriter",
-  "updates"
-);
-
-const targets = [desktopUpdatesNew, appDataUpdates];
+const { directories: targets, names } = createUpdatePublishPlan(latest.version);
 console.log(
   `[publish-update] 发布 ${latest.name} (v${latest.version}) → 可被已安装客户端扫描的目录`
 );
 for (const dir of targets) {
   try {
-    const dest = copyTo(latest.path, dir);
-    console.log(`  ✓ ${dest}`);
-    for (const aliasName of names.aliases) {
-      if (latest.name === aliasName) continue;
-      const aliasDest = copyTo(latest.path, dir, aliasName);
-      console.log(`  ✓ ${aliasDest}`);
+    for (const name of names) {
+      const dest = copyTo(latest.path, dir, name);
+      console.log(`  ✓ ${dest}`);
     }
   } catch (e) {
     console.warn(`  ✗ ${dir}: ${e.message || e}`);
