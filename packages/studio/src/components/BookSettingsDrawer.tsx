@@ -86,15 +86,15 @@ export function BookSettingsDrawer({
       <div className="space-y-5">
         <label className="block space-y-1 text-sm">
           <span>{t("create.wordsPerChapter")}</span>
-          <input type="number" value={wordCount} onChange={(event) => setWordCount(Number(event.target.value))} className="w-full rounded-[10px] border border-border-strong bg-card px-3 h-10" />
+          <input type="number" value={wordCount} onChange={(event) => setWordCount(Number(event.target.value))} className="w-full rounded-lg border border-border-strong bg-card px-3 h-10" />
         </label>
         <label className="block space-y-1 text-sm">
           <span>{t("create.targetChapters")}</span>
-          <input type="number" value={targetChapters} onChange={(event) => setTargetChapters(Number(event.target.value))} className="w-full rounded-[10px] border border-border-strong bg-card px-3 h-10" />
+          <input type="number" value={targetChapters} onChange={(event) => setTargetChapters(Number(event.target.value))} className="w-full rounded-lg border border-border-strong bg-card px-3 h-10" />
         </label>
         <label className="block space-y-1 text-sm">
           <span>{t("book.status")}</span>
-          <select value={status} onChange={(event) => setStatus(event.target.value as BookStatus)} className="w-full rounded-[10px] border border-border-strong bg-card px-3 h-10">
+          <select value={status} onChange={(event) => setStatus(event.target.value as BookStatus)} className="w-full rounded-lg border border-border-strong bg-card px-3 h-10">
             <option value="active">{t("book.statusActive")}</option>
             <option value="paused">{t("book.statusPaused")}</option>
             <option value="completed">{t("book.statusCompleted")}</option>
@@ -111,7 +111,7 @@ export function BookSettingsDrawer({
             value={confirmName}
             onChange={(event) => setConfirmName(event.target.value)}
             data-testid="book-delete-confirm-name"
-            className="w-full rounded-[10px] border border-destructive/30 bg-card px-3 h-10 text-sm"
+            className="w-full rounded-lg border border-destructive/30 bg-card px-3 h-10 text-sm"
           />
           <button
             type="button"

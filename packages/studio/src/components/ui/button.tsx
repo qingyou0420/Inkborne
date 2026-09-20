@@ -18,10 +18,10 @@ const buttonVariants = cva(
         link: "text-foreground underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] underline-offset-4 hover:decoration-seal",
       },
       size: {
-        default: "h-10 gap-2 px-5 text-[14px] font-medium rounded-[10px]",
+        default: "h-10 gap-2 px-5 text-[14px] font-medium rounded-lg",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: "h-8 gap-1 rounded-lg px-2 text-[14px] in-data-[slot=button-group]:rounded-lg",
-        lg: "h-10 gap-2 px-5 text-[14px] font-medium rounded-[10px]",
+        lg: "h-10 gap-2 px-5 text-[14px] font-medium rounded-lg",
         icon: "size-8",
         "icon-xs":
           "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",

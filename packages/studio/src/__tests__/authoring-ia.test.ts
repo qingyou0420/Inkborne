@@ -19,7 +19,7 @@ describe("authoring four-agent IA", () => {
   it("registers authoring routes and eight-role settings", () => {
     const server = read("src/api/server.ts");
     const routes = read("src/api/authoring-routes.ts");
-    const settings = read("src/pages/ProjectSettings.tsx");
+    const settings = read("src/pages/ServiceListPage.tsx");
     expect(server).toMatch(/registerAuthoringRoutes/);
     expect(server).toMatch(/authoringRoles: fillMissingAuthoringRoles/);
     expect(server).toMatch(/isLightweightAuthoringBook/);
@@ -75,8 +75,10 @@ describe("authoring four-agent IA", () => {
     expect(read("src/pages/BookDetail.tsx")).toMatch(/write-legacy-tools/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/mergeWriteDirectory/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/firstUnwrittenChapter/);
-    expect(read("src/pages/BookStudy.tsx")).toMatch(/study-write-chapter/);
-    expect(read("src/pages/BookStudy.tsx")).toMatch(/落笔 · 第 \$\{writeChapterNumber\} 章/);
+    expect(read("src/pages/BookStudy.tsx")).toMatch(/study-four-steps/);
+    expect(read("src/pages/BookStudy.tsx")).toMatch(/等你过目/);
+    expect(read("src/pages/BookStudy.tsx")).not.toMatch(/study-write-chapter/);
+    expect(read("src/pages/BookStudy.tsx")).not.toMatch(/cockpit-write-next-button/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/data-testid="write-generate"/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/onClick=\{\(\) => void generateChapter\(requirementNotes\)\}/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/写下一章/);

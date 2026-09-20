@@ -353,7 +353,7 @@ export function AuthoringWeavePanel({
       {dirty && candidate && editBaseId.current !== candidate.artifactId && <p role="status" className="text-sm text-muted-foreground">{isZh ? "候选已有新版本。你的手改已保留，保存会生成新候选。" : "A newer candidate exists. Your edits are retained and will save as a new candidate."}</p>}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="font-serif text-2xl">{isZh ? "全书规划" : "Book outline"}</h2>
+          <h2 className="font-serif text-2xl">{isZh ? "本书规划" : "Book plan"}</h2>
           <p className="text-sm text-muted-foreground">
             {isZh
               ? `全书 ${target || "—"} 章 · 已有概要 ${generated} · 已采用 ${coverage?.chaptersAdopted ?? 0}`
@@ -474,7 +474,7 @@ export function AuthoringWeavePanel({
           className="prose-body min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2"
           value={editBody}
           readOnly={Boolean(busy) || running}
-          aria-label={isZh ? "全书大纲候选" : "Book outline candidate"}
+          aria-label={isZh ? "规划候选" : "Plan candidate"}
           onChange={(event) => {
             if (actionRef.current || running) return;
             const body = event.target.value;
@@ -512,8 +512,7 @@ export function AuthoringWeavePanel({
           }, "adopt")}>{currentId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
           {hasValidVolumes ? <button type="button" data-testid="outline-weave-chapters" disabled={Boolean(busy) || running || dirty} onClick={openChapterGeneration}>{isZh ? "生成本卷章概要" : "Plan chapter summaries"}</button> : null}
           <span className="text-xs text-muted-foreground">{isZh ? "作用于整份规划" : "Applies to the entire outline"}</span>
-          <DropdownMenu><DropdownMenuTrigger className="quiet" aria-label={isZh ? "成果操作" : "Manuscript actions"} disabled={Boolean(busy) || running || dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger><DropdownMenuContent align="end">
-            <DropdownMenuItem disabled={!hasValidVolumes} onClick={openChapterGeneration}>{isZh ? "生成本次章概要" : "Plan chapter range"}</DropdownMenuItem>
+          <DropdownMenu><DropdownMenuTrigger className="quiet" aria-label={isZh ? "更多操作" : "More actions"} disabled={Boolean(busy) || running || dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger><DropdownMenuContent align="end">
             <DropdownMenuItem onClick={() => setGeneration({ mode: "structure" })}>{isZh ? "重新规划分卷" : "Replan volumes"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!report} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>

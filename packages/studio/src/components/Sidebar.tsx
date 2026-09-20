@@ -463,7 +463,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
             }
           }}
           placeholder={tr("输入新标题", "Enter a new title")}
-          className="mt-3 h-10 w-full rounded-[10px] border border-border-strong bg-card px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="mt-3 h-10 w-full rounded-lg border border-border-strong bg-card px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
 

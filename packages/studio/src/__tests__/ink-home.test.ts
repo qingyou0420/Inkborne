@@ -41,6 +41,18 @@ describe("ink home rendered hierarchy", () => {
     }));
     expect((html.match(/data-testid="book-step-/g) ?? []).length).toBe(4);
     expect((html.match(/aria-current="page"/g) ?? []).length).toBe(1);
+    expect(html).toContain('data-testid="book-overview-link"');
     expect(html).not.toMatch(/创作模型|审查模型|返回书房/);
+  });
+
+  it("puts aria-current on the book title when the overview is open", () => {
+    const html = renderToStaticMarkup(createElement(BookWorkspaceNav, {
+      bookId: "潮声未寄", active: "study", isZh: true, t,
+      nav: { toAsk: noop, toBook: noop, toOutline: noop, toBookSettings: noop },
+      stage: { steps: { ask: "done", ground: "done", weave: "todo", write: "todo" } },
+    }));
+    expect((html.match(/aria-current="page"/g) ?? []).length).toBe(1);
+    expect(html).toMatch(/data-testid="book-overview-link"[^>]*aria-current="page"/);
+    expect(html).not.toMatch(/data-testid="book-step-[^"]+"[^>]*aria-current="page"/);
   });
 });

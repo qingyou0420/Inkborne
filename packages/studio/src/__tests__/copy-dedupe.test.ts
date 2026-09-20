@@ -43,4 +43,16 @@ describe("P0-6 copy", () => {
     expect(dashboard).not.toMatch(/home\.toWrite/);
     expect(dashboard).not.toMatch(/t\("book\.settings"\)/);
   });
+
+  it("keeps one write-page export control and one eight-slot panel", () => {
+    const write = read("src/pages/BookDetail.tsx");
+    const exportMenu = read("src/components/ExportMenu.tsx");
+    const settings = read("src/pages/ProjectSettings.tsx");
+    const models = read("src/pages/ServiceListPage.tsx");
+    expect(write).toMatch(/<ExportMenu/);
+    expect((write.match(/name="export-format/g) ?? []).length).toBe(0);
+    expect((exportMenu.match(/name="export-format"/g) ?? []).length).toBe(1);
+    expect(settings).not.toMatch(/<AuthoringRolesPanel/);
+    expect(models).toMatch(/<AuthoringRolesPanel/);
+  });
 });

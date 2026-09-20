@@ -385,7 +385,7 @@ function OutlineWorkspaceBook({
       <h1 className="sr-only">{isZh ? "织卷" : "Weave"}</h1>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{isZh ? "卷章目录" : "Outline directory"}</button>
+        <button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{isZh ? "卷纲目录" : "Volume directory"}</button>
         <div className="text-xs text-muted-foreground" data-testid="outline-stats">
           {tree.volumeCount === 0
             ? (isZh ? `全书 ${targetChapters} 章 · 尚未分卷` : `${targetChapters} chapters · no volumes yet`)
@@ -397,7 +397,7 @@ function OutlineWorkspaceBook({
 
       {ungrounded ? (
         <div
-          className="rounded-xl border border-border/50 bg-secondary/30 px-3 py-2 text-sm text-muted-foreground"
+          className="ink-notice text-sm text-muted-foreground"
           data-testid="outline-ungrounded"
         >
           {guide.subtitle}
@@ -416,7 +416,7 @@ function OutlineWorkspaceBook({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={isZh ? "搜索卷 / 章" : "Search"}
-              className="rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+              className="rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
             />
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -462,7 +462,7 @@ function OutlineWorkspaceBook({
                   onClick={() => void selectNode(BOOK_OUTLINE_ID)}
                 >
                   {t("weave.bookOutline")}
-                  <small>{isZh ? "全书规划" : "Book plan"}</small>
+                  <small>{isZh ? "规划" : "Plan"}</small>
                 </button>
                 <p className="px-3 py-2 text-xs text-muted-foreground">{isZh ? "已采用卷纲" : "Adopted outline"}</p>
                 <div className="flex-1">
@@ -521,10 +521,10 @@ function OutlineWorkspaceBook({
                 )}
                 </div>
                 <div className="flex items-center gap-3 border-t border-border/30 px-3 py-2">
-                  <DropdownMenu><DropdownMenuTrigger className="btn-ghost inline-flex items-center gap-2" aria-label={isZh ? "卷纲操作" : "Outline operations"}><MoreHorizontal size={17} />{isZh ? "卷纲操作" : "Outline operations"}</DropdownMenuTrigger><DropdownMenuContent align="start">
+                  <DropdownMenu><DropdownMenuTrigger className="btn-ghost inline-flex items-center gap-2" aria-label={isZh ? "目录操作" : "Directory actions"}><MoreHorizontal size={17} />{isZh ? "目录操作" : "Directory actions"}</DropdownMenuTrigger><DropdownMenuContent align="start">
                   {authoringBook ? (
                     <DropdownMenuItem disabled>
-                      {isZh ? "请到全书规划中编辑候选" : "Edit candidates in Book outline"}
+                      {isZh ? "请到本书规划中编辑候选" : "Edit candidates in the book plan"}
                     </DropdownMenuItem>
                   ) : (
                     <>
@@ -586,7 +586,7 @@ function OutlineWorkspaceBook({
                 ) : empty ? (
                   <LiteraryEmpty
                     title={isZh ? "还没有卷纲" : "No volume outline yet"}
-                    subtitle={isZh ? "用左侧「全书大纲」生成，或在下面手动加章。" : "Generate from Book outline, or add a chapter by hand."}
+                    subtitle={isZh ? "用左侧「本书规划」生成，或在下面手动加章。" : "Generate from the book plan, or add a chapter by hand."}
                     testId="outline-empty"
                   />
                 ) : !selected ? (
@@ -595,7 +595,7 @@ function OutlineWorkspaceBook({
                   <VolumeDetail volumeTitle={selected.title} okr={selected.okr} startChapter={selected.startChapter} endChapter={selected.endChapter} locked={selected.startChapter != null && selected.endChapter != null} isZh={isZh} />
                 ) : !editingSelected ? <>
                   <ManuscriptView body={`## ${titleDraft || selected.title}\n\n${summaryDraft}`} />
-                  <div className="manuscript-action-buttons ground-document-actions">{authoringBook ? <p className="text-sm text-muted-foreground">{isZh ? "请到全书规划中编辑候选并采用。新四阶段书不直接改已采用卷纲。" : "Edit the candidate in Book outline, then adopt. Direct edits to the adopted map are disabled for four-stage books."}</p> : <button type="button" disabled={saving || mapLoading} onClick={() => setEditingSelected(true)}>{isZh ? "编辑" : "Edit"}</button>}{selected.kind === "chapter" ? <button type="button" className="quiet" onClick={() => void goWrite()}>{isZh ? "去落笔" : "Go to Write"}</button> : null}</div>
+                  <div className="manuscript-action-buttons ground-document-actions">{authoringBook ? <p className="text-sm text-muted-foreground">{isZh ? "请到本书规划中编辑候选并采用。新四阶段书不直接改已采用卷纲。" : "Edit the candidate in the book plan, then adopt. Direct edits to the adopted map are disabled for four-stage books."}</p> : <button type="button" disabled={saving || mapLoading} onClick={() => setEditingSelected(true)}>{isZh ? "编辑" : "Edit"}</button>}{selected.kind === "chapter" ? <button type="button" className="quiet" onClick={() => void goWrite()}>{isZh ? "去落笔" : "Go to Write"}</button> : null}</div>
                 </> : selected.kind === "note" ? (
                   <>
                     <div className="text-xs text-muted-foreground">{isZh ? "备注" : "Note"}</div>
@@ -614,7 +614,7 @@ function OutlineWorkspaceBook({
                       aria-label={isZh ? "备注内容" : "Note content"}
                       className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 text-sm leading-6 outline-none focus:border-primary/50"
                     />
-                    <div className="manuscript-action-buttons ground-document-actions">{authoringBook ? <p className="text-sm text-muted-foreground">{isZh ? "请到全书规划中编辑候选并采用。" : "Edit the candidate in Book outline, then adopt."}</p> : <button type="button" disabled={saving || mapLoading || !mapReady.current} onClick={() => void saveSelected()}>{isZh ? "保存已采用卷纲" : "Save adopted outline"}</button>}<button type="button" className="quiet" disabled={saving} onClick={() => void finishSelected()}>{isZh ? "取消" : "Cancel"}</button></div>
+                    <div className="manuscript-action-buttons ground-document-actions">{authoringBook ? <p className="text-sm text-muted-foreground">{isZh ? "请到本书规划中编辑候选并采用。" : "Edit the candidate in the book plan, then adopt."}</p> : <button type="button" disabled={saving || mapLoading || !mapReady.current} onClick={() => void saveSelected()}>{isZh ? "保存已采用卷纲" : "Save adopted volume map"}</button>}<button type="button" className="quiet" disabled={saving} onClick={() => void finishSelected()}>{isZh ? "取消" : "Cancel"}</button></div>
                   </>
                 ) : (
                   <>
@@ -631,7 +631,7 @@ function OutlineWorkspaceBook({
                           maxLength={selected.kind === "range" ? undefined : (isZh ? HARD_CHAPTER_TITLE_CHARS : HARD_CHAPTER_TITLE_CHARS * 2)}
                           onChange={(event) => changeDraft(event.target.value, summaryDraft)}
                           readOnly={saving || mapLoading}
-                          className="w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 pr-14 font-serif text-xl outline-none focus:ring-1 focus:ring-ring"
+                          className="w-full rounded-lg border border-border-strong bg-card px-3 py-2 pr-14 font-serif text-xl outline-none focus:ring-1 focus:ring-ring"
                         />
                         {selected.kind !== "range" && (
                           <span
@@ -667,7 +667,7 @@ function OutlineWorkspaceBook({
                         type="button"
                         onClick={() => {
                           if (authoringBook) {
-                            showToast(isZh ? "请到全书规划中编辑候选并采用。" : "Edit the candidate in Book outline, then adopt.", "info");
+                            showToast(isZh ? "请到本书规划中编辑候选并采用。" : "Edit the candidate in the book plan, then adopt.", "info");
                             return;
                           }
                           void saveSelected(true);
@@ -678,7 +678,7 @@ function OutlineWorkspaceBook({
                         {saving
                           ? t("common.loading")
                           : authoringBook
-                            ? (isZh ? "请到全书规划中采用" : "Adopt from Book outline")
+                            ? (isZh ? "请到本书规划中采用" : "Adopt from the book plan")
                             : (isZh ? "保存已采用卷纲" : "Save adopted outline")}
                       </button>
                       <button type="button" className="btn-ghost" disabled={saving} onClick={() => void finishSelected()}>{isZh ? "取消" : "Cancel"}</button>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { showToast } from "../lib/toast";
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -73,6 +75,8 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
   const { data, loading, error, refetch } = useApi<ChapterData>(
     `/books/${bookId}/chapters/${chapterNumber}`,
   );
+  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const readOnly = authoring?.authoringBook === true;
   const bufferKey = `${bookId}:${chapterNumber}`;
   const restoredEdit = useRef(pendingReaderEdits.get(bufferKey));
   const [editing, setEditing] = useState(Boolean(restoredEdit.current));
@@ -240,7 +244,12 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
   return (
     <div className="w-full space-y-8 fade-in">
       <div className="reader-toolbar">
-        <span className="reader-save-state" role="status">{saving ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : (isZh ? "正式正文" : "Manuscript")}</span>
+        {readOnly ? (
+          <span className="reader-save-state" role="status" data-testid="chapter-reader-readonly">{isZh ? "只读预览" : "Read-only preview"}</span>
+        ) : (
+        <span className="reader-save-state" role="status">{saving ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : (isZh ? "正文" : "Manuscript")}</span>
+        )}
+        {readOnly ? null : <>
         <button
           type="button"
           className="btn-ghost"
@@ -295,6 +304,7 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </>}
       </div>
 
       {saveError ? <p className="manuscript-error" role="alert">{saveError}</p> : null}
@@ -389,7 +399,7 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
           value={overrideWhy}
           onChange={(event) => setOverrideWhy(event.target.value)}
           placeholder={t("reader.overrideWhy")}
-          className="w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="w-full rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
 

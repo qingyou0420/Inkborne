@@ -1,5 +1,5 @@
 /**
- * 创作书房 — short-fiction chrome around the existing staged manuscript.
+ * 短篇 — short-fiction chrome around the existing staged manuscript.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
@@ -176,7 +176,7 @@ export function ShortReader({ storyId, nav, theme: _theme, t }: {
       {data && study && (
         <>
           <header className="space-y-3">
-            <div className="literary-kicker">{isZh ? "创作书房" : "Writing study"}</div>
+            <div className="literary-kicker">{isZh ? "短篇" : "Short"}</div>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <h1 className="font-serif text-[32px] font-medium leading-10">{data.title}</h1>
               {data.coverImagePath ? (

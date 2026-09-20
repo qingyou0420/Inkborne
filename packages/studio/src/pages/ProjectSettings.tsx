@@ -7,7 +7,6 @@ import {
   STUDIO_FONT_LABELS,
   type StudioFontId,
 } from "../lib/appearance";
-import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
 import { SettingsTabs } from "../components/SettingsTabs";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { usePreferencesStore } from "../store/preferences";
@@ -234,13 +233,8 @@ export function ProjectSettings({ nav, theme, t, setTheme, section }: { nav: Nav
 
       {notice && (
         <div
-          className={`rounded-xl px-4 py-3 text-sm ${
-            notice.tone === "error"
-              ? "bg-destructive/10 text-destructive"
-              : notice.tone === "info"
-                ? "bg-secondary text-muted-foreground"
-                : "bg-secondary text-foreground"
-          }`}
+          className="ink-notice text-sm"
+          data-tone={notice.tone === "error" ? "danger" : undefined}
         >
           {notice.message}
         </div>
@@ -608,14 +602,13 @@ export function ProjectSettings({ nav, theme, t, setTheme, section }: { nav: Nav
         </div>
       </SettingsCard>
 
-      <AuthoringRolesPanel isZh={isZh} />
-
       {/* Model routing — per-agent model overrides */}
       <SettingsCard title={t("settings.modelOverrides")} description={t("settings.modelOverridesHint")} icon={<Bot size={18} />}>
         <div className="rounded-xl border border-border/60 bg-secondary/20 p-3 space-y-2">
           <div>
             <div className="text-sm font-semibold">{t("settings.globalDefaultModel")}</div>
             <p className="mt-1 text-xs text-muted-foreground">{t("settings.globalDefaultModelHint")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{isZh ? "四阶段各槽在模型配置页。" : "The eight stage slots live on the Models page."}</p>
           </div>
           <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
             <input

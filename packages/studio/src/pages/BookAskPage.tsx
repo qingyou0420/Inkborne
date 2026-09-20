@@ -5,7 +5,7 @@
  */
 
 import { useApi } from "../hooks/use-api";
-import type { TFunction } from "../hooks/use-i18n";
+import { useI18n, type TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import { AskCanonPanel } from "../components/AskCanonPanel";
@@ -35,8 +35,10 @@ export function BookAskPage({
   readonly sse: { messages: ReadonlyArray<SSEMessage>; connected: boolean };
 }) {
   const { error, refetch } = useApi<{ book?: { title?: string } }>(`/books/${bookId}`);
+  const { lang } = useI18n();
+  const isZh = lang !== "en";
 
-  if (error) return <div role="alert" className="text-destructive p-8"><p>{error}</p><button className="btn-ghost" type="button" onClick={() => void refetch()}>{t("settings.title") === "项目设置" ? "重新加载问心" : "Reload Ask"}</button></div>;
+  if (error) return <div role="alert" className="text-destructive p-8"><p>{error}</p><button className="btn-ghost" type="button" onClick={() => void refetch()}>{isZh ? "重新加载问心" : "Reload Ask"}</button></div>;
 
   return (
     <div className="ask-workspace h-full min-h-0 flex-1">
@@ -50,7 +52,7 @@ export function BookAskPage({
         t={t}
         sse={sse}
       />
-      <AskCanonPanel bookId={bookId} resumeSessionId={resumeSessionId} isZh={t("settings.title") === "项目设置"} />
+      <AskCanonPanel bookId={bookId} resumeSessionId={resumeSessionId} isZh={isZh} />
     </div>
   );
 }

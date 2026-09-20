@@ -162,13 +162,15 @@ describe("works list long/short parity", () => {
     const i18n = read("src/hooks/use-i18n.ts");
     const dashboard = read("src/pages/Dashboard.tsx");
     const bookDetail = read("src/pages/BookDetail.tsx");
+    const exportMenu = read("src/components/ExportMenu.tsx");
 
     expect(i18n).toMatch(/"book\.export": \{ zh: "导出"/);
     expect(i18n).toMatch(/"book\.exportSave": \{ zh: "保存到项目"/);
     expect(dashboard).toMatch(/bookManuscriptExportPath/);
     expect(dashboard).toMatch(/shortManuscriptExportPath/);
-    expect(bookDetail).toMatch(/book-export-manuscript/);
-    expect(bookDetail).toMatch(/book\.exportSave/);
+    expect(bookDetail).toMatch(/ExportMenu/);
+    expect(exportMenu).toMatch(/book-export-manuscript/);
+    expect(exportMenu).toMatch(/book\.exportSave/);
   });
 });
 

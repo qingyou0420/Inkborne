@@ -56,11 +56,13 @@ describe("P1-1 sidebar + author", () => {
 describe("P1-2 落笔", () => {
   it("declutters the write header and hides delete in the danger zone", () => {
     const write = read("src/pages/BookDetail.tsx");
+    const exportMenu = read("src/components/ExportMenu.tsx");
     const settings = read("src/components/BookSettingsDrawer.tsx");
     const tools = read("src/components/BookToolsDrawer.tsx");
     expect(write + read("src/components/AuthoringWritePanel.tsx")).toMatch(/落笔/);
     expect(write).toMatch(/write-next-primary/);
-    expect(write).toMatch(/book\.exportMenu/);
+    expect(write).toMatch(/ExportMenu/);
+    expect(exportMenu).toMatch(/book\.exportMenu/);
     expect(write).toMatch(/book\.draftOnly/);
     expect(write).not.toMatch(/规划下一章/);
     expect(write).not.toMatch(/删除书籍/);
@@ -126,19 +128,19 @@ describe("P1-3 织卷", () => {
 });
 
 describe("P1-4 书房", () => {
-  it("uses 今日一笔 / 本卷要抵达 / 等你过目 and drops the old bottom buttons", () => {
+  it("uses 本卷要抵达 / 等你过目 / 四步一览 and drops the old write-next branch", () => {
     const study = read("src/pages/BookStudy.tsx");
     expect(study).toMatch(/serial-cockpit-home/);
-    expect(study).toMatch(/study\.today/);
     expect(study).toMatch(/本卷要抵达/);
     expect(study).toMatch(/等你过目/);
     expect(study).toMatch(/四步一览/);
     expect(study).toMatch(/study-step-ask/);
-    expect(study).toMatch(/grid-cols-\[8px_/);
+    expect(study).toMatch(/grid-cols-\[3\.5rem_/);
     expect(study).not.toMatch(/待定 \$\{openCount\}/);
     expect(study).not.toMatch(/「\{oneLine\}」/);
     expect(study).toMatch(/fourStepCopy/);
-    expect(study).toMatch(/hasPreviousChapterUnapprovedReason/);
+    expect(study).not.toMatch(/skipPreviousApproval/);
+    expect(study).not.toMatch(/cockpit-write-next-button/);
     expect(study).not.toMatch(/打开大纲/);
     expect(study).not.toMatch(/带病续写/);
     expect(study).not.toMatch(/toOutline\(bookId\).*织卷/);

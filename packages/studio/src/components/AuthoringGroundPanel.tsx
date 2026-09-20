@@ -252,7 +252,7 @@ function AuthoringGroundBook({
     void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
   };
   const retryFailedRun = () => {
-    const action = groundRetryAction(authoringRun.run, generationScope.entryIds.length > 0 || visible.length > 0);
+    const action = groundRetryAction(authoringRun.run ?? undefined, generationScope.entryIds.length > 0 || visible.length > 0);
     if (action === "review") void reviewCurrent();
     else if (action === "catalog") void startCatalog();
     else void generateEntries(generationScope.entryIds, generationScope.regenerate);
@@ -293,15 +293,11 @@ function AuthoringGroundBook({
           >
             {busy === "catalog" ? (isZh ? "拟定中…" : "Planning…") : (isZh ? "根据正典拟定设定目录" : "Propose catalog")}
           </button> : <DropdownMenu>
-            <DropdownMenuTrigger className="btn-ghost" aria-label={isZh ? "设定任务" : "Setting tasks"} disabled={blocked || editing}><MoreHorizontal size={18} /></DropdownMenuTrigger>
+            <DropdownMenuTrigger className="btn-ghost" aria-label={isZh ? "目录操作" : "Directory actions"} disabled={blocked || editing}><MoreHorizontal size={18} /></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => { setBatchMode((value) => !value); setSelected([]); }}>{batchMode ? (isZh ? "结束多选" : "Finish selecting") : (isZh ? "批量选择" : "Select a batch")}</DropdownMenuItem>
               <DropdownMenuItem disabled={generationScope.entryIds.length === 0} onClick={() => generationScope.regenerate ? setGeneration(generationScope) : void generateEntries(generationScope.entryIds, false, requirementNotes)}>{generateLabel}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void run("catalog", async () => {
-                const result = await postApi<{ runId?: string; status?: string }>("/authoring/ground/catalog", { bookId });
-                if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
-                return result;
-              })}>{isZh ? "重新拟定目录" : "Rebuild catalog"}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void startCatalog()}>{isZh ? "重新拟定目录" : "Rebuild catalog"}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>}
         </div>
@@ -354,7 +350,7 @@ function AuthoringGroundBook({
             </div>
           ))}
           {showLegacy ? <div data-testid="ground-toc" className="ground-legacy-directory">
-            <div className="group">{isZh ? "已采用资料" : "Adopted materials"}</div>
+            <div className="group">{isZh ? "已采用设定（旧书）" : "Adopted settings (legacy)"}</div>
             {legacySections.map((item) => <button
               key={item.id}
               type="button"
@@ -433,7 +429,7 @@ function AuthoringGroundBook({
               {batchMode ? (isZh ? `采用所选 ${actionIds.length} 项` : `Adopt ${actionIds.length} selected`) : currentAdopted ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}
             </button>
             <DropdownMenu>
-              <DropdownMenuTrigger className="quiet" aria-label={isZh ? "成果操作" : "Manuscript actions"} disabled={blocked || draft.dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger>
+              <DropdownMenuTrigger className="quiet" aria-label={isZh ? "更多操作" : "More actions"} disabled={blocked || draft.dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem disabled={actionIds.length === 0} onClick={() => setGeneration({ entryIds: actionIds })}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
                 <DropdownMenuItem disabled={!focused || batchMode} onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>

@@ -98,7 +98,8 @@
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) + 1px);
 
   --font-serif: InkSerif, "Noto Serif SC", "Songti SC", Georgia, serif;
   --font-sans: var(--ui, InkSans, "Microsoft YaHei", sans-serif);
