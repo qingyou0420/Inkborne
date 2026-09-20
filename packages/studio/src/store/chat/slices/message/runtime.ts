@@ -394,7 +394,9 @@ function proposedActionFrom(exec: ToolExecution): string | null {
 
 function completesProposedAction(exec: ToolExecution, action: string): boolean {
   if (exec.status !== "completed") return false;
-  if (action === "create_book") return exec.tool === "sub_agent" && exec.agent === "architect";
+  // 问心 confirmed creation runs the manual ask_create tool; the legacy
+  // architect sub-agent still resolves cards persisted before that change.
+  if (action === "create_book") return exec.tool === "ask_create" || (exec.tool === "sub_agent" && exec.agent === "architect");
   if (action === "short_run") return exec.tool === "short_fiction_run";
   if (action === "play_start") return exec.tool === "play_start";
   if (action === "generate_cover") return exec.tool === "generate_cover";
