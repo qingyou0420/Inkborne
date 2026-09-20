@@ -302,6 +302,65 @@ describe("weave stage", () => {
     expect(result.volumes[2]?.endChapter).toBe(12);
   });
 
+  it("generates volume 1 then volume 2 on an unadopted structure and adopts once", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-weave-unadopted-iter-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "两卷书",
+        oneLine: "按卷迭代",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 8,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const structured = await generateWeaveStructure({
+      ...ctx,
+      llm: async () => JSON.stringify({
+        bookOutline: "两卷结构。",
+        volumes: [
+          { volumeNumber: 1, title: "上", startChapter: 1, endChapter: 4, body: "上卷目标" },
+          { volumeNumber: 2, title: "下", startChapter: 5, endChapter: 8, body: "下卷目标" },
+        ],
+      }),
+    });
+    expect((await loadManifest(ctx.root)).adopted.weave).toBeUndefined();
+    const first = await generateWeaveRange({
+      ...ctx,
+      startChapter: 1,
+      endChapter: 4,
+      llm: async () => JSON.stringify({
+        chapters: [1, 2, 3, 4].map((n) => ({ chapterNumber: n, title: `上${n}`, summary: `上卷章${n}` })),
+      }),
+    });
+    expect(first.beats.filter((beat) => beat.summary.includes("上卷章"))).toHaveLength(4);
+    expect((await loadManifest(ctx.root)).adopted.weave).toBeUndefined();
+    const second = await generateWeaveRange({
+      ...ctx,
+      startChapter: 5,
+      endChapter: 8,
+      llm: async () => JSON.stringify({
+        chapters: [5, 6, 7, 8].map((n) => ({ chapterNumber: n, title: `下${n}`, summary: `下卷章${n}` })),
+      }),
+    });
+    expect(second.beats.filter((beat) => /[上下]卷章/.test(beat.summary))).toHaveLength(8);
+    await expect(readFile(join(created.bookDir, "story", "outline", "volume_map.md"), "utf-8")).rejects.toThrow();
+    await adoptWeave({ ...ctx, artifactId: second.artifactId });
+    const adopted = await readFile(join(created.bookDir, "story", "outline", "volume_map.md"), "utf-8");
+    expect(adopted).toContain("上卷章1");
+    expect(adopted).toContain("下卷章8");
+    expect(adopted).toContain("上卷目标");
+    expect(adopted).toContain("下卷目标");
+    expect((await loadManifest(ctx.root)).adopted.weave).toBe(second.artifactId);
+    expect((await loadManifest(ctx.root)).adopted.weave).not.toBe(structured.artifactId);
+  });
+
   it("repairs illegal JSON escapes once without inventing chapters", () => {
     const parsed = extractJsonObject('{ "bookOutline": "ok", "note": "hello\\qworld" }');
     expect(parsed.bookOutline).toBe("ok");

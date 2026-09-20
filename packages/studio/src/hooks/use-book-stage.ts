@@ -16,7 +16,10 @@ const inflight = new Map<string, Promise<BookStageView | null>>();
 let epoch = 0;
 const listeners = new Set<() => void>();
 
-export function shouldInvalidateBookStageEvent(event: string): boolean {
+export function shouldInvalidateBookStageEvent(event: string, data?: { status?: string } | null): boolean {
+  if (event === "authoring:run") {
+    return data?.status === "completed" || data?.status === "failed" || data?.status === "partial" || data?.status === "cancelled";
+  }
   if (event === "weave:progress" || event === "book:creating") return false;
   return /^(write|weave|book|truth|rewrite|revise):/.test(event);
 }

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, FileCheck2, MoreHorizontal, PanelRightClose, PanelRightOpen, PencilLine, Save } from "lucide-react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { invalidateBookStage } from "../hooks/use-book-stage";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
@@ -66,6 +67,8 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
   const historyRequest = useRef(0);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const authoringRun = useAuthoringRun(bookId, activeRunId, draftId);
   const [lengthOpen, setLengthOpen] = useState(false);
   const [lengthDraft, setLengthDraft] = useState<Record<CanonFieldName, string>>({ title: "", genre: "", targetChapters: "", chapterWordCount: "" });
   const [generateOpen, setGenerateOpen] = useState(false);
@@ -93,6 +96,23 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     } catch (failure) { if (mounted.current) setDraftError(failure instanceof Error ? failure.message : String(failure)); }
   };
   useEffect(() => { void ensureDraft(); }, [bookId, session?.sessionId]);
+  const lastAskRun = data?.runs?.find((item) => item.stage === "ask");
+  useEffect(() => {
+    if (activeRunId) return;
+    if (lastAskRun && (lastAskRun.status === "running" || lastAskRun.status === "pausing" || lastAskRun.status === "failed")) {
+      setActiveRunId(lastAskRun.runId);
+    }
+  }, [activeRunId, lastAskRun]);
+  useEffect(() => {
+    if (!authoringRun.settled || !authoringRun.run) return;
+    void refetch();
+    if (authoringRun.run.producedArtifactIds?.[0]) editor.current.expectCandidate(authoringRun.run.producedArtifactIds[0]);
+    if (mounted.current) {
+      setEditState(editor.current.snapshot);
+      setExpanded(true);
+      if (authoringRun.run.status === "failed") setActionError(authoringRun.run.error);
+    }
+  }, [authoringRun.settled, authoringRun.run, refetch]);
   useEffect(() => {
     if (data && editor.current.load(candidate, busyRef.current)) setEditState(editor.current.snapshot);
   }, [data, candidate?.artifactId, candidate?.body, busy, dirty]);
@@ -185,7 +205,8 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     setReportOpen(true); setExpanded(true);
     void run("review", async () => {
       const artifactId = await prepareCurrentArtifact();
-      await postApi("/authoring/ask/review", { ...scope, artifactId, conversation });
+      const next = await postApi<{ runId?: string; status?: string; reportId?: string }>("/authoring/ask/review", { ...scope, artifactId, conversation });
+      if (isBackgroundAuthoringStart(next) && next.runId) setActiveRunId(next.runId);
     });
   };
   const creatingBook = !bookId;
@@ -230,13 +251,23 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   });
   const regenerate = (requirements: string, authorRequirement = requirements) => run(revision ? "revise" : "generate", async () => {
     const generated = revision
-      ? await postApi<{ artifactId: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
-      : await postApi<{ artifactId: string }>("/authoring/ask/generate", { ...scope, conversation, requirements, authorRequirement });
-    editor.current.expectCandidate(generated.artifactId);
+      ? await postApi<{ artifactId?: string; runId?: string; status?: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
+      : await postApi<{ artifactId?: string; runId?: string; status?: string }>("/authoring/ask/generate", { ...scope, conversation, requirements, authorRequirement });
+    if (isBackgroundAuthoringStart(generated) && generated.runId) {
+      setActiveRunId(generated.runId);
+      if (mounted.current) { setExpanded(true); setReportOpen(false); }
+      return;
+    }
+    if (generated.artifactId) editor.current.expectCandidate(generated.artifactId);
     if (mounted.current) { setEditState(editor.current.snapshot); setExpanded(true); setReportOpen(false); }
   });
+  const locked = Boolean(busy) || authoringRun.active;
   const busyLabels: Record<string, string> = { prepare: isZh ? "读取文稿中…" : "Preparing manuscript…", save: isZh ? "保存中…" : "Saving…", generate: isZh ? "整理正典中…" : "Generating…", review: isZh ? "审查中…" : "Reviewing…", adopt: isZh ? "采用中…" : "Adopting…", revise: isZh ? "修订中…" : "Revising…", restore: isZh ? "恢复为候选中…" : "Restoring candidate…" };
-  const status = busy ? busyLabels[busy] : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : isAdopted ? (isZh ? "已采用" : "Adopted") : candidate ? (isZh ? "候选已保存" : "Candidate saved") : "";
+  const status = authoringRun.active
+    ? (authoringRun.run?.progressLabel ?? busyLabels.generate)
+    : authoringRun.run?.status === "failed"
+      ? (authoringRun.run.error ?? (isZh ? "这次整理失败" : "This run failed"))
+      : busy ? busyLabels[busy] : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : isAdopted ? (isZh ? "已采用" : "Adopted") : candidate ? (isZh ? "候选已保存" : "Candidate saved") : "";
   const labels: Record<typeof canonFieldNames[number], string> = isZh
     ? { title: "书名", genre: "类型", targetChapters: "预计章节", chapterWordCount: "每章字数" }
     : { title: "Title", genre: "Genre", targetChapters: "Chapters", chapterWordCount: "Words per chapter" };
@@ -257,22 +288,23 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       </div>
       <footer className="ask-canon-toolbar" data-testid="ask-canon-toolbar">
         <div className="ask-canon-workstate" role="status" aria-live="polite"><span>{status}</span>
+          {authoringRun.run?.status === "failed" ? <button type="button" onClick={() => void regenerate("")}>{isZh ? "重试" : "Retry"}</button> : null}
           {report && !busy ? <span>{report.incomplete ? (isZh ? "审查未完成" : "Review incomplete") : stale ? (isZh ? "审查对应旧稿" : "Review is outdated") : (isZh ? "已有审查意见" : "Review available")}</span> : null}
           {error || draftError || adoptedCopy.error ? <span role="alert">{error ?? draftError ?? adoptedCopy.error}<button type="button" onClick={() => void (draftError ? ensureDraft() : adoptedCopy.error ? adoptedCopy.refetch() : refetch())}>{isZh ? "重试加载" : "Retry loading"}</button></span> : null}
           {actionError ? <span role="alert" className="ask-canon-error">{actionError}</span> : null}
         </div>
         <div className="ask-canon-actions">{editing ? <>
-          <button type="button" className="ask-canon-primary" disabled={!editBaseId || !dirty || Boolean(busy) || !ready} onClick={() => void save()}><Save size={15} />{isZh ? "保存" : "Save"}</button><button type="button" disabled={Boolean(busy)} onClick={cancelEditing}>{isZh ? "取消" : "Cancel"}</button>
+          <button type="button" className="ask-canon-primary" disabled={!editBaseId || !dirty || locked || !ready} onClick={() => void save()}><Save size={15} />{isZh ? "保存" : "Save"}</button><button type="button" disabled={locked} onClick={cancelEditing}>{isZh ? "取消" : "Cancel"}</button>
         </> : hasManuscript ? <>
-          <button type="button" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready} onClick={startEditing}><PencilLine size={15} />{isZh ? "编辑" : "Edit"}</button>
-          <button type="button" disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || session?.isChatStreaming} onClick={report && !reportOpen ? () => { setReportOpen(true); setExpanded(true); } : review}><FileCheck2 size={15} />{isZh ? "审查" : "Review"}</button>
-          <button type="button" className="ask-canon-primary" data-testid={creatingBook ? "ask-adopt-create" : "ask-adopt"} disabled={(!candidate && !canPrepare) || Boolean(busy) || !ready || isAdopted} onClick={startAdopt}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : creatingBook ? (isZh ? "采用并建书" : "Adopt and create book") : (isZh ? "采用" : "Adopt")}</button>
-          <DropdownMenu><DropdownMenuTrigger className="ask-canon-menu-trigger" disabled={Boolean(busy)} aria-label={isZh ? "正典操作" : "Canon actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" side="top">
-            <DropdownMenuItem disabled={!ready || Boolean(session?.isChatStreaming)} onClick={() => { setActionError(undefined); setGenerationIssueIds(report && !stale && !report.incomplete ? report.issues.map((issue) => issue.issueId) : []); setGenerateOpen(true); }}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+          <button type="button" disabled={(!candidate && !canPrepare) || locked || !ready} onClick={startEditing}><PencilLine size={15} />{isZh ? "编辑" : "Edit"}</button>
+          <button type="button" disabled={(!candidate && !canPrepare) || locked || !ready || session?.isChatStreaming} onClick={report && !reportOpen ? () => { setReportOpen(true); setExpanded(true); } : review}><FileCheck2 size={15} />{isZh ? "审查" : "Review"}</button>
+          <button type="button" className="ask-canon-primary" data-testid={creatingBook ? "ask-adopt-create" : "ask-adopt"} disabled={(!candidate && !canPrepare) || locked || !ready || isAdopted} onClick={startAdopt}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : creatingBook ? (isZh ? "采用并建书" : "Adopt and create book") : (isZh ? "采用" : "Adopt")}</button>
+          <DropdownMenu><DropdownMenuTrigger className="ask-canon-menu-trigger" disabled={locked} aria-label={isZh ? "正典操作" : "Canon actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" side="top">
+            <DropdownMenuItem disabled={!ready || locked || Boolean(session?.isChatStreaming)} onClick={() => { setActionError(undefined); setGenerationIssueIds(report && !stale && !report.incomplete ? report.issues.map((issue) => issue.issueId) : []); setGenerateOpen(true); }}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!artifacts.length} onClick={() => openHistory(currentArtifactId)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!data?.adoptedAskId} onClick={() => openHistory(data?.adoptedAskId)}>{isZh ? "查看已采用" : "View adopted"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
-        </> : <button type="button" className="ask-canon-primary" disabled={Boolean(busy) || !ready || !conversation.trim() || session?.isChatStreaming} title={!conversation.trim() ? (isZh ? "先在问心对话中描述故事" : "Describe your story first") : undefined} onClick={() => void regenerate("")}><PencilLine size={15} />{isZh ? "整理正典" : "Create canon"}</button>}</div>
+        </> : <button type="button" className="ask-canon-primary" disabled={locked || !ready || !conversation.trim() || session?.isChatStreaming} title={!conversation.trim() ? (isZh ? "先在问心对话中描述故事" : "Describe your story first") : undefined} onClick={() => void regenerate("")}><PencilLine size={15} />{isZh ? "整理正典" : "Create canon"}</button>}</div>
       </footer>
       <Drawer open={historyOpen} title={isZh ? "正典版本" : "Canon versions"} onClose={() => setHistoryOpen(false)}>
         <div className="ask-version-list">{artifacts.map((item) => <button type="button" key={item.artifactId} aria-pressed={historyItem?.meta.artifactId === item.artifactId} onClick={() => void loadVersion(item.artifactId)}><span>v{item.version}</span><span>{item.artifactId === data?.adoptedAskId ? (isZh ? "已采用" : "Adopted") : item.artifactId === candidate?.artifactId ? (isZh ? "当前候选" : "Current candidate") : (isZh ? "历史稿" : "Historical")}</span></button>)}</div>

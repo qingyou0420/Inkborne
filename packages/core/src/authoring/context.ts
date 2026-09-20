@@ -185,6 +185,7 @@ export function serializeCanonBrief(canon: CanonDocument): string {
     `书名：${canon.title}`,
     canon.genre && `类型：${canon.genre}`,
     canon.targetChapters && `目标章数：${canon.targetChapters}`,
+    canon.chapterWordCount && `每章字数：${canon.chapterWordCount}`,
     canon.oneLine && `一句话：${canon.oneLine}`,
     canon.proposition && `命题：${canon.proposition}`,
     canon.protagonist && `主角：${canon.protagonist}`,
@@ -298,7 +299,7 @@ export function pickRelevantSettings(settings: string, needle: string, budget = 
   return acc || settings.slice(0, budget);
 }
 
-function packAdoptedSettings(
+export function packAdoptedSettings(
   entries: readonly AdoptedSettingEntry[],
   needle: string,
   budget: number,

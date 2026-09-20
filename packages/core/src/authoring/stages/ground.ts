@@ -6,7 +6,14 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { assertAdoptedCanonReady, assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from "../context.js";
+import {
+  assertAdoptedCanonReady,
+  assembleAuthoringContext,
+  loadCanonDocument,
+  packAdoptedSettings,
+  serializeCanonBrief,
+  type AdoptedSettingEntry,
+} from "../context.js";
 import { asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
@@ -25,7 +32,7 @@ import {
   saveSettingsCatalog,
   type AuthoringStoreRoot,
 } from "../store.js";
-import type { AuthoringLlmFn, AuthoringReviewReport, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
+import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringRunRecord, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
 
 const DEFAULT_CATEGORIES = ["世界与时代", "人物", "关系与势力", "地点", "规则与物品", "历史与其他"];
@@ -76,6 +83,29 @@ function uniqueCatalogFile(preferred: string, reservedKeys: Set<string>): string
     n += 1;
   }
   return candidate;
+}
+
+async function loadPeerSettingEntries(
+  root: AuthoringStoreRoot,
+  catalog: SettingsCatalog,
+  excludeId: string,
+): Promise<AdoptedSettingEntry[]> {
+  const peers: AdoptedSettingEntry[] = [];
+  for (const entry of catalog.entries) {
+    if (entry.archived || entry.id === excludeId) continue;
+    const artifactId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
+    if (!artifactId) continue;
+    const loaded = await loadArtifact(root, artifactId);
+    if (!loaded?.body.trim()) continue;
+    peers.push({
+      id: entry.id,
+      name: entry.name,
+      category: entry.category,
+      artifactId,
+      body: loaded.body.trim(),
+    });
+  }
+  return peers;
 }
 
 function fileForEntry(entry: Pick<SettingsCatalogEntry, "category" | "name" | "id">): string {
@@ -161,6 +191,8 @@ export async function generateGroundEntries(input: GroundRuntime & {
   readonly entryIds?: readonly string[];
   readonly regenerate?: boolean;
   readonly requirements?: string;
+  readonly runId?: string;
+  readonly onProgress?: (run: AuthoringRunRecord) => void;
 }): Promise<{ generated: string[]; failed: string[]; runId: string }> {
   if (!input.root.bookId) throw new Error("研墨需要已建的书。");
   await assertAdoptedCanonReady(input.root);
@@ -172,35 +204,49 @@ export async function generateGroundEntries(input: GroundRuntime & {
     return !entry.adoptedArtifactId && !entry.candidateArtifactId;
   });
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
-  const { canon } = await loadCanonDocument(input.root);
-  const runId = newRunId();
+  const ctx = await assembleAuthoringContext(input.root, { stage: "ground" });
+  const runId = input.runId ?? newRunId();
   const generated: string[] = [];
   const failed: string[] = [];
-  await saveRun(input.root, {
-    runId,
-    stage: "ground",
-    operation: "generate",
-    roleId: "ground.main",
-    status: "running",
-    bookId: input.root.bookId,
-    progressDone: 0,
-    progressTotal: targets.length,
-    modelSnapshot: resolved.snapshot,
-    producedArtifactIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
+  const failedReasons: string[] = [];
+  const startedAt = new Date().toISOString();
+  const persistRun = async (status: AuthoringRunRecord["status"], extra?: { error?: string }) => {
+    const record = {
+      runId,
+      stage: "ground" as const,
+      operation: "generate" as const,
+      roleId: "ground.main" as const,
+      status,
+      bookId: input.root.bookId,
+      progressDone: generated.length + failed.length,
+      progressTotal: targets.length,
+      progressLabel: targets.length
+        ? `已生成 ${generated.length}/${targets.length} 条${failed.length ? ` · 失败 ${failed.length}` : ""}`
+        : "没有需要生成的条目",
+      modelSnapshot: resolved.snapshot,
+      producedArtifactIds: generated,
+      error: extra?.error ?? (failedReasons.length ? failedReasons.join("；") : undefined),
+      createdAt: startedAt,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRun(input.root, record);
+    input.onProgress?.(record);
+  };
+  await persistRun("running");
   for (const entry of targets) {
     try {
       const priorId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
       const prior = priorId ? await loadArtifact(input.root, priorId) : null;
+      const peers = await loadPeerSettingEntries(input.root, catalog, entry.id);
+      const packedPeers = packAdoptedSettings(peers, `${entry.category} ${entry.name}`, 4000, peers.length > 4);
       const text = await completeRole(resolved, [
         `撰写设定条目「${entry.name}」（分类：${entry.category}）。输出 Markdown 正文，不要 JSON。`,
-        serializeCanonBrief(canon),
+        ctx.text,
+        packedPeers.text ? `【同书其他条目摘要】\n${packedPeers.text}` : "",
         "只写这一条，不要改其他条目。",
         input.requirements ? `作者本次要求：\n${input.requirements}` : "",
         prior ? `当前设定（按本次要求保留或调整）：\n${prior.body}` : "",
-      ].join("\n"), input.llm);
+      ].filter(Boolean).join("\n"), input.llm);
       const artifactId = newArtifactId("ground", entry.id);
       await saveArtifact(input.root, {
         artifactId,
@@ -210,7 +256,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
         source: "generate",
         status: "candidate",
         bodyPath: entry.file,
-        inputRefs: [{ kind: "canon", id: "canon" }],
+        inputRefs: [{ kind: "canon", id: "canon" }, ...ctx.refs],
         createdAt: new Date().toISOString(),
         runId,
         label: entry.name,
@@ -218,26 +264,14 @@ export async function generateGroundEntries(input: GroundRuntime & {
       entry.candidateArtifactId = artifactId;
       generated.push(entry.id);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       failed.push(entry.id);
-      void error;
+      failedReasons.push(`${entry.name}：${message}`);
     }
-    await saveRun(input.root, {
-      runId,
-      stage: "ground",
-      operation: "generate",
-      roleId: "ground.main",
-      status: failed.length && generated.length + failed.length >= targets.length
-        ? (generated.length ? "partial" : "failed")
-        : (generated.length + failed.length >= targets.length ? "completed" : "running"),
-      bookId: input.root.bookId,
-      progressDone: generated.length + failed.length,
-      progressTotal: targets.length,
-      modelSnapshot: resolved.snapshot,
-      producedArtifactIds: generated,
-      error: failed.length ? `失败条目：${failed.join("、")}` : undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    const done = generated.length + failed.length >= targets.length;
+    await persistRun(
+      done ? (generated.length === 0 ? "failed" : failed.length ? "partial" : "completed") : "running",
+    );
   }
   await saveSettingsCatalog(input.root, catalog);
   const manifest = await loadManifest(input.root);

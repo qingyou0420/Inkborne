@@ -7783,6 +7783,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       raw.authoringRoles = roles;
       await saveRawConfig(root, raw);
     },
+    broadcast,
   });
 
   return app;

@@ -134,6 +134,7 @@ export {
   reviewChapterDraft,
   reviseChapterDraft,
   adoptChapterDraft,
+  settleAdoptedChapter,
   testAuthoringRole,
   diffLines,
   type AuthoringRoleId,
@@ -143,6 +144,7 @@ export {
   type AuthoringStoreRoot,
   type CanonDocument,
   type AuthoringLlmFn,
+  type AuthoringRunRecord,
   type AskBookCreateInput,
   type AskBookCreateResult,
 } from "./authoring/index.js";

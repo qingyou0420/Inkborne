@@ -27,6 +27,9 @@ describe("authoring four-agent IA", () => {
     expect(routes).toMatch(/\/api\/v1\/authoring\/ask\/adopt/);
     expect(routes).toMatch(/\/api\/v1\/authoring\/weave\/generate/);
     expect(routes).toMatch(/\/api\/v1\/authoring\/write\/revise/);
+    expect(routes).toMatch(/\/api\/v1\/authoring\/write\/settle/);
+    expect(routes).toMatch(/wait\?: boolean/);
+    expect(routes).toMatch(/authoring:run/);
     expect(routes).toMatch(/\/api\/v1\/authoring\/drafts\/ensure/);
     expect(routes).toMatch(/\/api\/v1\/authoring\/roles\/:roleId\/test/);
     expect(routes).toMatch(/saveHandEditedArtifact/);

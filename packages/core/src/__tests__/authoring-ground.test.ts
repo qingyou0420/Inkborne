@@ -9,7 +9,7 @@ import {
   generateGroundEntries,
   proposeSettingsCatalog,
 } from "../authoring/stages/ground.js";
-import { loadSettingsCatalog } from "../authoring/store.js";
+import { listRuns, loadSettingsCatalog } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 function project() {
@@ -78,6 +78,9 @@ describe("ground stage", () => {
     const result = await generateGroundEntries(ctx);
     expect(result.generated).toContain("shen");
     expect(result.failed).toContain("port");
+    const failedRun = (await listRuns(ctx.root)).find((run) => run.runId === result.runId);
+    expect(failedRun?.status).toBe("partial");
+    expect(failedRun?.error).toContain("夜港：地点生成失败");
     await adoptGroundEntries({ ...ctx, entryIds: ["shen"] });
     const catalog = await loadSettingsCatalog(ctx.root);
     const shen = catalog.entries.find((entry) => entry.id === "shen");
@@ -215,8 +218,8 @@ describe("ground stage", () => {
           ],
         });
       }
-      if (text.includes("永夜规则")) return "太阳永不升起。";
-      return "只有南北两片大陆。";
+        if (text.includes("撰写设定条目「永夜规则」")) return "太阳永不升起。";
+        return "只有南北两片大陆。";
     };
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
     await proposeSettingsCatalog(ctx);
@@ -288,7 +291,7 @@ describe("ground stage", () => {
             ],
           });
         }
-        if (text.includes("永夜规则")) return "太阳永不升起。";
+        if (text.includes("撰写设定条目「永夜规则」")) return "太阳永不升起。";
         return "只有南北两片大陆。";
       };
       const book = await createLightweightBook({
@@ -327,5 +330,46 @@ describe("ground stage", () => {
       expect(geoBody).toContain("南北两片大陆");
       expect(nightBody).not.toContain("南北两片大陆");
     }
+  });
+
+  it("includes other generated entries when writing the next setting", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-peers-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const prompts: string[] = [];
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({
+          categories: ["人物", "地点"],
+          entries: [
+            { id: "shen", category: "人物", name: "沈砚" },
+            { id: "port", category: "地点", name: "夜港" },
+          ],
+        });
+      }
+      prompts.push(text);
+      if (text.includes("夜港")) return "夜港靠铁皮仓库存账。";
+      return "沈砚，港口会计，想赎回自己。MARK-PEER-SHEN";
+    };
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
+    await proposeSettingsCatalog(ctx);
+    await generateGroundEntries(ctx);
+    expect(prompts[0]).not.toContain("MARK-PEER-SHEN");
+    expect(prompts[1]).toContain("MARK-PEER-SHEN");
+    expect(prompts[1]).toContain("同书其他条目摘要");
   });
 });

@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
 import { postApi, putApi, useApi } from "../hooks/use-api";
+import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
@@ -61,6 +62,9 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const [editing, setEditing] = useState(false);
   const [generation, setGeneration] = useState<{ issueIds?: ReadonlyArray<string>; reuseStale?: boolean } | null>(null);
   const [requirementNotes, setRequirementNotes] = useState("");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [settleArtifactId, setSettleArtifactId] = useState<string | null>(null);
+  const authoringRun = useAuthoringRun(bookId, activeRunId);
   const decision = useDraftDecision(isZh);
   const [body, setBody] = useState(restoredEdit.current?.body ?? "");
   const [dirty, setDirty] = useState(Boolean(restoredEdit.current));
@@ -76,6 +80,26 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const artifactForCurrent = artifact?.meta?.artifactId === candidate?.artifactId ? artifact : undefined;
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
   const ready = Boolean(data) && (candidate ? artifactForCurrent?.body != null : !chapterLoading);
+  const lastWriteRun = data?.runs?.find((item) => item.stage === "write");
+
+  useEffect(() => {
+    if (activeRunId) return;
+    if (lastWriteRun && (lastWriteRun.status === "running" || lastWriteRun.status === "pausing" || lastWriteRun.status === "failed")) {
+      setActiveRunId(lastWriteRun.runId);
+    }
+  }, [activeRunId, lastWriteRun]);
+
+  useEffect(() => {
+    if (!authoringRun.settled || !authoringRun.run) return;
+    void refetch();
+    onChanged?.();
+    if (authoringRun.run.status === "failed" || authoringRun.run.status === "partial") {
+      setFailure(authoringRun.run.error ?? (isZh ? "这次操作没有完成。" : "This run did not finish."));
+    } else {
+      setFailure(null);
+      if (authoringRun.run.producedArtifactIds?.[0]) pendingSavedId.current = authoringRun.run.producedArtifactIds[0];
+    }
+  }, [authoringRun.settled, authoringRun.run, isZh, onChanged, refetch]);
 
   useEffect(() => {
     if (dirtyRef.current || busyRef.current || !ready) return;
@@ -183,7 +207,11 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   };
   const adopt = async () => {
     const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-    const result = await postApi<{ message?: string; settled?: boolean }>("/authoring/write/adopt", { bookId, artifactId });
+    const result = await postApi<{ message?: string; settled?: boolean; runId?: string; status?: string; artifactId?: string }>("/authoring/write/adopt", { bookId, artifactId });
+    if (isBackgroundAuthoringStart(result) && result.runId) {
+      setSettleArtifactId(artifactId);
+      setActiveRunId(result.runId);
+    }
     showToast(result.message ?? (isZh ? "章节已采用" : "Chapter adopted"), result.settled === false ? "info" : "success", {
       label: isZh ? "写下一章" : "Write next chapter",
       onClick: () => onGoNextChapter ? onGoNextChapter() : goBookAuthoringStage(bookId, "write"),
@@ -195,23 +223,55 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
     return run("review", async () => {
       const artifactId = pendingSavedId.current ?? candidate?.artifactId;
       if (!artifactId) throw new Error(isZh ? "先写本章或生成候选。" : "Write or generate a candidate first.");
-      const next = await postApi<AuthoringReport>("/authoring/write/review", { bookId, artifactId, coverage: `第 ${chapterNumber} 章` });
+      const next = await postApi<AuthoringReport & { runId?: string; status?: string }>("/authoring/write/review", { bookId, artifactId, coverage: `第 ${chapterNumber} 章` });
+      if (isBackgroundAuthoringStart(next) && next.runId) {
+        setActiveRunId(next.runId);
+        return;
+      }
       setReport(next);
     });
   };
   const generationNotes = generationReviewNotes(activeReport, [pendingSavedId.current ?? candidate?.artifactId]);
+  const startWriteJob = async (path: "/authoring/write/generate" | "/authoring/write/revise", payload: Record<string, unknown>) => {
+    const generated = await postApi<{ artifactId?: string; runId?: string; status?: string }>(path, payload);
+    if (isBackgroundAuthoringStart(generated) && generated.runId) {
+      setActiveRunId(generated.runId);
+      setReportOpen(false);
+      return;
+    }
+    if (generated.artifactId) pendingSavedId.current = generated.artifactId;
+    setReportOpen(false);
+  };
   const generateChapter = async (requirements = "") => {
     return run("generate", async () => {
-      const generated = await postApi<{ artifactId: string }>("/authoring/write/generate", {
+      await startWriteJob("/authoring/write/generate", {
         bookId,
         chapterNumber,
         title: chapterTitle,
         requirements: withGenerationReview(requirements, generationNotes),
       });
-      pendingSavedId.current = generated.artifactId;
-      setReportOpen(false);
     }, true);
   };
+  const retryFailedRun = () => {
+    if (authoringRun.run?.operation === "settle" && settleArtifactId) {
+      void run("settle", async () => {
+        const result = await postApi<{ runId?: string; status?: string }>("/authoring/write/settle", { bookId, artifactId: settleArtifactId });
+        if (result.runId) setActiveRunId(result.runId);
+      });
+      return;
+    }
+    void generateChapter(requirementNotes);
+  };
+  const locked = Boolean(busy) || authoringRun.active;
+  const targetWords = data?.canon?.chapterWordCount;
+  const currentWords = body.replace(/\s/g, "").length;
+  const runStatus = authoringRun.active
+    ? (isZh
+      ? `${authoringRun.run?.progressLabel ?? `正在写第 ${chapterNumber} 章`}${authoringRun.elapsed ? ` · 已 ${authoringRun.elapsed}` : ""}`
+      : `${authoringRun.run?.progressLabel ?? `Writing ch.${chapterNumber}`}${authoringRun.elapsed ? ` · ${authoringRun.elapsed}` : ""}`)
+    : authoringRun.run?.status === "failed"
+      ? (authoringRun.run.error ?? (isZh ? "这次操作失败" : "This run failed"))
+      : null;
 
   return (
     <section className={`manuscript-workspace ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-write-panel" aria-busy={Boolean(busy)}>
@@ -222,7 +282,9 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
         </div>
         <h1>{isZh ? `第 ${chapterNumber} 章` : `Chapter ${chapterNumber}`}{chapterTitle ? ` ${chapterTitle}` : ""}</h1>
         <div className="manuscript-meta">
-          <span>{body.replace(/\s/g, "").length.toLocaleString()} {isZh ? "字" : "characters"}</span>
+          <span>{targetWords
+            ? (isZh ? `${currentWords.toLocaleString()} / 约 ${targetWords.toLocaleString()} 字` : `${currentWords.toLocaleString()} / ~${targetWords.toLocaleString()} words`)
+            : `${currentWords.toLocaleString()} ${isZh ? "字" : "characters"}`}</span>
         </div>
         {data?.manifest?.watches?.some((watch) => !watch.acknowledged) ? <p className="manuscript-notice">{isZh ? "上游已有新采用版，审查依据可能需要更新。" : "Upstream content changed; the review basis may need updating."}</p> : null}
         {switchedInBackground ? <p className="manuscript-notice">{isZh ? "候选已在别处更新。你的手改已保留，保存将另存为新候选。" : "Another candidate was selected. Your edits are retained and will save as a new candidate."}</p> : null}
@@ -233,7 +295,7 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
         aria-label={isZh ? `第 ${chapterNumber} 章候选正文` : `Chapter ${chapterNumber} candidate text`}
         placeholder={!ready ? (isZh ? "正在打开稿件…" : "Opening manuscript…") : (isZh ? "从这一章的第一句话开始。" : "Begin with the first sentence of this chapter.")}
         value={body}
-        readOnly={Boolean(busy) || !ready}
+        readOnly={locked || !ready}
         onChange={(event) => {
           if (busyRef.current || !ready) return;
           const value = event.target.value;
@@ -250,34 +312,36 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
       <div className="manuscript-actions" data-testid="write-action-bar">
         <span className="manuscript-save-status" role="status" aria-live="polite">
           <strong>{isZh ? "落笔" : "Write"}</strong>
-          {busy === "save" ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : candidate ? (isZh ? "草稿已保存" : "Draft saved") : (isZh ? "尚未保存候选" : "No candidate saved")}
+          {runStatus ?? (busy === "save" ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : candidate ? (isZh ? "草稿已保存" : "Draft saved") : (isZh ? "尚未保存候选" : "No candidate saved"))}
+          {authoringRun.run?.status === "failed" ? <button type="button" className="btn-ghost" onClick={retryFailedRun}>{isZh ? "重试" : "Retry"}</button> : null}
         </span>
         <div className="manuscript-action-buttons">
           {editing ? <>
-          <button type="button" className="quiet" disabled={Boolean(busy) || !dirty || !ready} onClick={() => void actionsRef.current.save()} aria-keyshortcuts="Control+s Meta+s" data-testid="write-save"><Save size={14} />{isZh ? "保存" : "Save"}</button>
-          <button type="button" className="quiet" disabled={Boolean(busy)} onClick={() => void actionsRef.current.leave()}>{isZh ? "取消" : "Cancel"}</button>
+          <button type="button" className="quiet" disabled={locked || !dirty || !ready} onClick={() => void actionsRef.current.save()} aria-keyshortcuts="Control+s Meta+s" data-testid="write-save"><Save size={14} />{isZh ? "保存" : "Save"}</button>
+          <button type="button" className="quiet" disabled={locked} onClick={() => void actionsRef.current.leave()}>{isZh ? "取消" : "Cancel"}</button>
           </> : <>
-          <button type="button" disabled={Boolean(busy) || !ready} onClick={() => setEditing(true)}>{isZh ? "编辑" : "Edit"}</button>
+          <button type="button" disabled={locked || !ready} onClick={() => setEditing(true)}>{isZh ? "编辑" : "Edit"}</button>
           {candidate ? <>
-          <button type="button" disabled={Boolean(busy) || !ready || dirty} onClick={() => void reviewCurrent()}>{busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : (isZh ? "审查" : "Review")}</button>
-          <button type="button" disabled={Boolean(busy) || !ready || dirty || candidate.artifactId === adoptedId} onClick={() => void run("adopt", adopt, true)}><Check size={14} />{busy === "adopt" ? (isZh ? "采用中…" : "Adopting…") : candidate.artifactId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
-          <DropdownMenu><DropdownMenuTrigger className="quiet" disabled={Boolean(busy) || dirty} aria-label={isZh ? "成果操作" : "Manuscript actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">
+          <button type="button" disabled={locked || !ready || dirty} onClick={() => void reviewCurrent()}>{busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : (isZh ? "审查" : "Review")}</button>
+          <button type="button" disabled={locked || !ready || dirty || candidate.artifactId === adoptedId} onClick={() => void run("adopt", adopt, true)}><Check size={14} />{busy === "adopt" ? (isZh ? "采用中…" : "Adopting…") : candidate.artifactId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
+          <DropdownMenu><DropdownMenuTrigger className="quiet" disabled={locked || dirty} aria-label={isZh ? "成果操作" : "Manuscript actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">
             <DropdownMenuItem onClick={() => setGeneration({})}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!storedReport} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!parentId} onClick={() => setDiffOpen(true)}>{isZh ? "比较修改前后" : "Compare versions"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
-          </> : <><button type="button" className="primary" disabled={Boolean(busy) || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={Boolean(busy) || !ready} /></>}
+          </> : <><button type="button" className="primary" disabled={locked || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={locked || !ready} /></>}
           </>}
         </div>
       </div>
       <RegenerateDialog open={Boolean(generation)} title={isZh ? (generation?.issueIds ? "按意见重新创作" : "创作本章") : "Write chapter"} scopeLabel={isZh ? `第 ${chapterNumber} 章` : `Chapter ${chapterNumber}`} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && activeReport ? activeReport.summary : generationNotes} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
         if (!generation) return false;
         const ok = await run(generation.issueIds ? "revise" : "generate", async () => {
-          const generated = generation.issueIds && activeReport && candidate
-            ? await postApi<{ artifactId: string }>("/authoring/write/revise", { bookId, artifactId: pendingSavedId.current ?? candidate.artifactId, reportId: activeReport.reportId, selectedIssueIds: generation.issueIds, reuseStale: generation.reuseStale, requirements })
-            : await postApi<{ artifactId: string }>("/authoring/write/generate", { bookId, chapterNumber, title: chapterTitle, requirements: withGenerationReview(requirements, generationNotes) });
-          pendingSavedId.current = generated.artifactId; setReportOpen(false);
+          if (generation.issueIds && activeReport && candidate) {
+            await startWriteJob("/authoring/write/revise", { bookId, artifactId: pendingSavedId.current ?? candidate.artifactId, reportId: activeReport.reportId, selectedIssueIds: generation.issueIds, reuseStale: generation.reuseStale, requirements });
+          } else {
+            await startWriteJob("/authoring/write/generate", { bookId, chapterNumber, title: chapterTitle, requirements: withGenerationReview(requirements, generationNotes) });
+          }
         }, true);
         if (ok) setGeneration(null);
         return ok;

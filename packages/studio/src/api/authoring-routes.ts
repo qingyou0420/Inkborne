@@ -13,6 +13,7 @@ import {
   CANON_LENGTH_REQUIRED,
   WEAVE_LENGTH_REQUIRED,
   adoptChapterDraft,
+  settleAdoptedChapter,
   adoptGroundEntries,
   adoptWeave,
   copyRoleConfig,
@@ -56,6 +57,7 @@ import {
   testAuthoringRole,
   type AuthoringRoleConfig,
   type AuthoringRoleId,
+  type AuthoringRunRecord,
   type AuthoringStoreRoot,
   type ProjectConfig,
 } from "@actalk/inkos-core";
@@ -64,6 +66,7 @@ interface AuthoringRouteDeps {
   readonly root: string;
   readonly loadProject: () => Promise<ProjectConfig>;
   readonly saveRoles: (roles: ProjectConfig["authoringRoles"]) => Promise<void>;
+  readonly broadcast?: (event: string, data: unknown) => void;
 }
 
 function storeRoot(projectRoot: string, body: { bookId?: string; draftId?: string }): AuthoringStoreRoot {
@@ -74,16 +77,46 @@ function storeRoot(projectRoot: string, body: { bookId?: string; draftId?: strin
   };
 }
 
-async function recordWeaveFailure(root: AuthoringStoreRoot, runId: string, error: unknown): Promise<void> {
+function emitAuthoringRun(deps: AuthoringRouteDeps, root: AuthoringStoreRoot, run: Pick<AuthoringRunRecord, "runId" | "stage" | "status"> & {
+  readonly progressDone?: number;
+  readonly progressTotal?: number;
+  readonly error?: string;
+}): void {
+  deps.broadcast?.("authoring:run", {
+    bookId: root.bookId,
+    draftId: root.draftId,
+    runId: run.runId,
+    stage: run.stage,
+    status: run.status,
+    progressDone: run.progressDone,
+    progressTotal: run.progressTotal,
+    error: run.error,
+  });
+}
+
+async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: unknown, deps?: AuthoringRouteDeps): Promise<void> {
   const current = await loadRun(root, runId);
   if (current && (current.status === "running" || current.status === "pausing")) {
-    await saveRun(root, {
+    const failed = {
       ...current,
-      status: "failed",
+      status: "failed" as const,
       error: error instanceof Error ? error.message : String(error),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    await saveRun(root, failed);
+    if (deps) emitAuthoringRun(deps, root, failed);
+    return;
   }
+  if (deps && current) emitAuthoringRun(deps, root, current);
+}
+
+async function announceRun(deps: AuthoringRouteDeps, root: AuthoringStoreRoot, runId: string): Promise<void> {
+  const run = await loadRun(root, runId);
+  if (run) emitAuthoringRun(deps, root, run);
+}
+
+function onAuthoringProgress(deps: AuthoringRouteDeps, root: AuthoringStoreRoot) {
+  return (run: AuthoringRunRecord) => emitAuthoringRun(deps, root, run);
 }
 
 function weaveRevisionError(error: unknown): string {
@@ -308,11 +341,11 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
         try {
           return c.json({ artifactId: await work });
         } catch (error) {
-          await recordWeaveFailure(root, run.runId, error);
+          await recordRunFailure(root, run.runId, error, deps);
           return c.json({ error: weaveRevisionError(error) }, 400);
         }
       }
-      void work.catch((error: unknown) => recordWeaveFailure(root, run.runId, error));
+      void work.catch((error: unknown) => recordRunFailure(root, run.runId, error, deps));
       return c.json({ runId: run.runId, status: "running", operation: "revise", progressLabel: "继续修订" });
     }
     const requestedStart = run.checkpoint?.requestedStart;
@@ -341,28 +374,56 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/ask/generate", async (c) => {
-    const body = await c.req.json<{ bookId?: string; draftId?: string; conversation: string; requirements?: string; authorRequirement?: string }>();
+    const body = await c.req.json<{ bookId?: string; draftId?: string; conversation: string; requirements?: string; authorRequirement?: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const result = await generateAskCanon({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = generateAskCanon({
+      root,
       project,
       conversation: body.conversation ?? "",
       requirements: body.requirements,
       authorRequirement: body.authorRequirement,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
     });
-    return c.json(result);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "ask", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ask/review", async (c) => {
-    const body = await c.req.json<{ bookId?: string; draftId?: string; artifactId: string; conversation?: string }>();
+    const body = await c.req.json<{ bookId?: string; draftId?: string; artifactId: string; conversation?: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const report = await reviewAskCanon({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = reviewAskCanon({
+      root,
       project,
       artifactId: body.artifactId,
       conversation: body.conversation,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
     });
-    return c.json(report);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "ask", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ask/revise", async (c) => {
@@ -375,11 +436,13 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       extraRequirement?: string;
       authorRequirement?: string;
       conversation?: string;
-      reuseStale?: boolean; requirements?: string;
+      reuseStale?: boolean; requirements?: string; wait?: boolean;
     }>();
     const project = await deps.loadProject();
-    const result = await reviseAskCanon({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = reviseAskCanon({
+      root,
       project,
       artifactId: body.artifactId,
       reportId: body.reportId,
@@ -387,8 +450,20 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       extraRequirement: body.authorRequirement ?? body.extraRequirement ?? body.requirements,
       conversation: body.conversation,
       reuseStale: body.reuseStale,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
     });
-    return c.json(result);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "ask", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ask/adopt", async (c) => {
@@ -416,36 +491,101 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/ground/catalog", async (c) => {
-    const body = await c.req.json<{ bookId: string }>();
+    const body = await c.req.json<{ bookId: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const catalog = await proposeSettingsCatalog({
-      root: storeRoot(deps.root, body),
-      project,
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const now = new Date().toISOString();
+    await saveRun(root, {
+      runId, stage: "ground", operation: "generate", roleId: "ground.main", status: "running",
+      bookId: body.bookId, progressLabel: "正在拟定设定目录", modelSnapshot: {}, producedArtifactIds: [],
+      createdAt: now, updatedAt: now,
     });
-    return c.json(catalog);
+    emitAuthoringRun(deps, root, { runId, stage: "ground", status: "running" });
+    const work = proposeSettingsCatalog({ root, project }).then(async (catalog) => {
+      await saveRun(root, {
+        runId, stage: "ground", operation: "generate", roleId: "ground.main", status: "completed",
+        bookId: body.bookId, progressDone: 1, progressTotal: 1, progressLabel: "设定目录已拟定",
+        modelSnapshot: {}, producedArtifactIds: [], createdAt: now, updatedAt: new Date().toISOString(),
+      });
+      emitAuthoringRun(deps, root, { runId, stage: "ground", status: "completed", progressDone: 1, progressTotal: 1 });
+      return catalog;
+    });
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ground/generate", async (c) => {
-    const body = await c.req.json<{ bookId: string; entryIds?: string[]; regenerate?: boolean; requirements?: string }>();
+    const body = await c.req.json<{ bookId: string; entryIds?: string[]; regenerate?: boolean; requirements?: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const result = await generateGroundEntries({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = generateGroundEntries({
+      root,
       project,
       entryIds: body.entryIds,
-      regenerate: body.regenerate, requirements: body.requirements,
+      regenerate: body.regenerate,
+      requirements: body.requirements,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
     });
-    return c.json(result);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "ground", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ground/review", async (c) => {
-    const body = await c.req.json<{ bookId: string; entryIds: string[] }>();
+    const body = await c.req.json<{ bookId: string; entryIds: string[]; wait?: boolean }>();
     const project = await deps.loadProject();
-    const report = await reviewGroundEntries({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const now = new Date().toISOString();
+    await saveRun(root, {
+      runId, stage: "ground", operation: "review", roleId: "ground.review", status: "running",
+      bookId: body.bookId, progressLabel: "正在审查设定", modelSnapshot: {}, producedArtifactIds: [],
+      createdAt: now, updatedAt: now,
+    });
+    emitAuthoringRun(deps, root, { runId, stage: "ground", status: "running" });
+    const work = reviewGroundEntries({
+      root,
       project,
       entryIds: body.entryIds ?? [],
+    }).then(async (report) => {
+      await saveRun(root, {
+        runId, stage: "ground", operation: "review", roleId: "ground.review", status: "completed",
+        bookId: body.bookId, reportId: report.reportId, progressDone: 1, progressTotal: 1,
+        progressLabel: "审查完成", modelSnapshot: {}, producedArtifactIds: [],
+        createdAt: now, updatedAt: new Date().toISOString(),
+      });
+      emitAuthoringRun(deps, root, { runId, stage: "ground", status: "completed", progressDone: 1, progressTotal: 1 });
+      return report;
     });
-    return c.json(report);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ground/revise", async (c) => {
@@ -454,18 +594,45 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       entryId?: string;
       reportId: string;
       selectedIssueIds: string[];
-      reuseStale?: boolean; requirements?: string;
+      reuseStale?: boolean; requirements?: string; wait?: boolean;
     }>();
     const project = await deps.loadProject();
-    const result = await reviseGroundEntry({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const now = new Date().toISOString();
+    await saveRun(root, {
+      runId, stage: "ground", operation: "revise", roleId: "ground.main", status: "running",
+      bookId: body.bookId, reportId: body.reportId, progressLabel: "正在修订设定", modelSnapshot: {}, producedArtifactIds: [],
+      createdAt: now, updatedAt: now,
+    });
+    emitAuthoringRun(deps, root, { runId, stage: "ground", status: "running" });
+    const work = reviseGroundEntry({
+      root,
       project,
       entryId: body.entryId, requirements: body.requirements,
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
       reuseStale: body.reuseStale,
+    }).then(async (result) => {
+      await saveRun(root, {
+        runId, stage: "ground", operation: "revise", roleId: "ground.main", status: "completed",
+        bookId: body.bookId, reportId: body.reportId, progressDone: 1, progressTotal: 1,
+        progressLabel: "修订完成", modelSnapshot: {}, producedArtifactIds: result.artifactIds,
+        createdAt: now, updatedAt: new Date().toISOString(),
+      });
+      emitAuthoringRun(deps, root, { runId, stage: "ground", status: "completed", progressDone: 1, progressTotal: 1 });
+      return { artifactId: result.artifactIds[0], ...result };
     });
-    return c.json({ artifactId: result.artifactIds[0], ...result });
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/ground/adopt", async (c) => {
@@ -480,35 +647,43 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/weave/structure", async (c) => {
-    const body = await c.req.json<{ bookId: string; requirements?: string }>();
+    const body = await c.req.json<{ bookId: string; requirements?: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    try {
-      const result = await generateWeaveStructure({
-        root: storeRoot(deps.root, body),
-        project,
-        requirements: body.requirements,
-      });
-      return c.json(result);
-    } catch (error) {
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = generateWeaveStructure({
+      root,
+      project,
+      requirements: body.requirements,
+      runId,
+    });
+    const mapLengthError = (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       const code = (error as { code?: string }).code;
       if (code === WEAVE_LENGTH_REQUIRED || /请先/.test(message)) {
-        return c.json({ error: message, code: code ?? WEAVE_LENGTH_REQUIRED }, 400);
+        return { error: message, code: code ?? WEAVE_LENGTH_REQUIRED };
       }
-      throw error;
+      return undefined;
+    };
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        const mapped = mapLengthError(error);
+        if (mapped) return c.json(mapped, 400);
+        throw error;
+      }
     }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "weave", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/weave/generate", async (c) => {
     const body = await c.req.json<{ bookId: string; startChapter: number; endChapter: number; targetChapters?: number; wait?: boolean; requirements?: string }>();
     const project = await deps.loadProject();
     const root = storeRoot(deps.root, body);
-    if (body.bookId && await isLightweightAuthoringBook(join(deps.root, "books", body.bookId))) {
-      const manifest = await loadManifest(root);
-      if (!manifest.adopted.weave) {
-        return c.json({ error: "请先采用分卷结构，再生成章概要。" }, 400);
-      }
-    }
     const runId = newRunId();
     const start = Math.max(1, body.startChapter || 1);
     const end = Math.max(start, body.endChapter || start);
@@ -538,31 +713,41 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       runId,
     });
     if (body.wait) {
-      return c.json(await work);
-    }
-    void work.catch(async (error: unknown) => {
-      const current = await loadRun(root, runId);
-      if (current && (current.status === "running" || current.status === "pausing")) {
-        await saveRun(root, {
-          ...current,
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        });
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
       }
-    });
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "weave", status: "running", progressDone: 0, progressTotal: end - start + 1 });
     return c.json({ runId, status: "running", scope: `chapters:${start}-${end}` });
   });
 
   app.post("/api/v1/authoring/weave/review", async (c) => {
-    const body = await c.req.json<{ bookId: string; artifactId: string; coverage: string }>();
+    const body = await c.req.json<{ bookId: string; artifactId: string; coverage: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const report = await reviewWeave({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = reviewWeave({
+      root,
       project,
       artifactId: body.artifactId,
       coverage: body.coverage,
+      runId,
     });
-    return c.json(report);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "weave", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/weave/revise", async (c) => {
@@ -615,11 +800,11 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       try {
         return c.json({ artifactId: await work });
       } catch (error) {
-        await recordWeaveFailure(root, runId, error);
+          await recordRunFailure(root, runId, error, deps);
         return c.json({ error: weaveRevisionError(error) }, 400);
       }
     }
-    void work.catch((error: unknown) => recordWeaveFailure(root, runId, error));
+    void work.catch((error: unknown) => recordRunFailure(root, runId, error, deps));
     return c.json({ runId, status: "running", operation: "revise", progressLabel: "准备修订" });
   });
 
@@ -661,34 +846,58 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/write/generate", async (c) => {
-    const body = await c.req.json<{ bookId: string; chapterNumber: number; title?: string; requirements?: string }>();
+    const body = await c.req.json<{ bookId: string; chapterNumber: number; title?: string; requirements?: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    try {
-      const result = await generateChapterDraft({
-        root: storeRoot(deps.root, body),
-        project,
-        chapterNumber: body.chapterNumber,
-        title: body.title,
-        requirements: body.requirements,
-      });
-      return c.json(result);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/请先/.test(message)) return c.json({ error: message }, 400);
-      throw error;
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = generateChapterDraft({
+      root,
+      project,
+      chapterNumber: body.chapterNumber,
+      title: body.title,
+      requirements: body.requirements,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
+    });
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        const message = error instanceof Error ? error.message : String(error);
+        if (/请先/.test(message)) return c.json({ error: message }, 400);
+        throw error;
+      }
     }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "write", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/write/review", async (c) => {
-    const body = await c.req.json<{ bookId: string; artifactId: string; coverage?: string }>();
+    const body = await c.req.json<{ bookId: string; artifactId: string; coverage?: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const report = await reviewChapterDraft({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = reviewChapterDraft({
+      root,
       project,
       artifactId: body.artifactId,
       coverage: body.coverage,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
     });
-    return c.json(report);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "write", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/write/revise", async (c) => {
@@ -698,33 +907,96 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       reportId: string;
       selectedIssueIds: string[];
       extraRequirement?: string;
-      reuseStale?: boolean; requirements?: string;
+      reuseStale?: boolean; requirements?: string; wait?: boolean;
     }>();
     const project = await deps.loadProject();
-    const result = await reviseChapterDraft({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = reviseChapterDraft({
+      root,
       project,
       artifactId: body.artifactId,
       reportId: body.reportId,
       selectedIssueIds: body.selectedIssueIds ?? [],
       extraRequirement: body.requirements ?? body.extraRequirement,
       reuseStale: body.reuseStale,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
     });
-    return c.json(result);
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "write", status: "running" });
+    return c.json({ runId, status: "running" });
   });
 
   app.post("/api/v1/authoring/write/adopt", async (c) => {
-    const body = await c.req.json<{ bookId: string; artifactId: string }>();
+    const body = await c.req.json<{ bookId: string; artifactId: string; wait?: boolean }>();
     const project = await deps.loadProject();
-    const result = await adoptChapterDraft({
-      root: storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const adopted = await adoptChapterDraft({
+      root,
       project,
       artifactId: body.artifactId,
+      deferSettle: true,
     });
+    const runId = newRunId();
+    const work = settleAdoptedChapter({
+      root,
+      project,
+      artifactId: body.artifactId,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
+    });
+    if (body.wait) {
+      const settled = await work;
+      return c.json({
+        ...adopted,
+        ...settled,
+        runId,
+        message: settled.settled ? "章节已采用" : "正文已采用，摘要与状态整理未完成",
+      });
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "write", status: "running" });
     return c.json({
-      ...result,
-      message: result.settled ? "章节已采用" : "正文已采用，摘要与状态整理未完成",
+      ...adopted,
+      runId,
+      status: "running",
+      settled: false,
+      message: "章节已采用，正在整理摘要与状态",
     });
+  });
+
+  app.post("/api/v1/authoring/write/settle", async (c) => {
+    const body = await c.req.json<{ bookId: string; artifactId: string; wait?: boolean }>();
+    const project = await deps.loadProject();
+    const root = storeRoot(deps.root, body);
+    const runId = newRunId();
+    const work = settleAdoptedChapter({
+      root,
+      project,
+      artifactId: body.artifactId,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
+    });
+    if (body.wait) {
+      try {
+        return c.json(await work);
+      } catch (error) {
+        await recordRunFailure(root, runId, error, deps);
+        throw error;
+      }
+    }
+    void work.then(() => announceRun(deps, root, runId)).catch((error: unknown) => recordRunFailure(root, runId, error, deps));
+    emitAuthoringRun(deps, root, { runId, stage: "write", status: "running" });
+    return c.json({ runId, status: "running", operation: "settle" });
   });
 
   app.get("/api/v1/authoring/diff", async (c) => {
