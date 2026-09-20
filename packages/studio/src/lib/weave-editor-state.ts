@@ -1,5 +1,5 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
-import { applyVolumeMapNodeEdit, findNodeById, parseVolumeMapTree } from "./volume-map-tree";
+import { applyVolumeMapNodeEdit, findNodeById, insertChapterStub, parseVolumeMapTree } from "./volume-map-tree";
 
 export interface WeaveChapterRange {
   readonly startChapter: number;

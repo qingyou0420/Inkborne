@@ -18,6 +18,7 @@ import {
   loadArtifact,
   loadManifest,
   loadReport,
+  loadRun,
   newArtifactId,
   newRunId,
   saveArtifact,
@@ -27,14 +28,16 @@ import {
   type AuthoringStoreRoot,
 } from "../store.js";
 import { canonLengthRequiredError, createLightweightBook, hasConfirmedCanonLength, syncBookJsonTitle } from "../book-create.js";
-import type {
-  AuthoringLlmFn,
-  AuthoringArtifactMeta,
-  AuthoringReviewReport,
-  AuthoringRunRecord,
-  CanonDocument,
-  ResolvedAuthoringRole,
+import {
+  AuthoringRunRecordSchema,
+  type AuthoringLlmFn,
+  type AuthoringArtifactMeta,
+  type AuthoringReviewReport,
+  type AuthoringRunRecord,
+  type CanonDocument,
+  type ResolvedAuthoringRole,
 } from "../types.js";
+import type { z } from "zod";
 import type { ProjectConfig } from "../../models/project.js";
 
 export interface AskRuntime {
@@ -318,6 +321,16 @@ async function prepareExistingAskCanon(root: AuthoringStoreRoot): Promise<Prepar
   return { meta, body };
 }
 
+async function persistAskRun(
+  root: AuthoringStoreRoot,
+  run: Omit<z.input<typeof AuthoringRunRecordSchema>, "updatedAt"> & { updatedAt?: string },
+  onProgress?: (run: AuthoringRunRecord) => void,
+): Promise<void> {
+  await saveRun(root, { ...run, updatedAt: run.updatedAt ?? new Date().toISOString() });
+  const saved = await loadRun(root, run.runId);
+  if (saved) onProgress?.(saved);
+}
+
 export async function generateAskCanon(input: AskRuntime & {
   readonly conversation: string;
   readonly requirements?: string;
@@ -350,8 +363,7 @@ export async function generateAskCanon(input: AskRuntime & {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  await saveRun(input.root, running);
-  input.onProgress?.(running);
+  await persistAskRun(input.root, running, input.onProgress);
   const prompt = [
     "根据对话整理一份故事正典。只输出 JSON。",
     CANON_OUTPUT_INSTRUCTIONS,
@@ -401,8 +413,7 @@ export async function generateAskCanon(input: AskRuntime & {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await saveRun(input.root, completed);
-    input.onProgress?.(completed);
+    await persistAskRun(input.root, completed, input.onProgress);
     return { artifactId, version, canon, runId };
   } catch (error) {
     const failed = {
@@ -420,8 +431,7 @@ export async function generateAskCanon(input: AskRuntime & {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await saveRun(input.root, failed);
-    input.onProgress?.(failed);
+    await persistAskRun(input.root, failed, input.onProgress);
     throw error;
   }
 }
@@ -451,8 +461,7 @@ export async function reviewAskCanon(input: AskRuntime & {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  await saveRun(input.root, running);
-  input.onProgress?.(running);
+  await persistAskRun(input.root, running, input.onProgress);
   const extras = [
     authorContext.prompt,
     "核对正典是否完整整理了对话已明确的主角与核心欲望、叙事视角与文风、故事边界、初始方向；如有遗漏，请在 evidence 中引用依据，说明应补回什么。没有依据的内容应列为具体待确认问题，不要建议杜撰，也不要把作者主动待定当成缺陷。",
@@ -489,8 +498,7 @@ export async function reviewAskCanon(input: AskRuntime & {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  await saveRun(input.root, completed);
-  input.onProgress?.(completed);
+  await persistAskRun(input.root, completed, input.onProgress);
   return report;
 }
 
@@ -528,8 +536,7 @@ export async function reviseAskCanon(input: AskRuntime & {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  await saveRun(input.root, running);
-  input.onProgress?.(running);
+  await persistAskRun(input.root, running, input.onProgress);
   const prompt = [
     "按选中的审查意见更新正典。只输出 JSON。",
     CANON_OUTPUT_INSTRUCTIONS,
@@ -569,8 +576,7 @@ export async function reviseAskCanon(input: AskRuntime & {
       progressLabel: "正典已修订",
       producedArtifactIds: [artifactId],
     };
-    await saveRun(input.root, completed);
-    input.onProgress?.(completed);
+    await persistAskRun(input.root, completed, input.onProgress);
     return { artifactId, version, canon, runId };
   } catch (error) {
     const failed = {
@@ -579,8 +585,7 @@ export async function reviseAskCanon(input: AskRuntime & {
       error: error instanceof Error ? error.message : String(error),
       progressLabel: "修订正典失败",
     };
-    await saveRun(input.root, failed);
-    input.onProgress?.(failed);
+    await persistAskRun(input.root, failed, input.onProgress);
     throw error;
   }
 }

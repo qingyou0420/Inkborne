@@ -35,7 +35,8 @@ import {
   saveRun,
   type AuthoringStoreRoot,
 } from "../store.js";
-import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringRunRecord } from "../types.js";
+import { AuthoringRunRecordSchema, type AuthoringLlmFn, type AuthoringReviewReport, type AuthoringRunRecord } from "../types.js";
+import type { z } from "zod";
 import type { ProjectConfig } from "../../models/project.js";
 
 export interface WriteRuntime {
@@ -55,11 +56,12 @@ async function resolve(project: ProjectConfig, role: "write.main" | "write.revie
 
 async function writeRun(
   root: AuthoringStoreRoot,
-  run: Omit<AuthoringRunRecord, "updatedAt"> & { updatedAt?: string },
+  run: Omit<z.input<typeof AuthoringRunRecordSchema>, "updatedAt"> & { updatedAt?: string },
   onProgress?: (run: AuthoringRunRecord) => void,
 ): Promise<void> {
-  await saveRun(root, run);
-  onProgress?.(await loadRun(root, run.runId) ?? { ...run, updatedAt: new Date().toISOString() });
+  await saveRun(root, { ...run, updatedAt: run.updatedAt ?? new Date().toISOString() });
+  const saved = await loadRun(root, run.runId);
+  if (saved) onProgress?.(saved);
 }
 
 export async function generateChapterDraft(input: WriteRuntime & {

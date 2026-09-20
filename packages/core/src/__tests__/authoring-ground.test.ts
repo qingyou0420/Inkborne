@@ -218,8 +218,8 @@ describe("ground stage", () => {
           ],
         });
       }
-      if (text.includes("永夜规则")) return "太阳永不升起。";
-      return "只有南北两片大陆。";
+        if (text.includes("撰写设定条目「永夜规则」")) return "太阳永不升起。";
+        return "只有南北两片大陆。";
     };
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
     await proposeSettingsCatalog(ctx);
@@ -291,7 +291,7 @@ describe("ground stage", () => {
             ],
           });
         }
-        if (text.includes("永夜规则")) return "太阳永不升起。";
+        if (text.includes("撰写设定条目「永夜规则」")) return "太阳永不升起。";
         return "只有南北两片大陆。";
       };
       const book = await createLightweightBook({
