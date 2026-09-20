@@ -5,9 +5,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
 import { postApi, putApi, useApi } from "../hooks/use-api";
+import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { currentWriteArtifact, reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
+import { GenerationRequirements } from "./GenerationRequirements";
 import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
 import { ManuscriptView } from "./ManuscriptView";
@@ -33,13 +35,14 @@ function installUnloadGuard() {
 }
 export type WriteLeaveGuard = () => Promise<boolean>;
 
-export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh, onChanged, onRegisterBeforeLeave }: {
+export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh, onChanged, onRegisterBeforeLeave, onGoNextChapter }: {
   readonly bookId: string;
   readonly chapterNumber: number;
   readonly chapterTitle?: string;
   readonly isZh: boolean;
   readonly onChanged?: () => void;
   readonly onRegisterBeforeLeave?: (guard: WriteLeaveGuard | null) => void;
+  readonly onGoNextChapter?: () => void;
 }) {
   const { data, error: workspaceError, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const bufferKey = `${bookId}:${chapterNumber}`;
@@ -57,6 +60,7 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [generation, setGeneration] = useState<{ issueIds?: ReadonlyArray<string>; reuseStale?: boolean } | null>(null);
+  const [requirementNotes, setRequirementNotes] = useState("");
   const decision = useDraftDecision(isZh);
   const [body, setBody] = useState(restoredEdit.current?.body ?? "");
   const [dirty, setDirty] = useState(Boolean(restoredEdit.current));
@@ -180,7 +184,10 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const adopt = async () => {
     const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
     const result = await postApi<{ message?: string; settled?: boolean }>("/authoring/write/adopt", { bookId, artifactId });
-    showToast(result.message ?? (isZh ? "章节已采用" : "Chapter adopted"), result.settled === false ? "info" : "success");
+    showToast(result.message ?? (isZh ? "章节已采用" : "Chapter adopted"), result.settled === false ? "info" : "success", {
+      label: isZh ? "写下一章" : "Write next chapter",
+      onClick: () => onGoNextChapter ? onGoNextChapter() : goBookAuthoringStage(bookId, "write"),
+    });
   };
   const reviewCurrent = () => {
     if (editing || dirty || busyRef.current) return Promise.resolve(false);
@@ -193,6 +200,18 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
     });
   };
   const generationNotes = generationReviewNotes(activeReport, [pendingSavedId.current ?? candidate?.artifactId]);
+  const generateChapter = async (requirements = "") => {
+    return run("generate", async () => {
+      const generated = await postApi<{ artifactId: string }>("/authoring/write/generate", {
+        bookId,
+        chapterNumber,
+        title: chapterTitle,
+        requirements: withGenerationReview(requirements, generationNotes),
+      });
+      pendingSavedId.current = generated.artifactId;
+      setReportOpen(false);
+    }, true);
+  };
 
   return (
     <section className={`manuscript-workspace ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-write-panel" aria-busy={Boolean(busy)}>
@@ -248,7 +267,7 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
             <DropdownMenuItem disabled={!storedReport} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!parentId} onClick={() => setDiffOpen(true)}>{isZh ? "比较修改前后" : "Compare versions"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
-          </> : <button type="button" className="primary" disabled={Boolean(busy) || !ready || dirty} onClick={() => setGeneration({})}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button>}
+          </> : <><button type="button" className="primary" disabled={Boolean(busy) || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={Boolean(busy) || !ready} /></>}
           </>}
         </div>
       </div>

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, FileCheck2, MoreHorizontal, PanelRightClose, PanelRightOpen, PencilLine, Save } from "lucide-react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { invalidateBookStage } from "../hooks/use-book-stage";
+import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import { registerNavigationGuard } from "../lib/edit-navigation";
 import { chatSelectors, useChatStore } from "../store/chat";
@@ -199,7 +200,11 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId: savedId ?? artifactId });
     invalidateBookStage(result.bookId ?? bookId);
     useChatStore.getState().bumpBookDataVersion();
-    showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"));
+    const nextBookId = result.bookId ?? bookId;
+    showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"), "success", nextBookId ? {
+      label: isZh ? "进入研墨" : "Go to Ground",
+      onClick: () => goBookAuthoringStage(nextBookId, "ground"),
+    } : undefined);
     if (mounted.current && result.bookId && !bookId) onAdopted?.(result.bookId);
   };
   const startAdopt = () => void run("adopt", async () => {

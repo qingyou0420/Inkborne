@@ -31,6 +31,8 @@ describe("P1-5 落笔", () => {
     expect(detail).toMatch(/book\.download/);
     expect(detail).toMatch(/formatStudyWords/);
     expect(detail).toMatch(/StageDot/);
+    expect(detail).toMatch(/authoringBook \?[\s\S]*write-export-tools/);
+    expect(detail).toMatch(/!authoringBook[\s\S]*book\.rewrite/);
   });
 
   it("pads the write empty state and hides the table header when there are no chapters", () => {
@@ -39,7 +41,7 @@ describe("P1-5 落笔", () => {
     expect(empty).toMatch(/cn\(/);
     expect(empty).toMatch(/py-12/);
     const detail = read("src/pages/BookDetail.tsx");
-    expect(detail).toMatch(/chapters\.length > 0 && \(/);
+    expect(detail).toMatch(/writeDirectory\.length > 0 && \(/);
     expect(detail).toMatch(/className="px-6 py-14 sm:px-8"/);
     expect(detail).toMatch(/testId="write-empty"/);
   });

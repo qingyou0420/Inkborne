@@ -3,6 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SerialCockpitStrip, startDraft, startWriteNext } from "../components/SerialCockpitStrip";
 import { AuthoringWritePanel, type WriteLeaveGuard } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
+import {
+  firstUnwrittenChapter,
+  mergeWriteDirectory,
+  writeMarkDotState,
+  writeMarkLabel,
+  type WriteDirectoryChapter,
+} from "../lib/write-directory";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
@@ -108,6 +117,9 @@ export function BookDetail({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
+  const { data: authoring, loading: authoringLoading } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data: outline, loading: outlineLoading } = useApi<{ content?: string | null }>(`/books/${encodeURIComponent(bookId)}/truth/outline/volume_map.md`);
+  const authoringBook = authoring?.authoringBook === true;
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [writeRequestPending, setWriteRequestPending] = useState(false);
   const [draftRequestPending, setDraftRequestPending] = useState(false);
@@ -150,15 +162,35 @@ export function BookDetail({
       setChapterSwitchPending(false);
     }
   };
+  const writeDirectory = useMemo<ReadonlyArray<WriteDirectoryChapter>>(() => {
+    if (!data) return [];
+    if (!authoringBook) {
+      return data.chapters.map((chapter) => ({
+        number: chapter.number,
+        title: chapter.title,
+        mark: "adopted" as const,
+        wordCount: chapter.wordCount ?? 0,
+      }));
+    }
+    return mergeWriteDirectory({
+      volumeMap: outline?.content ?? "",
+      persisted: data.chapters,
+      candidates: authoring?.manifest?.candidates?.write,
+      adopted: authoring?.manifest?.adopted?.write,
+    });
+  }, [authoring?.manifest?.adopted?.write, authoring?.manifest?.candidates?.write, authoringBook, data, outline?.content]);
+  const firstUnwritten = firstUnwrittenChapter(writeDirectory, data?.nextChapter ?? 1);
   useEffect(() => { setWriteChapter(null); }, [bookId]);
   useEffect(() => {
-    if (data?.book.id === bookId && writeChapter === null) {
-      const previous = usePreferencesStore.getState().lastChapters[bookId];
-      const restored = previous && (previous === data.nextChapter || data.chapters.some((chapter) => chapter.number === previous)) ? previous : data.nextChapter;
-      setWriteChapter(restored);
-      usePreferencesStore.getState().setLastChapter(bookId, restored);
-    }
-  }, [bookId, data?.book.id, data?.nextChapter, writeChapter]);
+    if (data?.book.id !== bookId || writeChapter !== null) return;
+    if (authoringLoading || outlineLoading) return;
+    const previous = usePreferencesStore.getState().lastChapters[bookId];
+    const allowed = new Set(writeDirectory.map((chapter) => chapter.number));
+    allowed.add(firstUnwritten);
+    const restored = previous && allowed.has(previous) ? previous : firstUnwritten;
+    setWriteChapter(restored);
+    usePreferencesStore.getState().setLastChapter(bookId, restored);
+  }, [authoringLoading, bookId, data?.book.id, firstUnwritten, outlineLoading, writeChapter, writeDirectory]);
 
 
   useEffect(() => {
@@ -418,6 +450,8 @@ export function BookDetail({
   const { book, chapters } = data;
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
   const reviewCount = chapters.filter((ch) => ch.status === "ready-for-review").length;
+  const activeChapter = writeChapter ?? firstUnwritten;
+  const persistedByNumber = new Map(chapters.map((chapter) => [chapter.number, chapter]));
 
   const preflightOk = preflight?.ok !== false;
   const showSkip = hasPreviousChapterUnapprovedReason(preflight?.reasons ?? []);
@@ -460,40 +494,53 @@ export function BookDetail({
       <div className="write-directory-control"><button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{t("write.directory")}</button></div>
       <div className={`one-workspace ${!directoryOpen ? "directory-collapsed" : ""}`}>
         <nav className="one-directory" hidden={!directoryOpen} aria-label={t("write.directory")}>
-          {chapters.length > 0 && (
-            chapters.map((ch) => (
-              <div key={ch.number} className="flex items-start gap-1">
+          {writeDirectory.length > 0 && (
+            writeDirectory.map((item) => {
+              const ch = persistedByNumber.get(item.number);
+              const selected = activeChapter === item.number;
+              const statusLabel = authoringBook
+                ? writeMarkLabel(item.mark, isZh)
+                : translateChapterStatus(ch?.status ?? "drafted", t);
+              const dotState = authoringBook ? writeMarkDotState(item.mark) : statusDotState(ch?.status ?? "drafted");
+              const tone = authoringBook
+                ? (item.mark === "adopted" ? "text-foreground" : item.mark === "empty" ? "text-muted-foreground" : "text-mark-text")
+                : statusTone(ch?.status ?? "drafted");
+              return (
+              <div key={item.number} className="flex items-start gap-1">
                 <button
                   type="button"
-                  className={`dir-item ${(writeChapter ?? data.nextChapter) === ch.number ? "active" : ""}`}
+                  className={`dir-item ${selected ? "active" : ""}`}
                   disabled={chapterSwitchPending}
-                  aria-current={(writeChapter ?? data.nextChapter) === ch.number ? "page" : undefined}
-                  onClick={() => void switchWriteChapter(ch.number)}
+                  aria-current={selected ? "page" : undefined}
+                  data-testid={`write-toc-${item.number}`}
+                  data-mark={authoringBook ? item.mark : undefined}
+                  onClick={() => void switchWriteChapter(item.number)}
                 >
-                  {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
-                  <small className={statusTone(ch.status)}>
-                    <StageDot state={statusDotState(ch.status)} />
-                    {" "}{translateChapterStatus(ch.status, t)} · {(ch.wordCount ?? 0).toLocaleString()} {t("book.words")}
+                  {item.title || t("chapter.label").replace("{n}", String(item.number))}
+                  <small className={tone}>
+                    <StageDot state={dotState} />
+                    {" "}{statusLabel} · {(item.wordCount ?? 0).toLocaleString()} {t("book.words")}
                   </small>
                 </button>
-                {(writeChapter ?? data.nextChapter) === ch.number ? <DropdownMenu>
+                {selected ? <DropdownMenu>
                   <DropdownMenuTrigger
-                    data-testid={`chapter-more-${ch.number}`}
+                    data-testid={`chapter-more-${item.number}`}
                     aria-label={isZh ? "当前章节工具" : "Current chapter tools"}
                     className="btn-ghost inline-flex h-8 w-8 items-center justify-center"
                   >
                     <MoreHorizontal size={14} />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-44">
-                    {ch.status === "ready-for-review" ? <DropdownMenuItem data-testid={`chapter-approve-${ch.number}`} onClick={() => void handleApprove(ch.number)}>{t("book.approve")}</DropdownMenuItem> : null}
-                    <DropdownMenuItem onClick={() => nav.toChapter(bookId, ch.number)}>
+                    {!authoringBook && ch?.status === "ready-for-review" ? <DropdownMenuItem data-testid={`chapter-approve-${item.number}`} onClick={() => void handleApprove(item.number)}>{t("book.approve")}</DropdownMenuItem> : null}
+                    <DropdownMenuItem onClick={() => nav.toChapter(bookId, item.number)}>
                       {t("reader.preview")}
                     </DropdownMenuItem>
-                    {ch.status === "ready-for-review" && (
+                    {!authoringBook ? <>
+                    {ch?.status === "ready-for-review" && (
                       <DropdownMenuItem
                         variant="destructive"
                         onClick={async () => {
-                          try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
+                          try { await postApi(`/books/${bookId}/chapters/${item.number}/reject`); refetch(); }
                           catch (e) { setActionMessage(e instanceof Error ? e.message : "Reject failed"); }
                         }}
                       >
@@ -503,7 +550,7 @@ export function BookDetail({
                     <DropdownMenuItem
                       onClick={async () => {
                         try {
-                          const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                          const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${item.number}`, { method: "POST" });
                           setActionMessage(auditResult.passed
                             ? (isZh ? "审校已通过" : "Audit passed")
                             : (isZh ? `审校未过：${auditResult.issues?.length ?? 0} 条` : `Audit failed: ${auditResult.issues?.length ?? 0} issues`));
@@ -516,27 +563,27 @@ export function BookDetail({
                       {t("book.audit")}
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      disabled={rewritingChapters.includes(ch.number)}
+                      disabled={rewritingChapters.includes(item.number)}
                       onClick={() => {
-                        setBriefPrompt({ kind: "rewrite", chapter: ch.number });
+                        setBriefPrompt({ kind: "rewrite", chapter: item.number });
                         setBriefValue("");
                       }}
                     >
                       {t("book.rewrite")}
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
+                      disabled={syncingChapters.includes(item.number) || item.number !== latestPersistedChapter}
                       onClick={() => {
-                        setBriefPrompt({ kind: "sync", chapter: ch.number });
+                        setBriefPrompt({ kind: "sync", chapter: item.number });
                         setBriefValue("");
                       }}
                     >
                       {t("book.syncTruth")}
                     </DropdownMenuItem>
-                    {ch.status === "state-degraded" && (
+                    {ch?.status === "state-degraded" && (
                       <DropdownMenuItem
-                        disabled={bookActionPending === `repair-state-${ch.number}`}
-                        onClick={() => void handleRepairState(ch.number)}
+                        disabled={bookActionPending === `repair-state-${item.number}`}
+                        onClick={() => void handleRepairState(item.number)}
                       >
                         {t("book.repairState")}
                       </DropdownMenuItem>
@@ -552,37 +599,40 @@ export function BookDetail({
                     ] as const).map(([mode, label]) => (
                       <DropdownMenuItem
                         key={mode}
-                        disabled={revisingChapters.includes(ch.number)}
+                        disabled={revisingChapters.includes(item.number)}
                         onClick={() => {
-                          setBriefPrompt({ kind: "revise", chapter: ch.number, mode });
+                          setBriefPrompt({ kind: "revise", chapter: item.number, mode });
                           setBriefValue("");
                         }}
                       >
                         {label}
                       </DropdownMenuItem>
                     ))}
+                    </> : null}
                   </DropdownMenuContent>
                 </DropdownMenu> : null}
               </div>
-            ))
+              );
+            })
           )}
           <div className="write-directory-next">
-            <button type="button" className={`dir-item ${(writeChapter ?? data.nextChapter) === data.nextChapter ? "active" : ""}`} disabled={chapterSwitchPending} onClick={() => void switchWriteChapter(data.nextChapter)}>
-              {isZh ? `第 ${data.nextChapter} 章 · 新章` : `Chapter ${data.nextChapter} · New`}
+            <button type="button" className={`dir-item ${activeChapter === firstUnwritten ? "active" : ""}`} disabled={chapterSwitchPending} data-testid="write-toc-next" onClick={() => void switchWriteChapter(firstUnwritten)}>
+              {isZh ? `第 ${firstUnwritten} 章 · 新章` : `Chapter ${firstUnwritten} · New`}
             </button>
           </div>
         </nav>
         <div className="one-document">
           <AuthoringWritePanel
-            key={`${bookId}:${writeChapter ?? data.nextChapter}`}
+            key={`${bookId}:${activeChapter}`}
             bookId={bookId}
-            chapterNumber={writeChapter ?? data.nextChapter}
-            chapterTitle={data.chapters.find((item) => item.number === (writeChapter ?? data.nextChapter))?.title}
+            chapterNumber={activeChapter}
+            chapterTitle={writeDirectory.find((item) => item.number === activeChapter)?.title || data.chapters.find((item) => item.number === activeChapter)?.title}
             isZh={isZh}
             onChanged={() => refetch()}
             onRegisterBeforeLeave={registerWriteGuard}
+            onGoNextChapter={() => void switchWriteChapter(firstUnwrittenChapter(writeDirectory.filter((item) => item.number > activeChapter), activeChapter + 1))}
           />
-          {stage && chapters.length === 0 && (emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip)) && (
+          {stage && writeDirectory.length === 0 && (emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip)) && (
             <LiteraryEmpty
               title={emptyCopy.title}
               subtitle={emptyCopy.subtitle}
@@ -602,6 +652,57 @@ export function BookDetail({
         </div>
       </div>
 
+        {authoringBook ? (
+        <div className="flex flex-wrap items-center gap-2" data-testid="write-export-tools">
+          <DropdownMenu>
+            <DropdownMenuTrigger className="btn-secondary inline-flex items-center gap-1.5">
+              <Download size={14} />
+              {t("book.exportMenu")}
+              <ChevronDown size={14} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 p-3 space-y-3">
+              {(["txt", "md", "epub"] as const).map((format) => (
+                <label key={format} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="export-format"
+                    checked={exportFormat === format}
+                    onChange={() => setExportFormat(format)}
+                  />
+                  {format.toUpperCase()}
+                </label>
+              ))}
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
+                {t("book.approvedOnly")}
+              </label>
+              <div className="flex flex-col gap-1 pt-1">
+                <a href={exportHref} download data-testid="book-export-manuscript" className="btn-secondary text-center">
+                  {t("book.download")}
+                </a>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
+                      });
+                      setBookActionPending(`saved:${exported.path ?? ""}`);
+                    } catch (e) {
+                      setBookActionPending(e instanceof Error ? e.message : "Export failed");
+                    }
+                  }}
+                  className="btn-ghost w-full"
+                >
+                  {t("book.exportSave")}
+                </button>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        ) : (
         <details className="write-legacy" data-testid="write-legacy-tools">
           <summary>{isZh ? "连续创作与作品工具" : "Serial writing and book tools"}</summary>
           <p className="my-3 text-sm text-muted-foreground">{book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}</p>
@@ -617,7 +718,7 @@ export function BookDetail({
                 <label key={format} className="flex items-center gap-2 text-sm">
                   <input
                     type="radio"
-                    name="export-format"
+                    name="export-format-legacy"
                     checked={exportFormat === format}
                     onChange={() => setExportFormat(format)}
                   />
@@ -718,6 +819,7 @@ export function BookDetail({
       )}
 
         </details>
+        )}
 
       <ConfirmDialog
         open={Boolean(briefPrompt)}

@@ -6,8 +6,10 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
+import { GenerationRequirements } from "./GenerationRequirements";
 import { workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
 import { groundGenerationScope, groundRevisionScope } from "../lib/ground-task-scope";
@@ -58,6 +60,7 @@ function AuthoringGroundBook({
   const [batchMode, setBatchMode] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [generation, setGeneration] = useState<{ entryIds: string[]; regenerate?: boolean; issueIds?: ReadonlyArray<string>; reuseStale?: boolean; report?: AuthoringReport } | null>(null);
+  const [requirementNotes, setRequirementNotes] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
   const decision = useDraftDecision(isZh);
   const visible = entries.filter((entry) => !entry.archived);
@@ -205,6 +208,11 @@ function AuthoringGroundBook({
     return run("review", async () => { const next = await postApi<AuthoringReport>("/authoring/ground/review", { bookId, entryIds: actionIds }); setReport(next); return next; });
   };
   const generationNotes = generationReviewNotes(report, (generation?.entryIds ?? []).map((id) => { const item = visible.find((entry) => entry.id === id); return item?.candidateArtifactId ?? item?.adoptedArtifactId; }));
+  const generateEntries = (entryIds: string[], regenerate: boolean, requirements = "") => run("generate", async () => {
+    await persistIfDirty();
+    await postApi("/authoring/ground/generate", { bookId, entryIds, regenerate, requirements: withGenerationReview(requirements, generationNotes) });
+    artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); setReportOpen(false); return true;
+  });
 
   return (
     <section className={`space-y-4 ground-workspace ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-ground-panel">
@@ -231,7 +239,7 @@ function AuthoringGroundBook({
             <DropdownMenuTrigger className="btn-ghost" aria-label={isZh ? "设定任务" : "Setting tasks"} disabled={blocked || editing}><MoreHorizontal size={18} /></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => { setBatchMode((value) => !value); setSelected([]); }}>{batchMode ? (isZh ? "结束多选" : "Finish selecting") : (isZh ? "批量选择" : "Select a batch")}</DropdownMenuItem>
-              <DropdownMenuItem disabled={generationScope.entryIds.length === 0} onClick={() => setGeneration(generationScope)}>{generateLabel}</DropdownMenuItem>
+              <DropdownMenuItem disabled={generationScope.entryIds.length === 0} onClick={() => generationScope.regenerate ? setGeneration(generationScope) : void generateEntries(generationScope.entryIds, false, requirementNotes)}>{generateLabel}</DropdownMenuItem>
               <DropdownMenuItem onClick={() => void run("catalog", () => postApi("/authoring/ground/catalog", { bookId }))}>{isZh ? "重新拟定目录" : "Rebuild catalog"}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>}
@@ -326,7 +334,7 @@ function AuthoringGroundBook({
                 }}
                 placeholder={isZh ? "生成后可在这里阅读和修改" : "Generated text can be read and edited here"}
                 data-testid="ground-entry-body"
-              /> : draft.baseId ? <ManuscriptView body={draft.body} /> : !artifactLoading && !artifactError ? <div className="py-12 space-y-5"><p className="text-muted-foreground">{isZh ? "这条设定尚未生成。" : "This setting has not been written yet."}</p><button type="button" className="btn-primary" disabled={blocked} onClick={() => setGeneration({ entryIds: [focused.id] })}>{isZh ? "生成设定" : "Generate setting"}</button></div> : null}
+              /> : draft.baseId ? <ManuscriptView body={draft.body} /> : !artifactLoading && !artifactError ? <div className="py-12 space-y-5"><p className="text-muted-foreground">{isZh ? "这条设定尚未生成。" : "This setting has not been written yet."}</p><div className="flex flex-wrap items-center gap-2"><button type="button" className="btn-primary" disabled={blocked} data-testid="ground-generate" onClick={() => void generateEntries([focused.id], false, requirementNotes)}>{isZh ? "生成设定" : "Generate setting"}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={blocked} /></div></div> : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -354,7 +362,10 @@ function AuthoringGroundBook({
               disabled={blocked || actionIds.length === 0 || draft.dirty || (!batchMode && currentAdopted)}
               onClick={() => void run("adopt", async () => {
                 const result = await postApi<{ adopted: string[] }>("/authoring/ground/adopt", { bookId, entryIds: actionIds });
-                showToast(isZh ? `已采用 ${result.adopted.length} 项` : `Adopted ${result.adopted.length}`, "success");
+                showToast(isZh ? `已采用 ${result.adopted.length} 项` : `Adopted ${result.adopted.length}`, "success", {
+                  label: isZh ? "去织卷" : "Go to Weave",
+                  onClick: () => goBookAuthoringStage(bookId, "weave"),
+                });
                 return result;
               })}
             >
