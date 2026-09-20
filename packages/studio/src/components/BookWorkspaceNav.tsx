@@ -57,7 +57,16 @@ export function BookWorkspaceNav({ bookId, active, nav, isZh, stage, onFocusMode
   };
   return (
     <nav className="book-chrome ink-book-nav" data-testid="book-workspace-nav" aria-label={isZh ? "作品与创作阶段" : "Work and stages"}>
-      <span className="ink-book-context" title={title}>{title}</span>
+      <button
+        type="button"
+        className="ink-book-context"
+        title={title}
+        data-testid="book-overview-link"
+        aria-current={current === "study" ? "page" : undefined}
+        onClick={() => nav.toBook(bookId)}
+      >
+        {title}
+      </button>
       <ol className="ink-stage-strip" data-testid="book-stage-strip">
         {STEPS.map((step) => {
           const state = loaded?.steps[step.id];

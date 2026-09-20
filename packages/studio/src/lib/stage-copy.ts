@@ -21,23 +21,23 @@ export function studyGuideCopy(stage: BookStageId, isZh: boolean): StageGuideCop
   }
   if (stage === "ground") {
     return isZh
-      ? { title: "先把世界与人磨实", subtitle: "研墨定稿后才能织卷", action: "去研墨", target: "ground" }
-      : { title: "Settle the world and people first", subtitle: "Ground the book before weaving volumes", action: "Go to Ground", target: "ground" };
+      ? { title: "先把世界与人磨实", subtitle: "先在研墨采用至少一组设定", action: "去研墨", target: "ground" }
+      : { title: "Settle the world and people first", subtitle: "Adopt at least one setting group in Ground first", action: "Go to Ground", target: "ground" };
   }
   if (stage === "weave") {
     return isZh
-      ? { title: "全书要分几卷？", subtitle: "先定卷，再排前十章", action: "去织卷", target: "weave" }
-      : { title: "How many volumes?", subtitle: "Lock the volume split, then the first ten chapters", action: "Go to Weave", target: "weave" };
+      ? { title: "全书要分几卷？", subtitle: "先生成并采用分卷规划", action: "去织卷", target: "weave" }
+      : { title: "How many volumes?", subtitle: "Generate and adopt the volume plan first", action: "Go to Weave", target: "weave" };
   }
   return isZh
-    ? { title: "今日一笔", subtitle: "", action: "落墨 · 写下一章", target: "write" }
-    : { title: "Today's stroke", subtitle: "", action: "落墨 · Write next", target: "write" };
+    ? { title: "今日一笔", subtitle: "", action: "写下一章（旧管线）", target: "write" }
+    : { title: "Today's stroke", subtitle: "", action: "Write next (legacy)", target: "write" };
 }
 
 export function weaveGuideWhenUngrounded(isZh: boolean): StageGuideCopy {
   return isZh
-    ? { title: "纲要生于设定", subtitle: "研墨定稿后开启织卷", action: "去研墨", target: "ground" }
-    : { title: "Outline grows from ground", subtitle: "Confirm 研墨 before weaving volumes", action: "Go to Ground", target: "ground" };
+    ? { title: "纲要生于设定", subtitle: "先在研墨采用至少一组设定", action: "去研墨", target: "ground" }
+    : { title: "The plan grows from settings", subtitle: "Adopt at least one setting group in Ground first", action: "Go to Ground", target: "ground" };
 }
 
 export function weaveLengthGateCopy(isZh: boolean): StageGuideCopy {
@@ -53,17 +53,17 @@ export function writeEmptyCopy(input: {
 }): StageGuideCopy {
   if (input.previousUnapproved) {
     return input.isZh
-      ? { title: `第 ${input.previousUnapproved} 章等你过目`, subtitle: "先审过上一章，再写下一章", action: "去审稿", target: "write" }
-      : { title: `Chapter ${input.previousUnapproved} is waiting`, subtitle: "Review the last chapter before writing on", action: "Open review", target: "write" };
+      ? { title: `第 ${input.previousUnapproved} 章等你过目`, subtitle: "先审查上一章，再写下一章", action: "去落笔审查", target: "write" }
+      : { title: `Chapter ${input.previousUnapproved} is waiting`, subtitle: "Review the last chapter before writing on", action: "Review in Write", target: "write" };
   }
   if (!input.hasOutline) {
     return input.isZh
-      ? { title: "还没有可写的章", subtitle: "去织卷排出前十章", action: "去织卷", target: "weave" }
-      : { title: "No writable chapter yet", subtitle: "Weave the first ten chapters first", action: "Go to Weave", target: "weave" };
+      ? { title: "还没有可写的章", subtitle: "去织卷生成章概要", action: "去织卷", target: "weave" }
+      : { title: "No writable chapter yet", subtitle: "Generate chapter summaries in Weave first", action: "Go to Weave", target: "weave" };
   }
   return input.isZh
-    ? { title: "还没有落笔", subtitle: "从下一章开始", action: "落墨 · 写下一章", target: "write" }
-    : { title: "Nothing on the page yet", subtitle: "Start with the next chapter", action: "落墨 · Write next", target: "write" };
+    ? { title: "还没有落笔", subtitle: "从下一章开始", action: "写下一章（旧管线）", target: "write" }
+    : { title: "Nothing on the page yet", subtitle: "Start with the next chapter", action: "Write next (legacy)", target: "write" };
 }
 
 export function shelfEmptyCopy(isZh: boolean): StageGuideCopy {

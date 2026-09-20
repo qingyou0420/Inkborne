@@ -121,10 +121,11 @@ describe("P2-3 visual", () => {
 });
 
 describe("P2-4 short study", () => {
-  it("shows 创作书房, three steps, and a danger-zone delete", () => {
+  it("shows a short kicker, three steps, and a danger-zone delete", () => {
     const short = read("src/pages/ShortReader.tsx");
     const settings = read("src/pages/ShortSettings.tsx");
-    expect(short).toMatch(/创作书房/);
+    expect(short).not.toMatch(/创作书房/);
+    expect(short).toMatch(/isZh \? "短篇" : "Short"/);
     expect(short).toMatch(/short-stage-strip/);
     expect(short).toMatch(/short-study-home/);
     expect(short).toMatch(/short-primary-cta/);

@@ -347,7 +347,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         onAdvanced={() => nav.toProjectSettings?.("advanced")}
       />
       <div className="space-y-8 min-w-0">
-      <h1 className="text-[32px] font-medium leading-10">{tr("设置", "Settings")}</h1>
+      <h1 className="text-[32px] font-medium leading-10">{t("settings.title")}</h1>
       <AuthoringRolesPanel isZh={isZh} />
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-[20px] font-medium">{t("settings.servicesHeading")}</h2>

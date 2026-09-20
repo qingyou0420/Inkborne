@@ -27,8 +27,9 @@ describe("P1-5 落笔", () => {
     expect(detail).not.toMatch(/padStart\(2/);
     expect(detail).not.toMatch(/shadow-xl/);
     expect(detail).not.toMatch(/stagger-/);
-    expect(detail).toMatch(/type="radio"/);
-    expect(detail).toMatch(/book\.download/);
+    expect(detail).toMatch(/ExportMenu/);
+    expect(read("src/components/ExportMenu.tsx")).toMatch(/type="radio"/);
+    expect(read("src/components/ExportMenu.tsx")).toMatch(/book\.download/);
     expect(detail).toMatch(/formatStudyWords/);
     expect(detail).toMatch(/StageDot/);
     expect(detail).toMatch(/authoringBook \?[\s\S]*write-export-tools/);
@@ -68,7 +69,7 @@ describe("P1-5 研墨 / 织卷 / 章页", () => {
     expect(ground).toMatch(/materialInput\("pending_hooks\.md"/);
     expect(ground).toMatch(/legacyEditing/);
     expect(ground).toMatch(/<ManuscriptView/);
-    expect(ground).toMatch(/保存已采用资料/);
+    expect(ground).toMatch(/保存已采用设定/);
     expect(ground).toMatch(/onBeforeLegacyLeave=\{finishLegacy\}/);
     expect(ground).not.toMatch(/font-mono/);
     expect(ground).not.toMatch(/保存人物/);

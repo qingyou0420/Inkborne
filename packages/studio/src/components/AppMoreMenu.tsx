@@ -10,6 +10,8 @@ import { useApi } from "../hooks/use-api";
 import type { SSEMessage } from "../hooks/use-sse";
 import { shouldRefetchBookCollections } from "../hooks/use-book-activity";
 import type { TFunction } from "../hooks/use-i18n";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
 import {
   setProjectChatSessionId,
 } from "../pages/chat-page-state";
@@ -18,7 +20,6 @@ import { usePreferencesStore } from "../store/preferences";
 import { AskSessionDrawer } from "./AskSessionDrawer";
 import { BookSettingsDrawer } from "./BookSettingsDrawer";
 import { BookToolsDrawer } from "./BookToolsDrawer";
-import { bookManuscriptExportPath } from "../lib/work-export";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,7 +78,11 @@ export function AppMoreMenu({
   const setInput = useChatStore((s) => s.setInput);
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
   const preferredBookId = usePreferencesStore((s) => s.currentBookId);
-  const statsBookId = currentBookId ?? preferredBookId ?? books[0]?.id;
+  const { data: authoring } = useApi<AuthoringWorkspace>(
+    currentBookId ? `/authoring/workspace?${workspaceQuery(currentBookId)}` : "",
+  );
+  const authoringBook = authoring?.authoringBook === true;
+  const showWorkTools = Boolean(currentBookId) && authoring?.authoringBook === false;
   const currentBook = books.find((book) => book.id === currentBookId);
   const bumpBookDataVersion = useChatStore((s) => s.bumpBookDataVersion);
   const [open, setOpen] = useState(false);
@@ -109,12 +114,6 @@ export function AppMoreMenu({
         { label: t("nav.genreTemplates"), onClick: nav.toGenres, testId: "more-genres" },
         { label: t("nav.style"), onClick: nav.toStyle, testId: "more-style" },
         { label: t("nav.radar"), onClick: nav.toRadar, testId: "more-radar" },
-        {
-          label: t("dash.stats"),
-          onClick: () => { if (statsBookId) nav.toAnalytics(statsBookId); },
-          testId: "more-stats",
-          disabled: !statsBookId,
-        },
       ] },
       { group: isZh ? "运行" : "Runtime", entries: [
         { label: t("nav.daemon"), onClick: nav.toDaemon, testId: "more-daemon" },
@@ -161,22 +160,17 @@ export function AppMoreMenu({
           {t("nav.history")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {currentBookId ? (
+        {currentBookId && showWorkTools ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>{isZh ? "当前作品" : "Current work"}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
               <DropdownMenuLabel className="max-w-64 truncate">{currentBook?.title ?? currentBookId}</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => { setOpen(false); setBookPanel("settings"); }}>{isZh ? "作品设置" : "Work settings"}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => {
-                const link = document.createElement("a");
-                link.href = bookManuscriptExportPath(currentBookId);
-                link.download = "";
-                link.click();
-              }}>{isZh ? "导出正文" : "Export manuscript"}</DropdownMenuItem>
-              {nav.toTruth ? <DropdownMenuItem onClick={() => nav.toTruth?.(currentBookId)}>{isZh ? "真相文件" : "Truth files"}</DropdownMenuItem> : null}
               <DropdownMenuItem onClick={() => { setOpen(false); setBookPanel("tools"); }}>{isZh ? "作品工具" : "Work tools"}</DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+        ) : currentBookId ? (
+          <DropdownMenuItem onClick={() => { setOpen(false); setBookPanel("settings"); }}>{isZh ? "作品设置" : "Work settings"}</DropdownMenuItem>
         ) : null}
         {items.map((section) => (
           <DropdownMenuSub key={section.group}>
@@ -186,7 +180,6 @@ export function AppMoreMenu({
               <DropdownMenuItem
                 key={entry.testId}
                 data-testid={entry.testId}
-                disabled={entry.disabled}
                 onClick={entry.onClick}
               >
                 {entry.label}
@@ -196,7 +189,12 @@ export function AppMoreMenu({
           </DropdownMenuSub>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => nav.toProjectSettings("advanced")}>{isZh ? "高级设置" : "Advanced settings"}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => nav.toProjectSettings("advanced")}>{isZh ? "高级" : "Advanced"}</DropdownMenuItem>
+        {currentBookId && nav.toTruth ? (
+          <DropdownMenuItem onClick={() => nav.toTruth(currentBookId)}>
+            {authoringBook ? (isZh ? "原始资料（只读）" : "Source files (read-only)") : (isZh ? "原始资料" : "Source files")}
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
     <AskSessionDrawer
@@ -212,10 +210,12 @@ export function AppMoreMenu({
       t={t}
       isZh={isZh}
     />
-    {currentBookId ? <>
+    {currentBookId ? (
       <BookSettingsDrawer key={`settings-${currentBookId}`} bookId={currentBookId} open={bookPanel === "settings"} onClose={() => setBookPanel(null)} t={t} isZh={isZh} onDeleted={() => { setBookPanel(null); bumpBookDataVersion(); nav.toDashboard(); }} />
+    ) : null}
+    {showWorkTools && currentBookId ? (
       <BookToolsDrawer key={`tools-${currentBookId}`} bookId={currentBookId} open={bookPanel === "tools"} onClose={() => setBookPanel(null)} t={t} isZh={isZh} onOpenAnalytics={() => nav.toAnalytics(currentBookId)} />
-    </> : null}
+    ) : null}
     </>
   );
 }

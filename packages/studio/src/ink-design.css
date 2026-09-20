@@ -26,6 +26,8 @@
   --primary-foreground: #fff;
   --ink-review-width: 380px;
   --ink-shell-height: 141px;
+  --ink-line: var(--border);
+  --ink-notice: var(--foreground);
 }
 :root[data-paper-tone='warm']:not(.dark) { --background:#f6f2e9; --card:#fcf8f0; --secondary:#eee9de; --border:#dcd7cb; }
 :root[data-paper-tone='mist']:not(.dark) { --background:#edf0ed; --card:#f6f8f5; --secondary:#e5e9e4; --border:#d4dcd4; }
@@ -84,6 +86,20 @@ html:has(.ask-workspace):not(:has(.in-book)) { --ink-shell-height:83px; }
 .manuscript-action-buttons { display:flex; align-items:center; gap:10px; }
 .manuscript-actions button { min-height:38px; }
 .ink-main { min-width:0; }
+.ink-notice {
+  margin: 0;
+  padding: 8px 0 8px 12px;
+  border: 0;
+  border-left: 2px solid var(--ink-line);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+.ink-notice[data-tone="danger"] {
+  border-left-color: var(--destructive);
+  color: var(--destructive);
+}
 @media (max-width:1250px) {
   :root { --ink-review-width:340px; }
   html[data-ink-review-open='true'] .one-workspace { grid-template-columns:minmax(0,1fr); }

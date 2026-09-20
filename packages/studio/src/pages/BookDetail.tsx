@@ -13,6 +13,7 @@ import {
   type WriteDirectoryChapter,
 } from "../lib/write-directory";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ExportMenu, type ExportFormat } from "../components/ExportMenu";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
 import type { Theme } from "../hooks/use-theme";
@@ -35,7 +36,6 @@ import {
 } from "../components/ui/dropdown-menu";
 import {
   Feather,
-  Download,
   Check,
   ChevronDown,
   MoreHorizontal,
@@ -65,8 +65,6 @@ interface BookData {
 }
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
-type ExportFormat = "txt" | "md" | "epub";
-
 interface Nav extends BookWorkspaceNavTarget {
   toDashboard: () => void;
   toChapter: (bookId: string, num: number) => void;
@@ -483,11 +481,8 @@ export function BookDetail({
 
       {(writing || drafting || activity.lastError || actionMessage || (typeof bookActionPending === "string" && bookActionPending.startsWith("saved:"))) && (
         <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
-            activity.lastError
-              ? "border-destructive/30 bg-destructive/5 text-destructive"
-              : "border-border bg-card text-foreground"
-          }`}
+          className="ink-notice text-sm"
+          data-tone={activity.lastError ? "danger" : undefined}
         >
           {activity.lastError ? (
             <span>{t("book.pipelineFailed")}: {activity.lastError}</span>
@@ -537,7 +532,7 @@ export function BookDetail({
                 {selected ? <DropdownMenu>
                   <DropdownMenuTrigger
                     data-testid={`chapter-more-${item.number}`}
-                    aria-label={isZh ? "当前章节工具" : "Current chapter tools"}
+                    aria-label={isZh ? "目录操作" : "Directory actions"}
                     className="btn-ghost inline-flex h-8 w-8 items-center justify-center"
                   >
                     <MoreHorizontal size={14} />
@@ -545,7 +540,7 @@ export function BookDetail({
                   <DropdownMenuContent align="end" className="min-w-44">
                     {!authoringBook && ch?.status === "ready-for-review" ? <DropdownMenuItem data-testid={`chapter-approve-${item.number}`} onClick={() => void handleApprove(item.number)}>{t("book.approve")}</DropdownMenuItem> : null}
                     <DropdownMenuItem onClick={() => nav.toChapter(bookId, item.number)}>
-                      {t("reader.preview")}
+                      {authoringBook ? (isZh ? "只读预览" : "Read-only preview") : t("reader.preview")}
                     </DropdownMenuItem>
                     {authoringBook && item.stateMissing ? (
                       <DropdownMenuItem
@@ -675,107 +670,35 @@ export function BookDetail({
 
         {authoringBook ? (
         <div className="flex flex-wrap items-center gap-2" data-testid="write-export-tools">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="btn-secondary inline-flex items-center gap-1.5">
-              <Download size={14} />
-              {t("book.exportMenu")}
-              <ChevronDown size={14} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 p-3 space-y-3">
-              {(["txt", "md", "epub"] as const).map((format) => (
-                <label key={format} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="export-format"
-                    checked={exportFormat === format}
-                    onChange={() => setExportFormat(format)}
-                  />
-                  {format.toUpperCase()}
-                </label>
-              ))}
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
-                {t("book.approvedOnly")}
-              </label>
-              <div className="flex flex-col gap-1 pt-1">
-                <a href={exportHref} download data-testid="book-export-manuscript" className="btn-secondary text-center">
-                  {t("book.download")}
-                </a>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
-                      });
-                      setBookActionPending(`saved:${exported.path ?? ""}`);
-                    } catch (e) {
-                      setBookActionPending(e instanceof Error ? e.message : "Export failed");
-                    }
-                  }}
-                  className="btn-ghost w-full"
-                >
-                  {t("book.exportSave")}
-                </button>
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ExportMenu
+            bookId={bookId}
+            t={t}
+            exportFormat={exportFormat}
+            exportApprovedOnly={exportApprovedOnly}
+            exportHref={exportHref}
+            onFormatChange={setExportFormat}
+            onApprovedOnlyChange={setExportApprovedOnly}
+            onSaved={(path) => setBookActionPending(`saved:${path}`)}
+            onError={(message) => setBookActionPending(message)}
+          />
         </div>
         ) : (
         <details className="write-legacy" data-testid="write-legacy-tools">
-          <summary>{isZh ? "连续创作与作品工具" : "Serial writing and book tools"}</summary>
+          <summary>{isZh ? "旧管线" : "Legacy pipeline"}</summary>
           <p className="my-3 text-sm text-muted-foreground">{book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}</p>
         <div className="flex flex-wrap items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="btn-secondary inline-flex items-center gap-1.5">
-              <Download size={14} />
-              {t("book.exportMenu")}
-              <ChevronDown size={14} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 p-3 space-y-3">
-              {(["txt", "md", "epub"] as const).map((format) => (
-                <label key={format} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="export-format-legacy"
-                    checked={exportFormat === format}
-                    onChange={() => setExportFormat(format)}
-                  />
-                  {format.toUpperCase()}
-                </label>
-              ))}
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
-                {t("book.approvedOnly")}
-              </label>
-              <div className="flex flex-col gap-1 pt-1">
-                <a href={exportHref} download data-testid="book-export-manuscript" className="btn-secondary text-center">
-                  {t("book.download")}
-                </a>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
-                      });
-                      setBookActionPending(`saved:${exported.path ?? ""}`);
-                    } catch (e) {
-                      setBookActionPending(e instanceof Error ? e.message : "Export failed");
-                    }
-                  }}
-                  className="btn-ghost w-full"
-                >
-                  {t("book.exportSave")}
-                </button>
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <div className="inline-flex overflow-hidden rounded-[10px] bg-primary text-primary-foreground">
+          <ExportMenu
+            bookId={bookId}
+            t={t}
+            exportFormat={exportFormat}
+            exportApprovedOnly={exportApprovedOnly}
+            exportHref={exportHref}
+            onFormatChange={setExportFormat}
+            onApprovedOnlyChange={setExportApprovedOnly}
+            onSaved={(path) => setBookActionPending(`saved:${path}`)}
+            onError={(message) => setBookActionPending(message)}
+          />
+          <div className="inline-flex overflow-hidden rounded-lg bg-primary text-primary-foreground">
             <button
               type="button"
               onClick={handleWriteNext}
@@ -813,7 +736,7 @@ export function BookDetail({
       />
 
       {reviewQueue.length > 0 && (
-        <div className="rounded-2xl border border-border bg-mark-soft px-4 py-3 space-y-2" data-testid="review-queue">
+        <div className="ink-notice space-y-2" data-testid="review-queue">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium">{isZh ? "等你过目" : "Review queue"}</div>
             {reviewCount > 0 && (
@@ -855,7 +778,7 @@ export function BookDetail({
           data-testid="chapter-brief-input"
           value={briefValue}
           onChange={(event) => setBriefValue(event.target.value)}
-          className="mt-3 w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="mt-3 w-full rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
 
@@ -877,7 +800,7 @@ export function BookDetail({
           value={overrideValue}
           onChange={(event) => setOverrideValue(event.target.value)}
           placeholder={t("reader.overrideWhy")}
-          className="mt-3 w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="mt-3 w-full rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
     </div>

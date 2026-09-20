@@ -59,18 +59,18 @@ export function deriveBookChromeTab(route: HashRoute): BookWorkspaceTab | null {
   switch (route.page) {
     case "book":
     case "analytics":
+    case "truth":
+    case "chapter":
       return "study";
     case "book-ask":
       return "ask";
     case "book-ground":
-    case "truth":
       return "ground";
     case "book-weave":
     case "book-outline":
       return "weave";
     case "book-write":
     case "book-settings":
-    case "chapter":
       return "write";
     default:
       return null;
@@ -273,10 +273,10 @@ export function App() {
   if (startupGate === "error") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="max-w-md w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-6 space-y-4">
-          <div>
-            <h1 className="text-lg font-semibold text-destructive">无法加载项目配置 / Failed to load project config</h1>
-            <p className="mt-2 text-sm text-muted-foreground break-all">{projectError}</p>
+        <div className="max-w-md w-full space-y-4">
+          <div className="ink-notice" data-tone="danger">
+            <h1 className="text-lg font-semibold">无法加载项目配置 / Failed to load project config</h1>
+            <p className="mt-2 break-all">{projectError}</p>
           </div>
           {/* 项目配置没加载出来，语言未知，所以这屏中英双语并排展示。 */}
           <p className="text-sm text-muted-foreground">
@@ -292,7 +292,6 @@ export function App() {
             重试 / Retry
           </button>
         </div>
-      </div>
     );
   }
 

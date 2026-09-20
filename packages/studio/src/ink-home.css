@@ -6,6 +6,8 @@
 .ink-config-menu [data-slot="dropdown-menu-item"], .ink-config-menu [data-slot="dropdown-menu-sub-trigger"] { min-height:38px; padding:8px 12px; }
 .book-chrome.ink-book-nav { display:flex; align-items:center; gap:32px; min-height:76px; padding-top:0; padding-bottom:0; }
 .ink-book-context { flex:0 1 240px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--prose); font-size:16px; color:var(--muted-foreground); }
+button.ink-book-context { background:none; border:0; padding:0; text-align:left; cursor:pointer; }
+button.ink-book-context[aria-current="page"] { color:var(--foreground); }
 .ink-stage-strip { display:flex; align-items:center; justify-content:center; gap:36px; list-style:none; padding:0; margin:0; flex:1; }
 .ink-stage-link { display:inline-flex; align-items:center; gap:8px; position:relative; min-height:76px; border:0; background:transparent; color:var(--muted-foreground); padding:0 6px; }
 .ink-stage-link .ink-calligraphy { font-size:29px; line-height:1.2; font-weight:400; white-space:nowrap; }

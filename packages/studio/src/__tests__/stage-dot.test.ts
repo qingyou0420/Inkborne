@@ -35,11 +35,12 @@ describe("StageDot", () => {
     const ground = read("src/pages/BookGround.tsx");
     const weave = read("src/pages/OutlineWorkspace.tsx");
     const short = read("src/pages/ShortReader.tsx");
-    for (const src of [study, weave, short]) {
+    expect(study).not.toMatch(/<StageDot\s+state=/);
+    for (const src of [weave, short]) {
       expect(src).toMatch(/<StageDot\s+state=/);
     }
     expect(ground).toMatch(/confirmed && \([\s\S]*?data-testid="ground-confirmed-stamp"[\s\S]*?已定稿/);
-    expect(ground).toMatch(/className="version-state"[\s\S]*?已采用资料/);
+    expect(ground).toMatch(/className="version-state"[\s\S]*?已采用设定（旧书）/);
     expect(ground).toMatch(/materialKeys\(\)\.some\([\s\S]*?materialDrafts\.has\(key\)\)[\s\S]*?未保存修改/);
     expect(study).not.toMatch(/"✓"/);
     expect(study).not.toMatch(/"●"/);

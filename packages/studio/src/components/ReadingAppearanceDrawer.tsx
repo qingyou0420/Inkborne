@@ -18,7 +18,7 @@ export function ReadingAppearanceDrawer({ open, onClose, isZh }: {
   const setAppearance = usePreferencesStore((state) => state.setAppearance);
 
   return (
-    <Drawer open={open} title={isZh ? "正文排版" : "Manuscript appearance"} onClose={onClose} testId="reading-appearance-drawer">
+    <Drawer open={open} title={isZh ? "正文排版（与外观设置同步）" : "Appearance (synced with settings)"} onClose={onClose} testId="reading-appearance-drawer">
       <div className="reading-appearance-controls">
         <fieldset>
           <legend>{isZh ? "字体" : "Typeface"}</legend>

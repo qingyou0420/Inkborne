@@ -68,7 +68,8 @@ describe("studio product chrome branding", () => {
     const i18n = read("src/hooks/use-i18n.ts");
     expect(i18n).not.toMatch(/InkOS Studio|InkOS 互动|InkOS Play/);
     expect(i18n).not.toMatch(/幻想作家|FantaWriter|驾驶舱/);
-    expect(i18n).toMatch(/连载书房/);
+    expect(i18n).not.toMatch(/连载书房|创作书房/);
+    expect(i18n).toMatch(/打开一本书进入本书/);
     expect(i18n).toMatch(/墨生万象/);
     expect(i18n).toMatch(/Inkborne/);
   });

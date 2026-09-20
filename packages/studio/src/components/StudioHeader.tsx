@@ -38,7 +38,7 @@ export function StudioHeader({
           type="button"
           className="brand"
           onClick={nav.toDashboard}
-          aria-label={isZh ? "墨生万象，返回书房" : "Inkborne, back to study"}
+          aria-label={isZh ? "墨生万象，回到书架" : "Inkborne, back to the bookshelf"}
         >
           <BrandGlyph className="brand-mark-svg" />
           <span className="brand-name">墨生万象</span>

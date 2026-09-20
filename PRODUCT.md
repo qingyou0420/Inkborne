@@ -20,7 +20,7 @@ Each stage has independent creation and review model configuration (eight slots 
 
 ## Current redesign brief
 
-The user completed a detailed interview on 2026-09-16 and authorized implementation. See `迭代与审查/中国水墨UI重构-2026-09-16/重构规格-待整体确认.md` (historical filename; its status now records authorization).
+The user completed a detailed interview on 2026-09-16 and authorized implementation. See `docs/水墨UI方案-Fable51-视觉与信息架构清理-97a2b73.md`.
 
 The desired interface is quiet Chinese ink: calligraphic stage names, Song-style manuscript typography, near-white day paper with selectable paper colors, charcoal night paper. Small ink decorations occur only in unused space. Retain the existing logo. Do not copy a reference app's unrelated features.
 

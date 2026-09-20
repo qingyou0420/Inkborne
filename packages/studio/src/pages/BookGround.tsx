@@ -73,7 +73,7 @@ const SECTIONS: ReadonlyArray<{ id: GroundSectionId; zh: string; en: string }> =
 ];
 
 const EDITOR_CLASS =
-  "w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 font-serif text-[15px] leading-[26px] outline-none focus:ring-1 focus:ring-ring";
+  "w-full rounded-lg border border-border-strong bg-card px-3 py-2 font-serif text-[15px] leading-[26px] outline-none focus:ring-1 focus:ring-ring";
 
 interface BookGroundProps {
   readonly bookId: string;
@@ -245,7 +245,7 @@ function BookGroundWorkspace({
       warnIfConfirmed();
       await Promise.all([refetchFrame(), refetchHooks(), refetchOpen(), refetchFiles(), refetchIntent()]);
       refreshStage();
-      showToast(isZh ? "已采用资料已保存" : "Adopted material saved", "success");
+      showToast(isZh ? "已采用设定已保存" : "Adopted settings saved", "success");
       return true;
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("common.error"), "error");
@@ -417,7 +417,7 @@ function BookGroundWorkspace({
         legacyBusy={saving}
         onBeforeLegacyLeave={finishLegacy}
         legacyContent={<div className="ground-legacy-document space-y-6" data-testid="ground-legacy-files">
-          <div className="version-state"><span>{isZh ? "已采用资料" : "Adopted material"}</span>{materialKeys().some((key) => materialDrafts.has(key)) ? <span>{isZh ? "未保存修改" : "Unsaved changes"}</span> : null}</div>
+          <div className="version-state"><span>{isZh ? "已采用设定（旧书）" : "Adopted settings (legacy)"}</span>{materialKeys().some((key) => materialDrafts.has(key)) ? <span>{isZh ? "未保存修改" : "Unsaved changes"}</span> : null}</div>
           {proposals.length > 0 ? <details className="space-y-3" data-testid="ground-proposals"><summary>{isZh ? "正典变更待确认" : "Canon changes"}</summary>{proposals.map((proposal) => <TruthProposalCard key={proposal.id} bookId={bookId} proposal={proposal} isZh={isZh} onResolved={() => { void refetchProposals(); void refetchFiles(); void refetchFrame(); void refetchCard(); void refetchIntent(); }} />)}</details> : null}
           <h2 className="font-serif text-2xl">{SECTIONS.find((item) => item.id === legacySectionId)?.[isZh ? "zh" : "en"]}</h2>
           <fieldset disabled={saving} className="min-w-0 space-y-5">
@@ -429,16 +429,16 @@ function BookGroundWorkspace({
           </div> : <div className="prose-body space-y-4" data-testid="ground-basics-summary"><p>{basicsBits.join(" · ") || "—"}</p><p>{isZh ? "题材气质" : "Tone"}：{card.tone?.trim() || "—"}</p></div> : null}
           {legacySectionId === "summary" ? <div className="space-y-6" data-testid="ground-story-card">
             <AskStoryCard card={legacyEditing ? cardDraft : { ...card, workingTitle: card.workingTitle || title }} editable={legacyEditing} hideConfirm isZh={isZh} derivedFromCanon={!legacyEditing && cardData?.source === "derived"} onChange={(patch) => { const next = mergeStoryCard(cardDraft, patch); rememberMaterial("$story-card", next); setCardDraft(next); }} />
-            <section className="space-y-3"><h3 className="font-serif text-xl">{isZh ? "主题与基调" : "Theme and tone"}</h3>{materialInput("theme", themeDraft, setThemeDraft, isZh ? "主题与基调（已采用资料）" : "Theme and tone (adopted)")}</section>
-            <details className="space-y-3"><summary className="text-sm">{isZh ? "作者意图" : "Author intent"}</summary>{materialInput("author_intent.md", intentDraft, setIntentDraft, isZh ? "作者意图（已采用资料）" : "Author intent (adopted)")}</details>
+            <section className="space-y-3"><h3 className="font-serif text-xl">{isZh ? "主题与基调" : "Theme and tone"}</h3>{materialInput("theme", themeDraft, setThemeDraft, isZh ? "主题与基调（已采用设定）" : "Theme and tone (adopted)")}</section>
+            <details className="space-y-3"><summary className="text-sm">{isZh ? "作者意图" : "Author intent"}</summary>{materialInput("author_intent.md", intentDraft, setIntentDraft, isZh ? "作者意图（已采用设定）" : "Author intent (adopted)")}</details>
           </div> : null}
-          {legacySectionId === "world" ? materialInput("world", worldDraft, setWorldDraft, isZh ? "世界规则（已采用资料）" : "World rules (adopted)", 14) : null}
+          {legacySectionId === "world" ? materialInput("world", worldDraft, setWorldDraft, isZh ? "世界规则（已采用设定）" : "World rules (adopted)", 14) : null}
           {legacySectionId === "characters" ? <div className="space-y-4">
             <label className="block text-sm">{isZh ? "人物" : "Character"}<select aria-label={isZh ? "选择人物" : "Select character"} className="ml-3 border-b border-border bg-background p-2" value={selectedRole ?? ""} onChange={async (event) => { const value = event.target.value; if (await finishLegacy()) setSelectedRole(value); }}>{allRoleFiles.map((file) => <option key={file.name} value={file.name}>{file.name.replace(/^roles\/(主要角色|次要角色|major|minor)\//, "").replace(/\.md$/, "")}</option>)}</select></label>
-            {roleLoading ? <p role="status">{isZh ? "正在读取人物资料…" : "Loading character…"}</p> : roleError ? <p role="alert" className="text-destructive">{roleError}<button type="button" className="btn-ghost" onClick={() => setRoleRetry((value) => value + 1)}>{isZh ? "重试" : "Retry"}</button></p> : selectedRole ? materialInput(selectedRole, roleText, (value) => { roleDrafts.current[selectedRole] = value; setRoleText(value); }, isZh ? "人物正文（已采用资料）" : "Character (adopted)", 16) : <p className="text-muted-foreground">{isZh ? "还没有已采用的人物设定。" : "No adopted character settings yet."}</p>}
+            {roleLoading ? <p role="status">{isZh ? "正在读取人物资料…" : "Loading character…"}</p> : roleError ? <p role="alert" className="text-destructive">{roleError}<button type="button" className="btn-ghost" onClick={() => setRoleRetry((value) => value + 1)}>{isZh ? "重试" : "Retry"}</button></p> : selectedRole ? materialInput(selectedRole, roleText, (value) => { roleDrafts.current[selectedRole] = value; setRoleText(value); }, isZh ? "人物正文（已采用设定）" : "Character (adopted)", 16) : <p className="text-muted-foreground">{isZh ? "还没有已采用的人物设定。" : "No adopted character settings yet."}</p>}
           </div> : null}
-          {legacySectionId === "conflict" ? materialInput("conflict", conflictDraft, setConflictDraft, isZh ? "关系与主线（已采用资料）" : "Relations and plot (adopted)", 14) : null}
-          {legacySectionId === "ending" ? <div className="space-y-6"><section className="space-y-3"><h3 className="font-serif text-xl">{isZh ? "终局" : "Ending"}</h3>{materialInput("ending", endingDraft, setEndingDraft, isZh ? "终局（已采用资料）" : "Ending (adopted)")}</section><section className="space-y-3"><h3 className="font-serif text-xl">{isZh ? "伏笔清单" : "Hooks"}</h3>{materialInput("pending_hooks.md", hooksText, setHooksText, isZh ? "伏笔（已采用资料）" : "Hooks (adopted)")}</section></div> : null}
+          {legacySectionId === "conflict" ? materialInput("conflict", conflictDraft, setConflictDraft, isZh ? "关系与主线（已采用设定）" : "Relations and plot (adopted)", 14) : null}
+          {legacySectionId === "ending" ? <div className="space-y-6"><section className="space-y-3"><h3 className="font-serif text-xl">{isZh ? "终局" : "Ending"}</h3>{materialInput("ending", endingDraft, setEndingDraft, isZh ? "终局（已采用设定）" : "Ending (adopted)")}</section><section className="space-y-3"><h3 className="font-serif text-xl">{isZh ? "伏笔清单" : "Hooks"}</h3>{materialInput("pending_hooks.md", hooksText, setHooksText, isZh ? "伏笔（已采用设定）" : "Hooks (adopted)")}</section></div> : null}
           {legacySectionId === "open" ? <div className="space-y-5" data-testid="ground-open-questions">
             <ul className="space-y-3">{openDoc.items.map((item) => <li key={item.id} className="flex items-center gap-3 prose-body">{legacyEditing ? <input type="checkbox" aria-label={isZh ? `移除待定项：${item.text}` : `Remove ${item.text}`} onChange={() => { const next = removeOpenQuestion(openDoc, item.id); rememberMaterial("open_questions.md", serializeOpenQuestions(next)); setOpenDoc(next); }} /> : null}<span>{item.text}</span></li>)}</ul>
             {!openDoc.items.length ? <p className="text-muted-foreground">{isZh ? "暂无待定项" : "No open questions"}</p> : null}
@@ -446,7 +446,7 @@ function BookGroundWorkspace({
             {legacyEditing ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" data-testid="continue-with-open" checked={openDoc.continueWithOpen} onChange={(event) => { const next = { ...openDoc, continueWithOpen: event.target.checked }; rememberMaterial("open_questions.md", serializeOpenQuestions(next)); setOpenDoc(next); }} />{isZh ? CONTINUE_WITH_OPEN_MARK : "Continue with open questions"}</label> : openDoc.continueWithOpen ? <p className="text-sm text-muted-foreground">{isZh ? CONTINUE_WITH_OPEN_MARK : "Continue with open questions"}</p> : null}
           </div> : null}
           </fieldset>
-          <div className="manuscript-action-buttons ground-document-actions">{legacyEditing ? <><button type="button" disabled={saving} onClick={() => void saveLegacy()}>{isZh ? "保存已采用资料" : "Save adopted material"}</button><button type="button" className="quiet" disabled={saving} onClick={() => void finishLegacy()}>{isZh ? "取消" : "Cancel"}</button></> : <button type="button" disabled={saving || (legacySectionId === "characters" && (!selectedRole || roleLoading || Boolean(roleError)))} onClick={startLegacyEdit}>{isZh ? "编辑" : "Edit"}</button>}</div>
+          <div className="manuscript-action-buttons ground-document-actions">{legacyEditing ? <><button type="button" disabled={saving} onClick={() => void saveLegacy()}>{isZh ? "保存已采用设定" : "Save adopted material"}</button><button type="button" className="quiet" disabled={saving} onClick={() => void finishLegacy()}>{isZh ? "取消" : "Cancel"}</button></> : <button type="button" disabled={saving || (legacySectionId === "characters" && (!selectedRole || roleLoading || Boolean(roleError)))} onClick={startLegacyEdit}>{isZh ? "编辑" : "Edit"}</button>}</div>
           {decision.dialog}
         </div>}
       />

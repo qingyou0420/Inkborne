@@ -1,5 +1,5 @@
 /**
- * 连载书房: today's stroke, volume arrive, attention list, four-step overview.
+ * 本书: attention list, volume arrive, four-step overview.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
@@ -9,8 +9,7 @@ import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
 import { useEffect, useMemo, useState } from "react";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
-import { StageDot } from "../components/StageDot";
-import { startWriteNext } from "../components/SerialCockpitStrip";
+import { stageStateLabel } from "../components/StageDot";
 import type { WritePreflightEvaluation } from "../components/SerialCockpitStrip";
 import { TruthProposalCard, type PendingTruthProposal } from "../components/TruthProposalCard";
 import { assembleCockpitSnapshot, type CockpitDueHook, type CockpitReviewItem } from "../lib/serial-cockpit";
@@ -22,17 +21,10 @@ import type { SSEMessage } from "../hooks/use-sse";
 import type { BookStepState } from "../lib/book-stage";
 import {
   formatVolumeArriveCopy,
-  hasPreviousChapterUnapprovedReason,
-  shortChapterTitle,
   stripEngineTokens,
 } from "../lib/copy-map";
-import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
+import { formatStartedOn, fourStepCopy } from "../lib/stage-copy";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
-import { firstUnwrittenChapter, mergeWriteDirectory } from "../lib/write-directory";
-import {
-  CheckCircle2,
-  Feather,
-} from "lucide-react";
 
 function formatStudyWords(total: number, isZh: boolean): string {
   if (!isZh) return `${total.toLocaleString()} words`;
@@ -111,26 +103,21 @@ export function BookStudy({
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
   const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
-  const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<CockpitReviewItem>>([]);
   const [proposals, setProposals] = useState<ReadonlyArray<PendingTruthProposal>>([]);
   const [volumeMap, setVolumeMap] = useState("");
-  const [writePending, setWritePending] = useState(false);
   const stage = useBookStage(bookId);
-  const [pageError, setPageError] = useState<string | null>(null);
   const [volumeExpanded, setVolumeExpanded] = useState(false);
   const [canonOpen, setCanonOpen] = useState(false);
   const [roleCount, setRoleCount] = useState(0);
 
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
-  const writing = writePending || activity.writing;
   const isZh = data?.book.language !== "en";
 
   const refreshAux = () => {
-    const query = skipPreviousApproval ? "?skipPreviousApproval=1" : "";
-    void fetchJson<WritePreflightEvaluation>(`/books/${bookId}/write-preflight${query}`)
+    void fetchJson<WritePreflightEvaluation>(`/books/${bookId}/write-preflight`)
       .then(setPreflight)
       .catch(() => setPreflight(null));
     void fetchJson<{ hooks?: CockpitDueHook[] }>(`/books/${bookId}/hooks/due`)
@@ -156,13 +143,12 @@ export function BookStudy({
   useEffect(() => {
     refreshAux();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, skipPreviousApproval, data?.nextChapter]);
+  }, [bookId, data?.nextChapter]);
 
   useEffect(() => {
     const recent = sse.messages.at(-1);
     if (!recent) return;
     if (shouldRefetchBookView(recent, bookId)) {
-      setWritePending(false);
       refetch();
       refreshAux();
     }
@@ -179,30 +165,14 @@ export function BookStudy({
       dueHooks: hooks,
       reviewQueue,
       pendingProposals: proposals,
-      skipPreviousApproval,
+      skipPreviousApproval: false,
       isZh,
     });
-  }, [data, preflight, volumeMap, hooks, reviewQueue, proposals, skipPreviousApproval, isZh]);
-
-  const handleWriteNext = async () => {
-    if (!snapshot?.writeNext.enabled) {
-      goStage(nav, bookId, "weave");
-      return;
-    }
-    setWritePending(true);
-    setPageError(null);
-    try {
-      await startWriteNext(bookId, skipPreviousApproval);
-    } catch (err) {
-      setWritePending(false);
-      setPageError(err instanceof Error ? err.message : "Failed");
-    }
-  };
+  }, [data, preflight, volumeMap, hooks, reviewQueue, proposals, isZh]);
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-32 space-y-4">
-        <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
         <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
       </div>
     );
@@ -211,25 +181,19 @@ export function BookStudy({
   if (!data) return null;
 
   const book = data.book;
-  const authoringBook = authoring?.authoringBook === true;
-  const writeDirectory = mergeWriteDirectory({
-    volumeMap,
-    persisted: data.chapters,
-    candidates: authoring?.manifest?.candidates?.write,
-    adopted: authoring?.manifest?.adopted?.write,
-    stateRefs: authoring?.writeStateRefs,
-  });
-  const writeChapterNumber = firstUnwrittenChapter(writeDirectory, snapshot?.nextChapter.number ?? data.nextChapter);
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
-  const currentStage = stage?.stage ?? "write";
-  const guide = studyGuideCopy(currentStage, isZh);
-  const canWrite = currentStage === "write";
-  const showSkip = hasPreviousChapterUnapprovedReason(snapshot?.writeNext.reasons ?? preflight?.reasons ?? []);
   const volumeCopy = snapshot?.volume?.okr
     ? formatVolumeArriveCopy(snapshot.volume.okr, isZh)
     : { arrive: "", mustLand: "" };
   const attentionItems: Array<{ key: string; label: string; onClick?: () => void }> = [];
+  if (snapshot?.volumeClose) {
+    attentionItems.push({
+      key: "volume-close",
+      label: isZh ? "本卷已收" : "Volume closed",
+      onClick: () => goStage(nav, bookId, "weave"),
+    });
+  }
   if (snapshot?.lastChapter?.blocked) {
     attentionItems.push({
       key: `review-${snapshot.lastChapter.number}`,
@@ -265,9 +229,6 @@ export function BookStudy({
       onClick: () => goStage(nav, bookId, "weave"),
     });
   }
-  const nextTitle = snapshot?.nextChapter.title
-    ? shortChapterTitle(snapshot.nextChapter.title)
-    : "";
   const lockedVolumes = snapshot ? lockedNamedVolumeCount(snapshot.tree) : 0;
   const targetForWeave = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 200;
   const planned = snapshot ? filledChapterNumbers(snapshot.tree).length : 0;
@@ -289,6 +250,7 @@ export function BookStudy({
   return (
     <div className="space-y-8 fade-in" data-testid="serial-cockpit-home">
       <header className="space-y-2">
+        <p className="text-[13px] text-muted-foreground">{isZh ? "本书" : "This book"}</p>
         <h1 className="font-serif text-[32px] font-medium leading-10">{book.title}</h1>
         <p className="text-sm text-muted-foreground">
           {[
@@ -298,118 +260,6 @@ export function BookStudy({
           ].filter(Boolean).join(" · ")}
         </p>
       </header>
-
-      {snapshot?.volumeClose ? (
-        <section className="space-y-3 border-b border-border pb-6" data-testid="cockpit-volume-close">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <CheckCircle2 size={16} className="text-primary" />
-            {isZh ? "本卷已收" : "Volume closed"}
-          </div>
-          <p className="text-sm text-muted-foreground">{stripEngineTokens(snapshot.volumeClose.reason)}</p>
-          <button
-            type="button"
-            onClick={() => goStage(nav, bookId, "weave")}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-          >
-            <Feather size={14} />
-            {isZh ? "去织卷起草下一卷" : "Weave the next volume"}
-          </button>
-        </section>
-      ) : (
-        <section className="space-y-3 border-b border-border pb-6" data-testid="cockpit-next-chapter">
-          <div className="text-[13px] text-muted-foreground">{canWrite ? t("study.today") : guide.title}</div>
-          {canWrite && snapshot ? (
-            <>
-              <div className="flex flex-wrap items-end justify-between gap-2">
-                <div className="font-serif text-3xl">
-                  {isZh ? `第 ${snapshot.nextChapter.number} 章` : `Chapter ${snapshot.nextChapter.number}`}
-                  {nextTitle ? ` · ${nextTitle}` : ""}
-                </div>
-                {snapshot.nextChapter.volumePosition && (
-                  <div className="text-sm text-muted-foreground">{snapshot.nextChapter.volumePosition}</div>
-                )}
-              </div>
-              {snapshot.nextChapter.oneLine && (
-                <p className="text-sm leading-6 text-foreground/80">{snapshot.nextChapter.oneLine}</p>
-              )}
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">{guide.subtitle}</p>
-          )}
-
-          {authoringBook && canWrite ? (
-            <button
-              type="button"
-              onClick={() => goStage(nav, bookId, "write")}
-              className="btn-primary"
-              data-testid="study-write-chapter"
-            >
-              <Feather size={16} />
-              {isZh ? `落笔 · 第 ${writeChapterNumber} 章` : `Write · Chapter ${writeChapterNumber}`}
-            </button>
-          ) : canWrite && snapshot?.writeNext.enabled ? (
-            <button
-              type="button"
-              onClick={() => void handleWriteNext()}
-              disabled={writing}
-              className="btn-primary disabled:opacity-40"
-              data-testid="cockpit-write-next-button"
-            >
-              {writing
-                ? <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground ink-breath" />
-                : <Feather size={16} />}
-              {writing ? t("dash.writing") : (isZh ? "落墨 · 写下一章" : "落墨 · Write next")}
-            </button>
-          ) : canWrite && snapshot && !snapshot.writeNext.enabled ? (
-            <div className="space-y-2" data-testid="cockpit-write-next">
-              <ul className="space-y-1 text-sm text-muted-foreground" data-testid="cockpit-g1-reasons">
-                {snapshot.writeNext.reasons.map((reason) => (
-                  <li key={reason.code} className="flex gap-2">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-seal" aria-hidden="true" />
-                    <span>
-                    {isZh ? reason.messageZh : reason.message}
-                    {reason.jumpTo === "outline" && (
-                      <button type="button" className="ml-2 underline" onClick={() => goStage(nav, bookId, "weave")}>
-                        {isZh ? "去织卷" : "Open weave"}
-                      </button>
-                    )}
-                    {reason.jumpTo === "review" && reason.chapterNumber && (
-                      <button type="button" className="ml-2 underline" onClick={() => nav.toChapter(bookId, reason.chapterNumber!)}>
-                        {isZh ? "去审稿" : "Open review"}
-                      </button>
-                    )}
-                    {reason.jumpTo === "intent" && (
-                      <button type="button" className="ml-2 underline" onClick={() => goStage(nav, bookId, "ground")}>
-                        {isZh ? "去研墨" : "Open ground"}
-                      </button>
-                    )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {showSkip && (
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={skipPreviousApproval}
-                    onChange={(event) => setSkipPreviousApproval(event.target.checked)}
-                  />
-                  {t("book.skipUnapproved")}
-                </label>
-              )}
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => goStage(nav, bookId, guide.target === "create" ? "ask" : guide.target)}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"
-              data-testid="study-stage-guide"
-            >
-              {guide.action}
-            </button>
-          )}
-        </section>
-      )}
 
       {snapshot?.volume && (
         <section className="space-y-2" data-testid="cockpit-volume-okr">
@@ -485,6 +335,7 @@ export function BookStudy({
             status={stepCopy.ask}
             onClick={() => goStage(nav, bookId, "ask")}
             testId="study-step-ask"
+            isZh={isZh}
           />
           <StepLine
             state={stage?.steps.ground}
@@ -496,6 +347,7 @@ export function BookStudy({
             }
             onClick={() => goStage(nav, bookId, "ground")}
             testId="study-step-ground"
+            isZh={isZh}
           />
           <StepLine
             state={stage?.steps.weave}
@@ -507,6 +359,7 @@ export function BookStudy({
             }
             onClick={() => goStage(nav, bookId, "weave")}
             testId="study-step-weave"
+            isZh={isZh}
           />
           <StepLine
             state={stage?.steps.write}
@@ -514,14 +367,14 @@ export function BookStudy({
             status={stepCopy.write}
             onClick={() => goStage(nav, bookId, "write")}
             testId="study-step-write"
+            isZh={isZh}
           />
         </ul>
       </section>
 
-      {(activity.lastError || pageError) && (
-        <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {pageError
-            ?? (activity.lastError ? `${t("book.pipelineFailed")}: ${activity.lastError}` : t("book.pipelineWriting"))}
+      {activity.lastError && (
+        <div className="ink-notice text-sm" data-tone="danger">
+          {`${t("book.pipelineFailed")}: ${activity.lastError}`}
         </div>
       )}
     </div>
@@ -534,23 +387,26 @@ function StepLine({
   status,
   onClick,
   testId,
+  isZh,
 }: {
   readonly state: BookStepState | undefined;
   readonly label: string;
   readonly status: string;
   readonly onClick: () => void;
   readonly testId: string;
+  readonly isZh: boolean;
 }) {
+  const stateText = stageStateLabel(state ?? "todo", isZh, label === "落笔" || label === "Write");
   return (
     <li className="min-w-0">
       <button
         type="button"
         onClick={onClick}
         data-testid={testId}
-        className="grid w-full grid-cols-[8px_3.5rem_minmax(0,1fr)] items-center gap-x-3 text-left leading-6 hover:text-foreground"
+        className="grid w-full grid-cols-[3.5rem_4rem_minmax(0,1fr)] items-center gap-x-3 text-left leading-6 hover:text-foreground"
       >
-        {state ? <StageDot state={state} /> : <span className="h-2 w-2" aria-hidden="true" />}
         <span className="whitespace-nowrap text-[18px] font-medium">{label}</span>
+        <span className="whitespace-nowrap text-muted-foreground">{stateText}</span>
         <span className="truncate text-muted-foreground" title={status}>{status}</span>
       </button>
     </li>
