@@ -88,8 +88,14 @@ it.each([
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ runId: expect.any(String), status: "running" });
+  const started = await response.json() as { runId: string; status: string };
+  expect(started).toMatchObject({ runId: expect.any(String), status: "running" });
   expect(events.some((entry) => entry.event === "authoring:run")).toBe(true);
+  const { loadRun } = await import("@actalk/inkos-core");
+  await expect(loadRun({ projectRoot: root, bookId: "b" }, started.runId)).resolves.toMatchObject({
+    runId: started.runId,
+    status: "running",
+  });
   await rm(root, { recursive: true, force: true });
 });
 

@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
+import { groundRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun } from "../lib/authoring-run-selection";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
@@ -82,7 +83,7 @@ function AuthoringGroundBook({
   const artifactRequest = useRef(0);
   const draft = editor.snapshot;
   const report = reportOverride ?? reportForArtifact(data?.reports, draft.baseId) ?? null;
-  const lastGroundRun = data?.runs?.find((item) => item.stage === "ground");
+  const lastGroundRun = selectScopedAuthoringRun(data?.runs, "ground");
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     if (operationBusy.current || legacyBusy) return;
@@ -106,9 +107,7 @@ function AuthoringGroundBook({
 
   useEffect(() => {
     if (activeRunId) return;
-    if (lastGroundRun && (lastGroundRun.status === "running" || lastGroundRun.status === "pausing" || lastGroundRun.status === "failed" || lastGroundRun.status === "partial")) {
-      setActiveRunId(lastGroundRun.runId);
-    }
+    if (lastGroundRun && shouldAutoTakeoverAuthoringRun(lastGroundRun)) setActiveRunId(lastGroundRun.runId);
   }, [activeRunId, lastGroundRun]);
 
   useEffect(() => {
@@ -242,6 +241,22 @@ function AuthoringGroundBook({
     else { artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); }
     setReportOpen(false); return true;
   });
+  const startCatalog = () => run("catalog", async () => {
+    await persistIfDirty();
+    const result = await postApi<{ runId?: string; status?: string }>("/authoring/ground/catalog", { bookId });
+    if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
+    return result;
+  });
+  const abandonRun = () => {
+    if (!activeRunId) return;
+    void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
+  };
+  const retryFailedRun = () => {
+    const action = groundRetryAction(authoringRun.run, generationScope.entryIds.length > 0 || visible.length > 0);
+    if (action === "review") void reviewCurrent();
+    else if (action === "catalog") void startCatalog();
+    else void generateEntries(generationScope.entryIds, generationScope.regenerate);
+  };
   const groundRunStatus = authoringRun.active
     ? (authoringRun.run?.progressLabel ?? (isZh ? "正在生成设定…" : "Generating settings…"))
     : authoringRun.run?.status === "failed" || authoringRun.run?.status === "partial"
@@ -259,9 +274,11 @@ function AuthoringGroundBook({
             {groundRunStatus ?? (isZh
               ? `已生成 ${coverage?.settingsGenerated ?? 0}/${coverage?.settingsTarget ?? visible.length} · 已采用 ${coverage?.settingsAdopted ?? 0}`
               : `Generated ${coverage?.settingsGenerated ?? 0}/${coverage?.settingsTarget ?? visible.length} · adopted ${coverage?.settingsAdopted ?? 0}`)}
+            {authoringRun.active ? <button type="button" className="btn-ghost" data-testid="authoring-abandon-run" onClick={abandonRun}>{isZh ? "放弃这次运行" : "Abandon run"}</button> : null}
+            {authoringRun.error ? <span role="alert">{authoringRun.error}</span> : null}
             {authoringRun.run?.error ? <button type="button" className="btn-ghost" onClick={() => setFailure(authoringRun.run?.error ?? null)}>{isZh ? "查看原因" : "See why"}</button> : null}
-            {(authoringRun.run?.status === "failed" || authoringRun.run?.status === "partial") && generationScope.entryIds.length ? (
-              <button type="button" className="btn-ghost" onClick={() => void generateEntries(generationScope.entryIds, generationScope.regenerate)}>
+            {(authoringRun.run?.status === "failed" || authoringRun.run?.status === "partial") ? (
+              <button type="button" className="btn-ghost" onClick={retryFailedRun}>
                 {isZh ? "重试" : "Retry"}
               </button>
             ) : null}
@@ -272,12 +289,7 @@ function AuthoringGroundBook({
             type="button"
             className="btn-secondary text-sm disabled:opacity-40"
             disabled={blocked}
-            onClick={() => void run("catalog", async () => {
-              await persistIfDirty();
-              const result = await postApi<{ runId?: string; status?: string }>("/authoring/ground/catalog", { bookId });
-              if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
-              return result;
-            })}
+            onClick={() => void startCatalog()}
           >
             {busy === "catalog" ? (isZh ? "拟定中…" : "Planning…") : (isZh ? "根据正典拟定设定目录" : "Propose catalog")}
           </button> : <DropdownMenu>

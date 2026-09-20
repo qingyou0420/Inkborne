@@ -538,7 +538,9 @@ async function writeAskCandidateFixture(input: AskBookCreateInput): Promise<AskB
   }), "utf-8");
   await writeFile(join(bookDir, "story", "workflow", "manifest.json"), JSON.stringify({
     schemaVersion: 1, stages: { ask: { candidateArtifactId: artifactId } },
+    candidates: { ask: artifactId },
   }), "utf-8");
+  await writeFile(join(bookDir, "story", "canon.md"), `# ${input.book.title}\n`, "utf-8");
   return { bookId, bookDir, artifactId, runId };
 }
 
@@ -3638,7 +3640,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     expect(migrateBookSessionMock).toHaveBeenCalledWith(root, "agent-session-1", "夜间派送");
     await expect(access(join(root, "books", "夜间派送", "story", "story_bible.md"))).rejects.toThrow();
-    await expect(access(join(root, "books", "夜间派送", "story", "canon.md"))).rejects.toThrow();
+    await expect(access(join(root, "books", "夜间派送", "story", "canon.md"))).resolves.toBeUndefined();
   });
 
   it("passes cancellation to Ask creation while chat-only abort leaves the candidate task running", async () => {
@@ -6405,7 +6407,11 @@ describe("createStudioServer daemon lifecycle", () => {
     if (!explicitSurface) {
       await writeCompleteBookFixture(root, "demo-book");
       await mkdir(join(root, "books", "demo-book", "story", "workflow"), { recursive: true });
-      await writeFile(join(root, "books", "demo-book", "story", "workflow", "manifest.json"), "{}", "utf-8");
+      await writeFile(join(root, "books", "demo-book", "story", "canon.md"), "# 正典\n", "utf-8");
+      await writeFile(join(root, "books", "demo-book", "story", "workflow", "manifest.json"), JSON.stringify({
+        version: 1,
+        adopted: { ask: "canon-1" },
+      }), "utf-8");
     }
     runAgentSessionMock.mockResolvedValueOnce({ responseText: "这次调整将作为正典来源。", messages: [] });
     const { createStudioServer } = await import("./server.js");

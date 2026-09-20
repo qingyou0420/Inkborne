@@ -566,6 +566,7 @@ export function AuthoringWeavePanel({
           </button>
         ) : null}
         {running && activeRunId ? (
+          <>
           <button
             type="button"
             data-testid="outline-weave-pause"
@@ -574,6 +575,15 @@ export function AuthoringWeavePanel({
           >
             {isZh ? "暂停" : "Pause"}
           </button>
+          <button
+            type="button"
+            data-testid="authoring-abandon-run"
+            className="rounded-lg border border-border px-3 py-2 text-sm"
+            onClick={() => void runAction("cancel", () => postApi(`/authoring/runs/${activeRunId}/cancel`, { bookId }))}
+          >
+            {isZh ? "取消" : "Cancel"}
+          </button>
+          </>
         ) : null}
       </div>
 

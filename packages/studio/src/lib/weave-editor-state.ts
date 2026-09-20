@@ -83,19 +83,24 @@ export function pollWeaveRun<T extends { status: string }>(options: {
   error: (error: unknown) => void;
   settled: () => Promise<void>;
   delay?: number;
+  keepPollingOnError?: (error: unknown, consecutiveErrors: number) => boolean;
 }): () => void {
   let cancelled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let consecutiveErrors = 0;
   const tick = async () => {
     let keepPolling = true;
     try {
       const run = await options.read();
       if (cancelled) return;
+      consecutiveErrors = 0;
       options.update(run);
       keepPolling = run.status === "running" || run.status === "pausing";
       if (!keepPolling) await options.settled();
     } catch (error) {
+      consecutiveErrors += 1;
       if (!cancelled) options.error(error);
+      keepPolling = options.keepPollingOnError?.(error, consecutiveErrors) ?? true;
     } finally {
       if (!cancelled && keepPolling) timer = setTimeout(() => void tick(), options.delay ?? 1000);
     }

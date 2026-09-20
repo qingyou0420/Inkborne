@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, FileCheck2, MoreHorizontal, PanelRightClose, PanelRightOpen, PencilLine, Save } from "lucide-react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
+import { askRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun } from "../lib/authoring-run-selection";
 import { invalidateBookStage } from "../hooks/use-book-stage";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
@@ -96,12 +97,10 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     } catch (failure) { if (mounted.current) setDraftError(failure instanceof Error ? failure.message : String(failure)); }
   };
   useEffect(() => { void ensureDraft(); }, [bookId, session?.sessionId]);
-  const lastAskRun = data?.runs?.find((item) => item.stage === "ask");
+  const lastAskRun = selectScopedAuthoringRun(data?.runs, "ask");
   useEffect(() => {
     if (activeRunId) return;
-    if (lastAskRun && (lastAskRun.status === "running" || lastAskRun.status === "pausing" || lastAskRun.status === "failed")) {
-      setActiveRunId(lastAskRun.runId);
-    }
+    if (lastAskRun && shouldAutoTakeoverAuthoringRun(lastAskRun)) setActiveRunId(lastAskRun.runId);
   }, [activeRunId, lastAskRun]);
   useEffect(() => {
     if (!authoringRun.settled || !authoringRun.run) return;
@@ -249,6 +248,14 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     await adoptCurrent();
     if (mounted.current) setLengthOpen(false);
   });
+  const abandonRun = () => {
+    if (!activeRunId) return;
+    void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, scope);
+  };
+  const retryFailedRun = () => {
+    if (askRetryAction(authoringRun.run?.operation) === "review") review();
+    else void regenerate("");
+  };
   const regenerate = (requirements: string, authorRequirement = requirements) => run(revision ? "revise" : "generate", async () => {
     const generated = revision
       ? await postApi<{ artifactId?: string; runId?: string; status?: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
@@ -288,7 +295,9 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       </div>
       <footer className="ask-canon-toolbar" data-testid="ask-canon-toolbar">
         <div className="ask-canon-workstate" role="status" aria-live="polite"><span>{status}</span>
-          {authoringRun.run?.status === "failed" ? <button type="button" onClick={() => void regenerate("")}>{isZh ? "重试" : "Retry"}</button> : null}
+          {authoringRun.active ? <button type="button" data-testid="authoring-abandon-run" onClick={abandonRun}>{isZh ? "放弃这次运行" : "Abandon run"}</button> : null}
+          {authoringRun.run?.status === "failed" ? <button type="button" onClick={retryFailedRun}>{isZh ? "重试" : "Retry"}</button> : null}
+          {authoringRun.error ? <span role="alert">{authoringRun.error}</span> : null}
           {report && !busy ? <span>{report.incomplete ? (isZh ? "审查未完成" : "Review incomplete") : stale ? (isZh ? "审查对应旧稿" : "Review is outdated") : (isZh ? "已有审查意见" : "Review available")}</span> : null}
           {error || draftError || adoptedCopy.error ? <span role="alert">{error ?? draftError ?? adoptedCopy.error}<button type="button" onClick={() => void (draftError ? ensureDraft() : adoptedCopy.error ? adoptedCopy.refetch() : refetch())}>{isZh ? "重试加载" : "Retry loading"}</button></span> : null}
           {actionError ? <span role="alert" className="ask-canon-error">{actionError}</span> : null}

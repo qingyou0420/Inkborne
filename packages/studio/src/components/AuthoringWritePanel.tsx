@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
 import { postApi, putApi, useApi } from "../hooks/use-api";
 import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
+import { producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
@@ -80,13 +81,11 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const artifactForCurrent = artifact?.meta?.artifactId === candidate?.artifactId ? artifact : undefined;
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
   const ready = Boolean(data) && (candidate ? artifactForCurrent?.body != null : !chapterLoading);
-  const lastWriteRun = data?.runs?.find((item) => item.stage === "write");
+  const lastWriteRun = selectScopedAuthoringRun(data?.runs, "write", scope);
 
   useEffect(() => {
     if (activeRunId) return;
-    if (lastWriteRun && (lastWriteRun.status === "running" || lastWriteRun.status === "pausing" || lastWriteRun.status === "failed")) {
-      setActiveRunId(lastWriteRun.runId);
-    }
+    if (lastWriteRun && shouldAutoTakeoverAuthoringRun(lastWriteRun)) setActiveRunId(lastWriteRun.runId);
   }, [activeRunId, lastWriteRun]);
 
   useEffect(() => {
@@ -97,7 +96,8 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
       setFailure(authoringRun.run.error ?? (isZh ? "这次操作没有完成。" : "This run did not finish."));
     } else {
       setFailure(null);
-      if (authoringRun.run.producedArtifactIds?.[0]) pendingSavedId.current = authoringRun.run.producedArtifactIds[0];
+      const produced = producedArtifactForScope(authoringRun.run, scope);
+      if (produced) pendingSavedId.current = produced;
     }
   }, [authoringRun.settled, authoringRun.run, isZh, onChanged, refetch]);
 
@@ -195,7 +195,7 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
   const storedReport = report ?? workspaceReport;
   const activeReport = storedReport && dirty ? { ...storedReport, stale: true, staleReason: isZh ? "正文已有未保存手改，这份报告对应修改前的稿件。" : "Unsaved edits have changed the reviewed text." } : storedReport;
-  const error = failure ?? workspaceError ?? artifactError;
+  const error = failure ?? authoringRun.error ?? workspaceError ?? artifactError;
   const switchedInBackground = dirty && candidate?.artifactId !== editBaseId.current;
   const history = (data?.artifacts ?? []).filter((item) => item.stage === "write" && item.scope === scope);
   const selectVersion = async (artifactId: string) => {
@@ -252,12 +252,24 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
       });
     }, true);
   };
+  const abandonRun = () => {
+    if (!activeRunId) return;
+    void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
+  };
   const retryFailedRun = () => {
-    if (authoringRun.run?.operation === "settle" && settleArtifactId) {
-      void run("settle", async () => {
-        const result = await postApi<{ runId?: string; status?: string }>("/authoring/write/settle", { bookId, artifactId: settleArtifactId });
-        if (result.runId) setActiveRunId(result.runId);
-      });
+    const action = writeRetryAction(authoringRun.run?.operation);
+    if (action === "settle") {
+      const artifactId = authoringRun.run?.producedArtifactIds?.[0] ?? settleArtifactId;
+      if (artifactId) {
+        void run("settle", async () => {
+          const result = await postApi<{ runId?: string; status?: string }>("/authoring/write/settle", { bookId, artifactId });
+          if (result.runId) setActiveRunId(result.runId);
+        });
+        return;
+      }
+    }
+    if (action === "review") {
+      void reviewCurrent();
       return;
     }
     void generateChapter(requirementNotes);
@@ -313,6 +325,7 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
         <span className="manuscript-save-status" role="status" aria-live="polite">
           <strong>{isZh ? "落笔" : "Write"}</strong>
           {runStatus ?? (busy === "save" ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : candidate ? (isZh ? "草稿已保存" : "Draft saved") : (isZh ? "尚未保存候选" : "No candidate saved"))}
+          {authoringRun.active ? <button type="button" className="btn-ghost" data-testid="authoring-abandon-run" onClick={abandonRun}>{isZh ? "放弃这次运行" : "Abandon run"}</button> : null}
           {authoringRun.run?.status === "failed" ? <button type="button" className="btn-ghost" onClick={retryFailedRun}>{isZh ? "重试" : "Retry"}</button> : null}
         </span>
         <div className="manuscript-action-buttons">

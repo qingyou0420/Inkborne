@@ -27,9 +27,10 @@ describe("collectNewSSEMessages for session events", () => {
 });
 
 describe("bookCreatedRoute", () => {
-  it("lands 建书 in 书房", () => {
+  it("lands 建书 in 书房, and 采用并建书 in 问心", () => {
     expect(bookCreatedRoute("book-create", "zui-ci")).toEqual({ page: "book", bookId: "zui-ci" });
     expect(bookCreatedRoute("book-create", "zui-ci", true)).toEqual({ page: "book-ask", bookId: "zui-ci" });
+    expect(bookCreatedRoute("book-create", "zui-ci", false, "ask")).toEqual({ page: "book-ask", bookId: "zui-ci" });
     expect(bookCreatedRoute("dashboard", "zui-ci")).toBeNull();
   });
 });
