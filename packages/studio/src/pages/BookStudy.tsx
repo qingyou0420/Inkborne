@@ -217,6 +217,7 @@ export function BookStudy({
     persisted: data.chapters,
     candidates: authoring?.manifest?.candidates?.write,
     adopted: authoring?.manifest?.adopted?.write,
+    stateRefs: authoring?.writeStateRefs,
   });
   const writeChapterNumber = firstUnwrittenChapter(writeDirectory, snapshot?.nextChapter.number ?? data.nextChapter);
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);

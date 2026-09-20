@@ -105,6 +105,8 @@ export {
   saveHandEditedArtifact,
   saveRun,
   saveRunControl,
+  AuthoringRunCancelledError,
+  listChapterStateRefs,
   saveWriteBody,
   selectWriteCandidate,
   bindRestoredChapter,

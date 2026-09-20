@@ -103,7 +103,11 @@ describe("authoring four-agent IA", () => {
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/放弃这次运行/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/data-testid="authoring-abandon-run"/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/selectScopedAuthoringRun\(data\?\.runs, "write", scope\)/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/previousChapterSettleHold/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/writeRetryAction/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/整理状态/);
+    expect(read("src/pages/BookDetail.tsx")).toMatch(/状态未整理/);
+    expect(read("src/pages/BookDetail.tsx")).toMatch(/chapter-settle-/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/serverStartedAt/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/migrateBookSession/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/persistStartingRun/);

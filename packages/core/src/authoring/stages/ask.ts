@@ -14,6 +14,7 @@ import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
 import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
 import {
+  AuthoringRunCancelledError,
   authoringRootDir,
   loadArtifact,
   loadManifest,
@@ -25,6 +26,7 @@ import {
   saveManifest,
   saveReport,
   saveRun,
+  throwIfRunCancelled,
   type AuthoringStoreRoot,
 } from "../store.js";
 import { canonLengthRequiredError, createLightweightBook, hasConfirmedCanonLength, syncBookJsonTitle } from "../book-create.js";
@@ -373,7 +375,9 @@ export async function generateAskCanon(input: AskRuntime & {
     authorContext.prompt,
   ].filter(Boolean).join("\n");
   try {
+    await throwIfRunCancelled(input.root, runId);
     const text = await completeRole(resolved, prompt, input.llm);
+    await throwIfRunCancelled(input.root, runId);
     const canon = canonFromJson(extractJsonObject(text), baseCanon);
     const body = serializeCanon(canon);
     const version = (parent?.meta.version ?? 0) + 1;
@@ -416,6 +420,14 @@ export async function generateAskCanon(input: AskRuntime & {
     await persistAskRun(input.root, completed, input.onProgress);
     return { artifactId, version, canon, runId };
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await persistAskRun(input.root, {
+        ...running,
+        status: "cancelled",
+        progressLabel: "已放弃这次整理",
+      }, input.onProgress);
+      throw error;
+    }
     const failed = {
       runId,
       stage: "ask" as const,
@@ -466,11 +478,14 @@ export async function reviewAskCanon(input: AskRuntime & {
     authorContext.prompt,
     "核对正典是否完整整理了对话已明确的主角与核心欲望、叙事视角与文风、故事边界、初始方向；如有遗漏，请在 evidence 中引用依据，说明应补回什么。没有依据的内容应列为具体待确认问题，不要建议杜撰，也不要把作者主动待定当成缺陷。",
   ].filter(Boolean).join("\n");
+  try {
+  await throwIfRunCancelled(input.root, runId);
   const text = await completeRole(
     resolved,
     reviewPrompt("ask", "故事正典全文", loaded.body, extras),
     input.llm,
   );
+  await throwIfRunCancelled(input.root, runId);
   const report = parseReviewPayload(text, {
     stage: "ask",
     targetRefs: [loaded.meta.artifactId],
@@ -500,6 +515,17 @@ export async function reviewAskCanon(input: AskRuntime & {
   };
   await persistAskRun(input.root, completed, input.onProgress);
   return report;
+  } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await persistAskRun(input.root, {
+        ...running,
+        status: "cancelled",
+        progressLabel: "已放弃这次审查",
+      }, input.onProgress);
+      throw error;
+    }
+    throw error;
+  }
 }
 
 export async function reviseAskCanon(input: AskRuntime & {
@@ -547,7 +573,9 @@ export async function reviseAskCanon(input: AskRuntime & {
     loaded.body,
   ].filter(Boolean).join("\n");
   try {
+    await throwIfRunCancelled(input.root, runId);
     const text = await completeRole(resolved, prompt, input.llm);
+    await throwIfRunCancelled(input.root, runId);
     const canon = canonFromJson(extractJsonObject(text), parseCanon(loaded.body));
     const version = loaded.meta.version + 1;
     const artifactId = newArtifactId("ask", "canon");
@@ -579,6 +607,14 @@ export async function reviseAskCanon(input: AskRuntime & {
     await persistAskRun(input.root, completed, input.onProgress);
     return { artifactId, version, canon, runId };
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError) {
+      await persistAskRun(input.root, {
+        ...running,
+        status: "cancelled",
+        progressLabel: "已放弃这次修订",
+      }, input.onProgress);
+      throw error;
+    }
     const failed = {
       ...running,
       status: "failed" as const,

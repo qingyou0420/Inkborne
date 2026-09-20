@@ -14,6 +14,16 @@ export interface WriteDirectoryChapter {
   readonly title: string;
   readonly mark: WriteChapterMark;
   readonly wordCount: number;
+  readonly stateMissing?: boolean;
+}
+
+export function writeStateMissing(input: {
+  readonly adoptedId?: string;
+  readonly stateArtifactId?: string;
+}): boolean {
+  const adoptedId = input.adoptedId?.trim();
+  if (!adoptedId) return false;
+  return adoptedId !== (input.stateArtifactId?.trim() || undefined);
 }
 
 export interface PersistedWriteChapter {
@@ -82,6 +92,7 @@ export function mergeWriteDirectory(input: {
   readonly persisted?: ReadonlyArray<PersistedWriteChapter>;
   readonly candidates?: Readonly<Record<string, string>>;
   readonly adopted?: Readonly<Record<string, string>>;
+  readonly stateRefs?: Readonly<Record<string, string>>;
 }): WriteDirectoryChapter[] {
   const planned = collectPlannedChapters(input.volumeMap ?? "");
   const persisted = new Map((input.persisted ?? []).map((chapter) => [chapter.number, chapter]));
@@ -96,15 +107,20 @@ export function mergeWriteDirectory(input: {
   }
   return [...numbers].sort((left, right) => left - right).map((number) => {
     const saved = persisted.get(number);
+    const adoptedId = input.adopted?.[String(number)];
     return {
       number,
       title: planned.get(number)?.trim() || saved?.title || "",
       mark: writeChapterMark({
         candidateId: input.candidates?.[String(number)],
-        adoptedId: input.adopted?.[String(number)],
+        adoptedId,
         hasPersistedChapter: Boolean(saved),
       }),
       wordCount: saved?.wordCount ?? 0,
+      stateMissing: writeStateMissing({
+        adoptedId,
+        stateArtifactId: input.stateRefs?.[String(number)],
+      }),
     };
   });
 }

@@ -22,6 +22,7 @@ import {
   loadArtifact,
   loadManifest,
   loadReport,
+  loadRunControl,
   loadSettingsCatalog,
   newArtifactId,
   newRunId,
@@ -234,6 +235,11 @@ export async function generateGroundEntries(input: GroundRuntime & {
   };
   await persistRun("running");
   for (const entry of targets) {
+    if (await loadRunControl(input.root, runId) === "cancel") {
+      await persistRun("cancelled");
+      await saveSettingsCatalog(input.root, catalog);
+      return { generated, failed, runId };
+    }
     try {
       const priorId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
       const prior = priorId ? await loadArtifact(input.root, priorId) : null;
@@ -263,6 +269,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
       }, text);
       entry.candidateArtifactId = artifactId;
       generated.push(entry.id);
+      await saveSettingsCatalog(input.root, catalog);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failed.push(entry.id);

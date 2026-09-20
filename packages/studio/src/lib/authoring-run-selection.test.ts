@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   askRetryAction,
   groundRetryAction,
+  previousChapterSettleHold,
   producedArtifactForScope,
   selectScopedAuthoringRun,
   shouldAutoTakeoverAuthoringRun,
@@ -63,6 +64,18 @@ describe("retry dispatch", () => {
     expect(groundRetryAction({ operation: "generate" }, false)).toBe("catalog");
     expect(groundRetryAction({ operation: "generate" }, true)).toBe("generate");
     expect(groundRetryAction({ operation: "revise" }, true)).toBe("generate");
+  });
+
+  it("holds the next chapter while the previous settle is still live", () => {
+    const runs = [
+      run({ runId: "s1", stage: "write", status: "running", operation: "settle", scope: "chapter:1" }),
+      run({ runId: "g2", stage: "write", status: "completed", operation: "generate", scope: "chapter:2" }),
+    ];
+    expect(previousChapterSettleHold(runs, 2)?.runId).toBe("s1");
+    expect(previousChapterSettleHold(runs, 1)).toBeUndefined();
+    expect(previousChapterSettleHold([
+      run({ runId: "s1", stage: "write", status: "failed", operation: "settle", scope: "chapter:1" }),
+    ], 2)).toBeUndefined();
   });
 
   it("only adopts produced artifacts that belong to the current scope", () => {

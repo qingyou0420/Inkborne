@@ -5,8 +5,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
 import { postApi, putApi, useApi } from "../hooks/use-api";
-import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
-import { producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
+import { isAuthoringRunActive, isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
+import { previousChapterSettleHold, producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
+import { writeStateMissing } from "../lib/write-directory";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
@@ -82,11 +83,24 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
   const ready = Boolean(data) && (candidate ? artifactForCurrent?.body != null : !chapterLoading);
   const lastWriteRun = selectScopedAuthoringRun(data?.runs, "write", scope);
+  const previousSettleHold = previousChapterSettleHold(data?.runs, chapterNumber);
+  const previousSettleId = previousSettleHold && isAuthoringRunActive(previousSettleHold.status) ? previousSettleHold.runId : null;
+  const previousSettleWatch = useAuthoringRun(bookId, previousSettleId);
+  const previousSettleActive = Boolean(previousSettleId) && (previousSettleWatch.active || !previousSettleWatch.settled);
+  const chapterStateMissing = writeStateMissing({
+    adoptedId,
+    stateArtifactId: data?.writeStateRefs?.[String(chapterNumber)],
+  });
 
   useEffect(() => {
     if (activeRunId) return;
     if (lastWriteRun && shouldAutoTakeoverAuthoringRun(lastWriteRun)) setActiveRunId(lastWriteRun.runId);
   }, [activeRunId, lastWriteRun]);
+
+  useEffect(() => {
+    if (!previousSettleWatch.settled) return;
+    void refetch();
+  }, [previousSettleWatch.settled, refetch]);
 
   useEffect(() => {
     if (!authoringRun.settled || !authoringRun.run) return;
@@ -259,14 +273,8 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const retryFailedRun = () => {
     const action = writeRetryAction(authoringRun.run?.operation);
     if (action === "settle") {
-      const artifactId = authoringRun.run?.producedArtifactIds?.[0] ?? settleArtifactId;
-      if (artifactId) {
-        void run("settle", async () => {
-          const result = await postApi<{ runId?: string; status?: string }>("/authoring/write/settle", { bookId, artifactId });
-          if (result.runId) setActiveRunId(result.runId);
-        });
-        return;
-      }
+      retrySettle(authoringRun.run?.producedArtifactIds?.[0] ?? settleArtifactId);
+      return;
     }
     if (action === "review") {
       void reviewCurrent();
@@ -274,7 +282,15 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
     }
     void generateChapter(requirementNotes);
   };
+  const retrySettle = (artifactId?: string | null) => {
+    if (!artifactId) return;
+    void run("settle", async () => {
+      const result = await postApi<{ runId?: string; status?: string }>("/authoring/write/settle", { bookId, artifactId });
+      if (result.runId) setActiveRunId(result.runId);
+    });
+  };
   const locked = Boolean(busy) || authoringRun.active;
+  const generateHeld = previousSettleActive;
   const targetWords = data?.canon?.chapterWordCount;
   const currentWords = body.replace(/\s/g, "").length;
   const runStatus = authoringRun.active
@@ -298,6 +314,8 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
             ? (isZh ? `${currentWords.toLocaleString()} / 约 ${targetWords.toLocaleString()} 字` : `${currentWords.toLocaleString()} / ~${targetWords.toLocaleString()} words`)
             : `${currentWords.toLocaleString()} ${isZh ? "字" : "characters"}`}</span>
         </div>
+        {previousSettleActive ? <p className="manuscript-notice" data-testid="write-previous-settle-hold">{isZh ? `正在整理第 ${chapterNumber - 1} 章状态，完成后可写下一章` : `Settling chapter ${chapterNumber - 1} before writing the next chapter.`}</p> : null}
+        {chapterStateMissing && !previousSettleActive ? <p className="manuscript-notice" data-testid="write-state-missing">{isZh ? "本章已采用，但状态尚未整理。" : "This chapter is adopted, but its state is not settled."}</p> : null}
         {data?.manifest?.watches?.some((watch) => !watch.acknowledged) ? <p className="manuscript-notice">{isZh ? "上游已有新采用版，审查依据可能需要更新。" : "Upstream content changed; the review basis may need updating."}</p> : null}
         {switchedInBackground ? <p className="manuscript-notice">{isZh ? "候选已在别处更新。你的手改已保留，保存将另存为新候选。" : "Another candidate was selected. Your edits are retained and will save as a new candidate."}</p> : null}
       </header>
@@ -338,17 +356,18 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
           <button type="button" disabled={locked || !ready || dirty} onClick={() => void reviewCurrent()}>{busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : (isZh ? "审查" : "Review")}</button>
           <button type="button" disabled={locked || !ready || dirty || candidate.artifactId === adoptedId} onClick={() => void run("adopt", adopt, true)}><Check size={14} />{busy === "adopt" ? (isZh ? "采用中…" : "Adopting…") : candidate.artifactId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
           <DropdownMenu><DropdownMenuTrigger className="quiet" disabled={locked || dirty} aria-label={isZh ? "成果操作" : "Manuscript actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => setGeneration({})}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={generateHeld} onClick={() => setGeneration({})}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+            {chapterStateMissing ? <DropdownMenuItem data-testid="write-settle-state" onClick={() => retrySettle(adoptedId)}>{isZh ? "整理状态" : "Settle state"}</DropdownMenuItem> : null}
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!storedReport} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!parentId} onClick={() => setDiffOpen(true)}>{isZh ? "比较修改前后" : "Compare versions"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
-          </> : <><button type="button" className="primary" disabled={locked || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={locked || !ready} /></>}
+          </> : <><button type="button" className="primary" disabled={locked || generateHeld || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={locked || !ready} /></>}
           </>}
         </div>
       </div>
       <RegenerateDialog open={Boolean(generation)} title={isZh ? (generation?.issueIds ? "按意见重新创作" : "创作本章") : "Write chapter"} scopeLabel={isZh ? `第 ${chapterNumber} 章` : `Chapter ${chapterNumber}`} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && activeReport ? activeReport.summary : generationNotes} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
-        if (!generation) return false;
+        if (!generation || (!generation.issueIds && generateHeld)) return false;
         const ok = await run(generation.issueIds ? "revise" : "generate", async () => {
           if (generation.issueIds && activeReport && candidate) {
             await startWriteJob("/authoring/write/revise", { bookId, artifactId: pendingSavedId.current ?? candidate.artifactId, reportId: activeReport.reportId, selectedIssueIds: generation.issueIds, reuseStale: generation.reuseStale, requirements });

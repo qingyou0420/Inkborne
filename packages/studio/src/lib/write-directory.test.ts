@@ -6,6 +6,7 @@ import {
   writeChapterMark,
   writeMarkDotState,
   writeMarkLabel,
+  writeStateMissing,
 } from "./write-directory";
 
 const volumeMap = [
@@ -70,5 +71,19 @@ describe("write directory marks", () => {
       persisted: [{ number: 1, title: "一", wordCount: 1 }, { number: 2, title: "二", wordCount: 1 }],
     });
     expect(firstUnwrittenChapter(directory, 3)).toBe(3);
+  });
+
+  it("marks adopted chapters whose state file is missing or stale", () => {
+    expect(writeStateMissing({ adoptedId: "w1" })).toBe(true);
+    expect(writeStateMissing({ adoptedId: "w1", stateArtifactId: "w0" })).toBe(true);
+    expect(writeStateMissing({ adoptedId: "w1", stateArtifactId: "w1" })).toBe(false);
+    expect(writeStateMissing({})).toBe(false);
+    const directory = mergeWriteDirectory({
+      volumeMap,
+      adopted: { "1": "write-1-a", "2": "write-2-a" },
+      stateRefs: { "1": "write-1-a" },
+    });
+    expect(directory.find((chapter) => chapter.number === 1)?.stateMissing).toBe(false);
+    expect(directory.find((chapter) => chapter.number === 2)?.stateMissing).toBe(true);
   });
 });

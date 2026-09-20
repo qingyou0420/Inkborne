@@ -120,6 +120,7 @@ describe("adopted weave to write handoff", () => {
     expect(html).toContain("有候选");
     expect(html).toContain("未写");
     expect(html).toContain("已采用");
+    expect(html).toContain("状态未整理");
     expect(html).toContain("第 2 章 · 新章");
     expect(html).not.toContain('data-testid="write-legacy-tools"');
     expect(html).not.toContain('data-testid="review-queue"');

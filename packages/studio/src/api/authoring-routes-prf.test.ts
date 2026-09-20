@@ -163,3 +163,14 @@ it("saves a running record before a wait=false core throw and then records failu
   expect(events.some((entry) => entry.event === "authoring:run" && (entry.data as { status?: string }).status === "failed")).toBe(true);
   await rm(root, { recursive: true, force: true });
 });
+
+it("exposes chapter state refs on the workspace for settle retry", async () => {
+  const { app, root } = await appWithRoot();
+  const dir = join(root, "books", "b", "story", "state");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "chapter-1.ref.json"), `${JSON.stringify({ artifactId: "write-1-a", chapterNumber: 1 }, null, 2)}\n`);
+  const response = await app.request("/api/v1/authoring/workspace?bookId=b");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ writeStateRefs: { "1": "write-1-a" } });
+  await rm(root, { recursive: true, force: true });
+});

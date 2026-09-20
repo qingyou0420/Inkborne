@@ -103,6 +103,7 @@ export interface AuthoringWorkspace {
     readonly entries: ReadonlyArray<AuthoringCatalogEntry>;
   };
   readonly authoringBook?: boolean;
+  readonly writeStateRefs?: Readonly<Record<string, string>>;
   readonly artifacts?: ReadonlyArray<AuthoringArtifact>;
   readonly reports?: ReadonlyArray<AuthoringReport>;
   readonly manifest?: {
