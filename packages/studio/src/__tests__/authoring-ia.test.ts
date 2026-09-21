@@ -91,7 +91,9 @@ describe("authoring four-agent IA", () => {
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/persistIfDirty/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/生成分卷规划/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/outline-weave-chapters/);
-    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/reviseStructure: isStructureCandidate/);
+    // Structure candidates still revise structure: mode is `range.structure || isStructureCandidate ? "structure" : "chapters"`.
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/mode: range\.structure \|\| isStructureCandidate \? "structure" : "chapters"/);
+    expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/reviseStructure: generation\.mode === "structure"/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/openChapterGeneration/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).toMatch(/const openChapterGeneration = \(\) => \{\s*applyVolumeRange\(\);/);
     expect(read("src/components/AuthoringWeavePanel.tsx")).not.toMatch(/applyVolumeRange\(plannedVolumes\[0\]\)/);
@@ -138,6 +140,8 @@ describe("authoring four-agent IA", () => {
     expect(weave).toMatch(/需核对/);
     expect(weave).toMatch(/分卷需重规划/);
     expect(weave).toMatch(/\/authoring\/impact\/resolve/);
+    // 「按意见修订」 on the weave:structure impact issue must actually replan volumes.
+    expect(weave).toMatch(/reviseStructure: generation\.mode === "structure"/);
     expect(write).toMatch(/writeImpactBanner/);
     expect(write).toMatch(/write-impact-banner/);
     expect(write).not.toMatch(/watches\?\.some\(\(watch\) => !watch\.acknowledged\)/);
