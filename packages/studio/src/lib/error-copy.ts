@@ -68,6 +68,10 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
     pattern: /LLM call exceeded overall timeout of (\d+)ms/g,
     replacement: "模型整次调用超过 $1 毫秒仍未完成。请检查当前模型/服务的超时或流式兼容性。",
   },
+  {
+    pattern: /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|NetworkError)$/i,
+    replacement: "引擎连不上，请重启应用",
+  },
 ];
 
 export function localizeKnownRuntimeMessage(message: string): string {
