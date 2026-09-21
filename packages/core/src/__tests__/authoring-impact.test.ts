@@ -268,7 +268,7 @@ describe("canon impact triage", () => {
     const created = await createLightweightBook({ projectRoot: dir, canon: baseCanon });
     const root: AuthoringStoreRoot = { projectRoot: dir, bookId: created.bookId };
     await seedCatalog(root, created.bookDir);
-    await adoptCanonVersion(root, withCanon({ protagonist: "另一个完全无关的人" }), 2);
+    const adopted = await adoptCanonVersion(root, withCanon({ protagonist: "另一个完全无关的人" }), 2);
     const result = await triageCanonImpact({
       root,
       project: project(),
@@ -279,6 +279,34 @@ describe("canon impact triage", () => {
     const manifest = await loadManifest(root);
     expect(manifest.watches.every((watch) => watch.impactReportId === result.impactId)).toBe(true);
     expect(manifest.watches.some((watch) => watch.label.includes("影响分辨失败"))).toBe(true);
+    // The degraded report is itself the open reminder: watches stay unacknowledged and the baseline does not move,
+    // so 「重算」 still diffs v1→v2 instead of short-circuiting as unchanged.
+    expect(manifest.watches.filter((watch) => watch.sourceKind === "canon").every((watch) => !watch.acknowledged)).toBe(true);
+    expect(manifest.impactBaseline?.ask).not.toBe(adopted.artifactId);
+    const recomputed = await triageCanonImpact({
+      root,
+      project: project(),
+      llm: async () => JSON.stringify({
+        items: [{ target: "shen-yan", verdict: "maybe", fields: ["protagonist"], reason: "再看一眼" }],
+      }),
+    });
+    expect(recomputed.unchanged).toBeFalsy();
+    expect(recomputed.report?.degraded).toBeUndefined();
+    expect((await loadCurrentImpact(root))?.impactId).toBe(recomputed.impactId);
+  });
+
+  it("lets the author acknowledge a degraded report so the banner can clear", async () => {
+    dir = await mkdtemp(join(tmpdir(), "impact-degraded-ack-"));
+    const created = await createLightweightBook({ projectRoot: dir, canon: baseCanon });
+    const root: AuthoringStoreRoot = { projectRoot: dir, bookId: created.bookId };
+    await seedCatalog(root, created.bookDir);
+    const adopted = await adoptCanonVersion(root, withCanon({ protagonist: "另一个完全无关的人" }), 2);
+    const result = await triageCanonImpact({ root, project: project(), llm: async () => JSON.stringify({ items: [] }) });
+    expect(result.report?.degraded).toBeTruthy();
+    await resolveImpactItems(root, { as: "reviewed" });
+    const manifest = await loadManifest(root);
+    expect(manifest.watches.filter((watch) => watch.impactReportId === result.impactId).every((watch) => watch.acknowledged)).toBe(true);
+    expect(manifest.impactBaseline?.ask).toBe(adopted.artifactId);
   });
 
   it("closes ground items on adopt when the adopted artifact changes", async () => {

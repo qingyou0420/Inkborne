@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AuthoringImpactItem, AuthoringImpactSummary } from "./authoring-workspace";
 import {
   defaultImpactFilter,
+  degradedImpactOpen,
   filterGroundEntries,
   findImpactTriageRun,
   impactCompleteCopy,
@@ -141,6 +142,23 @@ describe("impact-view copy", () => {
       triageRunning: true,
       isZh: true,
     })?.kind).toBe("running");
+  });
+
+  it("clears the degraded banner once its watches are acknowledged, and surfaces stuck pending watches", () => {
+    const degraded = { ...impact, openCount: { ground: 0, weave: 0 }, items: [], degraded: { reason: "模型超时" } };
+    const acked = [
+      { id: "g", stage: "ground", label: "失败", acknowledged: true, impactReportId: "imp-1" },
+      { id: "w", stage: "weave", label: "失败", acknowledged: true, impactReportId: "imp-1" },
+    ];
+    expect(degradedImpactOpen(degraded, acked)).toBe(false);
+    expect(degradedImpactOpen(degraded, [{ ...acked[0]!, acknowledged: false }])).toBe(true);
+    expect(writeImpactBanner({ impact: degraded, watches: acked, isZh: true })).toBeNull();
+    expect(studyImpactAttention({ impact: degraded, watches: acked, isZh: true })).toBeNull();
+    expect(writeImpactBanner({ impact: degraded, watches: [{ ...acked[0]!, acknowledged: false }], isZh: true })?.kind).toBe("degraded");
+    const pending = [{ id: "p", stage: "ground", label: "正典已采用新版本", acknowledged: false, impactReportId: "pending" }];
+    expect(isLegacyCanonWatch(pending[0]!)).toBe(true);
+    expect(writeImpactBanner({ impact: { ...impact, openCount: { ground: 0, weave: 0 }, items: [] }, watches: pending, isZh: true })?.kind).toBe("legacy");
+    expect(writeImpactBanner({ watches: pending, triageRunning: true, isZh: true })?.kind).toBe("running");
   });
 
   it("merges 等你过目 into one impact line", () => {

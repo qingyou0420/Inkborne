@@ -268,9 +268,19 @@ function watchLabel(stage: "ground" | "weave", report: ImpactReport, counts: { g
   return `${span}：章概要 ${counts.weave} 章需核对`;
 }
 
-async function syncImpactWatches(root: AuthoringStoreRoot, report: ImpactReport): Promise<void> {
+/** A degraded report with no items is itself the one coarse "open" reminder until the author acks it. */
+function degradedUnresolved(report: ImpactReport): boolean {
+  return Boolean(report.degraded) && report.items.length === 0;
+}
+
+async function syncImpactWatches(
+  root: AuthoringStoreRoot,
+  report: ImpactReport,
+  options?: { readonly acknowledgeDegraded?: boolean },
+): Promise<void> {
   const manifest = await loadManifest(root);
   const counts = openCounts(report.items);
+  const holdDegraded = degradedUnresolved(report) && !options?.acknowledgeDegraded;
   const watches = upsertCanonWatches(manifest, {
     fromArtifactId: report.from.artifactId,
     toArtifactId: report.to.artifactId,
@@ -280,7 +290,7 @@ async function syncImpactWatches(root: AuthoringStoreRoot, report: ImpactReport)
   }).map((watch) => {
     if (watch.sourceKind !== "canon") return watch;
     const count = watch.stage === "ground" ? counts.ground : watch.stage === "weave" ? counts.weave : 0;
-    const acknowledged = count === 0;
+    const acknowledged = count === 0 && !holdDegraded;
     return {
       ...watch,
       openCount: count,
@@ -290,7 +300,7 @@ async function syncImpactWatches(root: AuthoringStoreRoot, report: ImpactReport)
         : watch.label,
     };
   });
-  const allClosed = counts.ground === 0 && counts.weave === 0;
+  const allClosed = counts.ground === 0 && counts.weave === 0 && !holdDegraded;
   await saveManifest(root, {
     ...manifest,
     watches,
@@ -1189,6 +1199,6 @@ export async function resolveImpactItems(
     return { ...item, status: input.as, resolvedAt: now };
   });
   const saved = await saveImpactReport(root, next);
-  await syncImpactWatches(root, saved);
+  await syncImpactWatches(root, saved, { acknowledgeDegraded: true });
   return saved;
 }

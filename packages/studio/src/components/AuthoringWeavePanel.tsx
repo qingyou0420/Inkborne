@@ -429,7 +429,7 @@ export function AuthoringWeavePanel({
             endChapter: Number(endChapter) || target,
             reuseStale: generation.reuseStale,
             requirements,
-            reviseStructure: isStructureCandidate,
+            reviseStructure: generation.mode === "structure",
           });
           if (result.runId) {
             setActiveRunId(result.runId);
