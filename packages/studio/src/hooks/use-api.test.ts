@@ -123,6 +123,10 @@ describe("deriveInvalidationPaths", () => {
       "/api/v1/books",
       "/api/v1/books/demo",
     ]);
+    expect(deriveInvalidationPaths("/books/demo/cover")).toEqual([
+      "/api/v1/books",
+      "/api/v1/books/demo",
+    ]);
   });
 
   it("refreshes daemon state after daemon mutations", () => {

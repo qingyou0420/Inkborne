@@ -213,6 +213,16 @@ import {
   toAuthorPublic,
 } from "../lib/author-io.js";
 import {
+  BOOK_COVER_MAX_BYTES,
+  BookCoverError,
+  bookCoverExtensionFor,
+  clearBookCoverFile,
+  isSafeBookCoverRelative,
+  readBookCoverFile,
+  saveBookCoverFile,
+  withStudioCoverSrc,
+} from "../lib/book-cover-io.js";
+import {
   deleteStudioTaskSnapshot,
   loadStudioTaskSnapshot,
   saveStudioTaskSnapshot,
@@ -1912,7 +1922,7 @@ async function loadStudioBookListSummary(
   } catch {
     // Stage is display-only; a missing workflow file must not hide the book.
   }
-  return { ...book, chaptersWritten, stage, coverImagePath: book.coverImagePath };
+  return withStudioCoverSrc({ ...book, chaptersWritten, stage });
 }
 
 function isCustomServiceId(serviceId: string): boolean {
@@ -3179,10 +3189,81 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const book = await state.loadBookConfig(id);
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
-      return c.json({ book, chapters, nextChapter });
+      return c.json({ book: withStudioCoverSrc(book), chapters, nextChapter });
     } catch {
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
+  });
+
+  app.get("/api/v1/books/:id/cover", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
+    }
+    try {
+      const book = await state.loadBookConfig(id);
+      const file = await readBookCoverFile(state.bookDir(id), book);
+      if (!file) return c.body(null, 404);
+      return new Response(new Uint8Array(file.bytes), {
+        headers: {
+          "Content-Type": file.contentType,
+          "Cache-Control": "no-cache",
+        },
+      });
+    } catch {
+      return c.notFound();
+    }
+  });
+
+  app.post("/api/v1/books/:id/cover", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
+    }
+    const body = await c.req.parseBody().catch(() => ({} as Record<string, unknown>));
+    const file = body.file ?? body.cover;
+    if (!(file instanceof File)) {
+      return c.json({ error: "请选择封面文件" }, 400);
+    }
+    if (!bookCoverExtensionFor(file.type, file.name)) {
+      return c.json({ error: "封面只支持 png / jpg / jpeg / webp / gif" }, 400);
+    }
+    if (file.size > BOOK_COVER_MAX_BYTES) {
+      return c.json({ error: "封面不能超过 6 MB" }, 400);
+    }
+    let book;
+    try {
+      book = await state.loadBookConfig(id);
+    } catch {
+      return c.json({ error: `Book "${id}" not found` }, 404);
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const updated = await saveBookCoverFile(state.bookDir(id), book, bytes, file.type, file.name);
+      await state.saveBookConfig(id, updated);
+      return c.json({ ok: true, book: withStudioCoverSrc(updated) });
+    } catch (error) {
+      if (error instanceof BookCoverError) {
+        return c.json({ error: error.message }, 400);
+      }
+      return c.json({ error: error instanceof Error ? error.message : "上传失败" }, 400);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/cover", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
+    }
+    let book;
+    try {
+      book = await state.loadBookConfig(id);
+    } catch {
+      return c.json({ error: `Book "${id}" not found` }, 404);
+    }
+    const updated = await clearBookCoverFile(state.bookDir(id), book);
+    await state.saveBookConfig(id, updated);
+    return c.json({ ok: true, book: withStudioCoverSrc(updated) });
   });
 
   app.get("/api/v1/books/:id/stage", async (c) => {
@@ -6799,13 +6880,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
         ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
-        ...(updates.coverImagePath !== undefined
-          ? { coverImagePath: updates.coverImagePath || undefined }
-          : {}),
+        ...(updates.coverImagePath === undefined
+          ? {}
+          : !updates.coverImagePath
+            ? { coverImagePath: undefined }
+            : isSafeBookCoverRelative(updates.coverImagePath)
+              ? { coverImagePath: updates.coverImagePath }
+              : {}),
         updatedAt: new Date().toISOString(),
       };
       await state.saveBookConfig(id, updated);
-      return c.json({ ok: true, book: updated });
+      return c.json({ ok: true, book: withStudioCoverSrc(updated) });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
