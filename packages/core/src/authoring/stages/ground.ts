@@ -35,6 +35,7 @@ import {
 } from "../store.js";
 import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringRunRecord, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
+import { closeImpactItems } from "./impact.js";
 
 const DEFAULT_CATEGORIES = ["世界与时代", "人物", "关系与势力", "地点", "规则与物品", "历史与其他"];
 
@@ -363,6 +364,7 @@ export async function adoptGroundEntries(input: GroundRuntime & {
       settingsTarget: catalog.entries.filter((entry) => !entry.archived).length,
     },
   });
+  if (adopted.length) await closeImpactItems(input.root, { ground: adopted });
   return { adopted };
 }
 

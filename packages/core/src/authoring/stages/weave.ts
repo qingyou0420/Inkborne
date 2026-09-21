@@ -41,6 +41,7 @@ import {
 } from "../store.js";
 import { WorkflowManifestSchema, type AuthoringArtifactMeta, type AuthoringLlmFn, type AuthoringReviewReport, type AuthoringRunRecord, type InputRef } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
+import { closeImpactItems } from "./impact.js";
 
 export interface WeaveRuntime {
   readonly root: AuthoringStoreRoot;
@@ -1159,6 +1160,7 @@ export async function adoptWeave(input: WeaveRuntime & { readonly artifactId: st
       { relativePath: "story/workflow/manifest.json", content: `${JSON.stringify(nextManifest, null, 2)}\n` },
     ],
   });
+  await closeImpactItems(input.root, { weaveBody: body, weaveArtifactId: loaded.meta.artifactId });
 }
 
 async function reviseWeaveChapters(

@@ -25,6 +25,7 @@ import {
   generateGroundEntries,
   generateWeaveRange,
   generateWeaveStructure,
+  impactWorkspaceSummary,
   isLightweightAuthoringBook,
   listArtifacts,
   listChapterStateRefs,
@@ -32,7 +33,9 @@ import {
   listRuns,
   loadArtifact,
   loadCanonDocument,
+  loadCurrentImpact,
   loadDraft,
+  loadImpactReport,
   loadManifest,
   loadReport,
   loadRun,
@@ -56,9 +59,11 @@ import {
   reviseChapterDraft,
   reviseGroundEntry,
   reviseWeave,
+  resolveImpactItems,
   saveHandEditedArtifact,
   saveRunControl,
   testAuthoringRole,
+  triageCanonImpact,
   type AuthoringRoleConfig,
   type AuthoringRoleId,
   type AuthoringRunRecord,
@@ -319,12 +324,14 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const candidateWeaveId = manifest.candidates.weave;
     const candidateWeave = candidateWeaveId ? await loadArtifact(root, candidateWeaveId) : undefined;
     const authoringBook = bookId ? await isLightweightAuthoringBook(join(deps.root, "books", bookId)) : false;
+    const currentImpact = authoringBook ? await loadCurrentImpact(root).catch(() => undefined) : undefined;
     return c.json({
       manifest,
       artifacts,
       reports,
       catalog,
       authoringBook,
+      impact: currentImpact ? impactWorkspaceSummary(currentImpact) : undefined,
       runs,
       writeStateRefs,
       canon: canon?.canon,
@@ -605,8 +612,31 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
           });
         }
       }
+      let impactRunId: string | undefined;
+      if (result.impactPending && result.bookId) {
+        const adoptRoot = storeRoot(deps.root, { bookId: result.bookId, draftId: body.draftId });
+        const adoptManifest = await loadManifest(adoptRoot);
+        impactRunId = newRunId();
+        await persistStartingRun(adoptRoot, emptyRun({
+          runId: impactRunId,
+          stage: "ask",
+          operation: "review",
+          roleId: "ask.review",
+          bookId: result.bookId,
+          draftId: adoptRoot.draftId,
+          scope: `impact:${adoptManifest.impactBaseline?.ask ?? ""}..${result.artifactId}`,
+          progressLabel: "正在分辨正典改动的影响",
+        }));
+        startAuthoringWork(adoptRoot, impactRunId, () => triageCanonImpact({
+          root: adoptRoot,
+          project,
+          runId: impactRunId,
+          onProgress: onAuthoringProgress(deps, adoptRoot),
+        }));
+      }
       return c.json({
         ...result,
+        impactRunId,
         message: result.created ? "正典已采用，新书已建立" : "正典已采用",
       });
     } catch (error) {
@@ -1099,6 +1129,59 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       right: b.meta,
       hunks: diffLines(a.body, b.body),
     });
+  });
+
+  app.post("/api/v1/authoring/impact/recompute", async (c) => {
+    const body = await c.req.json<{ bookId: string; wait?: boolean }>();
+    if (!body.bookId) return c.json({ error: "缺少 bookId" }, 400);
+    const project = await deps.loadProject();
+    const root = storeRoot(deps.root, body);
+    if (!(await isLightweightAuthoringBook(join(deps.root, "books", body.bookId)))) {
+      return c.json({ error: "旧书不支持正典影响分辨" }, 400);
+    }
+    const manifest = await loadManifest(root);
+    if (!manifest.adopted.ask) return c.json({ error: "还没有已采用的正典，无法重算影响" }, 400);
+    const runId = newRunId();
+    await persistStartingRun(root, emptyRun({
+      runId,
+      stage: "ask",
+      operation: "review",
+      roleId: "ask.review",
+      bookId: body.bookId,
+      scope: `impact:${manifest.impactBaseline?.ask ?? ""}..${manifest.adopted.ask}`,
+      progressLabel: "正在分辨正典改动的影响",
+    }));
+    const workFactory = () => triageCanonImpact({
+      root,
+      project,
+      runId,
+      onProgress: onAuthoringProgress(deps, root),
+    });
+    if (body.wait) return c.json(await awaitAuthoringWork(root, runId, Promise.resolve().then(workFactory)));
+    startAuthoringWork(root, runId, workFactory);
+    return c.json({ runId, status: "running" });
+  });
+
+  app.post("/api/v1/authoring/impact/resolve", async (c) => {
+    const body = await c.req.json<{ bookId: string; keys?: string[]; as: "reviewed" | "dismissed" }>();
+    if (!body.bookId) return c.json({ error: "缺少 bookId" }, 400);
+    if (body.as !== "reviewed" && body.as !== "dismissed") {
+      return c.json({ error: "as 只能是 reviewed 或 dismissed" }, 400);
+    }
+    const root = storeRoot(deps.root, body);
+    const report = await resolveImpactItems(root, { keys: body.keys, as: body.as });
+    return c.json({
+      ok: true,
+      impact: report ? impactWorkspaceSummary(report) : undefined,
+    });
+  });
+
+  app.get("/api/v1/authoring/impact/:impactId", async (c) => {
+    const bookId = c.req.query("bookId") || undefined;
+    const draftId = c.req.query("draftId") || undefined;
+    const report = await loadImpactReport(storeRoot(deps.root, { bookId, draftId }), c.req.param("impactId"));
+    if (!report) return c.json({ error: "找不到影响报告" }, 404);
+    return c.json(report);
   });
 
   app.get("/api/v1/authoring/reports/:reportId", async (c) => {

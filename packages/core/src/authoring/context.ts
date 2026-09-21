@@ -8,7 +8,7 @@ import { access, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promise
 import { join } from "node:path";
 import { findChapterNode, findVolumeOwningNode, parseVolumeMapTree, volumeMapLeadingNotesMarkdown } from "../utils/volume-map-tree.js";
 import { parseCanon, canonFromCompat, serializeCanon } from "./canon.js";
-import { loadArtifact, loadManifest, loadSettingsCatalog, type AuthoringStoreRoot } from "./store.js";
+import { loadArtifact, loadCurrentImpact, loadManifest, loadSettingsCatalog, type AuthoringStoreRoot } from "./store.js";
 import type { AuthoringStage, CanonDocument, InputRef } from "./types.js";
 
 async function readOptional(path: string): Promise<string> {
@@ -197,14 +197,14 @@ export function serializeCanonBrief(canon: CanonDocument): string {
   ].filter(Boolean).join("\n");
 }
 
-function significantTokens(text: string): string[] {
+export function significantTokens(text: string): string[] {
   return text
     .split(/[\s,，。；;、:：\/\\|()（）\[\]【】]+/)
     .map((token) => token.trim())
     .filter((token) => token.length >= 2 && !/^\d+$/.test(token));
 }
 
-function settingAliases(entry: AdoptedSettingEntry): string[] {
+export function settingAliases(entry: { readonly body: string }): string[] {
   const aliases: string[] = [];
   for (const match of entry.body.matchAll(/\*{0,2}别名\*{0,2}\s*[：:]\s*([^\n]+)/g)) {
     for (const part of (match[1] ?? "").split(/[、,，；;\/／]/)) {
@@ -215,16 +215,17 @@ function settingAliases(entry: AdoptedSettingEntry): string[] {
   return aliases;
 }
 
-function nameHitsNeedle(entry: AdoptedSettingEntry | string, needle: string): boolean {
+export function nameHitsNeedle(entry: { readonly name?: string; readonly body?: string } | string, needle: string): boolean {
   if (typeof entry === "string") return Boolean(entry) && entry.length >= 2 && needle.includes(entry);
   if (entry.name && entry.name.length >= 2 && needle.includes(entry.name)) return true;
-  return settingAliases(entry).some((alias) => needle.includes(alias));
+  if (!entry.body) return false;
+  return settingAliases({ body: entry.body }).some((alias) => needle.includes(alias));
 }
 
 const CONSTRAINT_HEADING = /#{2,3}[^\n]*(?:核心约束|行为底线|年代定位|禁忌|铁律|硬规则|年表|约束)/;
 
-function isConstraintSetting(entry: AdoptedSettingEntry): boolean {
-  return /时间|规则|世界|制度|年表|铁律|约束/.test(`${entry.category}${entry.name}`);
+export function isConstraintSetting(entry: { readonly category?: string; readonly name?: string }): boolean {
+  return /时间|规则|世界|制度|年表|铁律|约束/.test(`${entry.category ?? ""}${entry.name ?? ""}`);
 }
 
 function scoreSettingEntry(entry: AdoptedSettingEntry, needle: string, tokens: readonly string[]): number {
@@ -611,11 +612,23 @@ export async function assembleAuthoringContext(
     previous && `【上一章结尾】\n${previous.slice(-2000)}`,
     previousState && `【上一章状态】\n${previousState.slice(0, 3000)}`,
     options?.extra,
-    manifest.watches.filter((watch) => !watch.acknowledged).length
-      ? `待核对：${manifest.watches.filter((watch) => !watch.acknowledged).map((watch) => watch.label).join("；")}`
-      : "",
+    await writeChapterImpactNote(root, options),
   ].filter(Boolean).join("\n");
   return { text, refs };
+}
+
+async function writeChapterImpactNote(
+  root: AuthoringStoreRoot,
+  options?: { readonly stage?: AuthoringStage; readonly chapterNumber?: number },
+): Promise<string> {
+  if (options?.stage !== "write" || !options.chapterNumber) return "";
+  const impact = await loadCurrentImpact(root);
+  if (!impact) return "";
+  const item = impact.items.find((entry) => (
+    entry.status === "open" && entry.key === `weave:chapter:${options.chapterNumber}`
+  ));
+  if (!item) return "";
+  return `注意：本章概要在正典 v${impact.from.version}→v${impact.to.version} 后尚未核对，理由：${item.reason}`;
 }
 
 export async function assembleStageContext(root: AuthoringStoreRoot, chapterNumber?: number): Promise<string> {

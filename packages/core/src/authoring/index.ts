@@ -20,3 +20,4 @@ export * from "./stages/ask.js";
 export * from "./stages/ground.js";
 export * from "./stages/weave.js";
 export * from "./stages/write.js";
+export * from "./stages/impact.js";
