@@ -2591,6 +2591,89 @@ describe("createStudioServer daemon lifecycle", () => {
     expect([400, 404]).toContain(traversal.status);
   });
 
+  it("uploads, serves, replaces, and clears a local book cover without opening project/files", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    loadBookConfigMock.mockImplementation(async (bookId?: string) => {
+      const raw = await readFile(join(root, "books", String(bookId), "book.json"), "utf-8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    });
+
+    const missing = await app.request("http://localhost/api/v1/books/demo-book/cover");
+    expect(missing.status).toBe(404);
+
+    const png = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "封面.png", { type: "image/png" });
+    const uploadBody = new FormData();
+    uploadBody.append("file", png);
+    const uploaded = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: uploadBody,
+    });
+    expect(uploaded.status).toBe(200);
+    await expect(uploaded.json()).resolves.toMatchObject({
+      ok: true,
+      book: { coverImagePath: expect.stringMatching(/^\/api\/v1\/books\/demo-book\/cover\?v=/) },
+    });
+    const disk = JSON.parse(await readFile(join(root, "books", "demo-book", "book.json"), "utf-8")) as {
+      coverImagePath?: string;
+    };
+    expect(disk.coverImagePath).toBe("cover.png");
+    await expect(readFile(join(root, "books", "demo-book", "cover.png"))).resolves.toHaveLength(8);
+
+    const served = await app.request("http://localhost/api/v1/books/demo-book/cover");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toContain("image/png");
+    expect(Buffer.from(await served.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+    const listed = await app.request("http://localhost/api/v1/books/demo-book");
+    const listedBody = await listed.json() as { book: { coverImagePath?: string } };
+    expect(listedBody.book.coverImagePath).toMatch(/^\/api\/v1\/books\/demo-book\/cover\?v=/);
+
+    const jpg = new File([new Uint8Array([255, 216, 255, 224])], "next.jpg", { type: "image/jpeg" });
+    const replaceBody = new FormData();
+    replaceBody.append("file", jpg);
+    const replaced = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: replaceBody,
+    });
+    expect(replaced.status).toBe(200);
+    await expect(readFile(join(root, "books", "demo-book", "cover.jpg"))).resolves.toHaveLength(4);
+    await expect(readFile(join(root, "books", "demo-book", "cover.png"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const oversized = new File([new Uint8Array(6 * 1024 * 1024 + 1)], "huge.png", { type: "image/png" });
+    const hugeBody = new FormData();
+    hugeBody.append("file", oversized);
+    const rejectedSize = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: hugeBody,
+    });
+    expect(rejectedSize.status).toBe(400);
+    await expect(rejectedSize.json()).resolves.toMatchObject({ error: expect.stringContaining("6 MB") });
+
+    const text = new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" });
+    const textBody = new FormData();
+    textBody.append("file", text);
+    const rejectedType = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: textBody,
+    });
+    expect(rejectedType.status).toBe(400);
+
+    const stillBlocked = await app.request("http://localhost/api/v1/project/files/books/demo-book/cover.jpg");
+    expect(stillBlocked.status).toBe(400);
+
+    const cleared = await app.request("http://localhost/api/v1/books/demo-book/cover", { method: "DELETE" });
+    expect(cleared.status).toBe(200);
+    const clearedBody = await cleared.json() as { book: { coverImagePath?: string } };
+    expect(clearedBody.book.coverImagePath).toBeUndefined();
+    await expect(readFile(join(root, "books", "demo-book", "cover.jpg"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await app.request("http://localhost/api/v1/books/demo-book/cover")).status).toBe(404);
+
+    const unsafeId = await app.request("http://localhost/api/v1/books/../secret/cover");
+    expect([400, 404]).toContain(unsafeId.status);
+  });
+
   it("lists shorts from shorts/ and opens the finished manuscript", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);

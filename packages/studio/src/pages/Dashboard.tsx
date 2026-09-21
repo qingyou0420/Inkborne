@@ -1,7 +1,7 @@
 /** Compact bookshelf with one new-book entry.
  * SPDX-License-Identifier: AGPL-3.0-only
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MoreHorizontal, Plus, Search, UserRound } from "lucide-react";
 import { fetchJson, useApi } from "../hooks/use-api";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -19,6 +19,7 @@ import { STAGE_LABELS, type StudioStageId } from "../lib/appearance";
 import { usePreferencesStore } from "../store/preferences";
 import { useChatStore } from "../store/chat";
 import { bookResumeStage } from "../lib/home-navigation";
+import { BOOK_COVER_ACCEPT, validateBookCoverFile } from "../lib/book-cover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 
 export interface HomeBookSummary {
@@ -77,6 +78,8 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "book" | "short"; id: string; title: string } | null>(null);
   const [settingsBookId, setSettingsBookId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const coverTargetRef = useRef<HomeBookSummary | null>(null);
+  const coverFileRef = useRef<HTMLInputElement>(null);
   const search = query.trim().toLocaleLowerCase();
   const visibleBooks = useMemo(() => books.filter((book) => `${book.title} ${book.genre}`.toLocaleLowerCase().includes(search)), [books, search]);
   const visibleShorts = useMemo(() => shorts.filter((short) => short.title.toLocaleLowerCase().includes(search)), [shorts, search]);
@@ -95,6 +98,47 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
       bumpBookDataVersion();
     } catch (err) { setOperationError(err instanceof Error ? err.message : (isZh ? "未能更新作品状态。" : "Could not update the work.")); }
     finally { setPending(false); }
+  };
+  const pickCover = (book: HomeBookSummary) => {
+    setOperationError(null);
+    coverTargetRef.current = book;
+    coverFileRef.current?.click();
+  };
+  const uploadCover = async (file: File) => {
+    const book = coverTargetRef.current;
+    if (!book) return;
+    const invalid = validateBookCoverFile(file, isZh);
+    if (invalid) {
+      setOperationError(invalid);
+      return;
+    }
+    setPending(true);
+    setOperationError(null);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      await fetchJson(`/books/${encodeURIComponent(book.id)}/cover`, { method: "POST", body });
+      bumpBookDataVersion();
+      reload();
+    } catch (err) {
+      setOperationError(err instanceof Error ? err.message : (isZh ? "封面未保存，请重新选择。" : "Could not save the cover. Please select it again."));
+    } finally {
+      setPending(false);
+      coverTargetRef.current = null;
+    }
+  };
+  const removeCover = async (book: HomeBookSummary) => {
+    setPending(true);
+    setOperationError(null);
+    try {
+      await fetchJson(`/books/${encodeURIComponent(book.id)}/cover`, { method: "DELETE" });
+      bumpBookDataVersion();
+      reload();
+    } catch (err) {
+      setOperationError(err instanceof Error ? err.message : (isZh ? "封面未能移除。" : "Could not remove the cover."));
+    } finally {
+      setPending(false);
+    }
   };
   const deleteWork = async () => {
     if (!deleteTarget || pending) return;
@@ -144,6 +188,8 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
           </button>
           <DropdownMenu><DropdownMenuTrigger className="ink-book-menu" aria-label={isZh ? `《${book.title}》作品菜单` : `${book.title} work menu`} data-testid={`home-book-menu-${book.id}`}><MoreHorizontal size={17} /></DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem data-testid={`home-book-cover-upload-${book.id}`} disabled={pending} onClick={() => pickCover(book)}>{book.coverImagePath ? (isZh ? "更换封面" : "Replace cover") : (isZh ? "上传封面" : "Upload cover")}</DropdownMenuItem>
+              {book.coverImagePath ? <DropdownMenuItem data-testid={`home-book-cover-remove-${book.id}`} disabled={pending} onClick={() => void removeCover(book)}>{isZh ? "移除封面" : "Remove cover"}</DropdownMenuItem> : null}
               <DropdownMenuItem onClick={() => setSettingsBookId(book.id)}>{isZh ? "作品设置" : "Work settings"}</DropdownMenuItem>
               <DropdownMenuItem onClick={() => nav.toAnalytics(book.id)}>{isZh ? "作品统计" : "Statistics"}</DropdownMenuItem>
               <DropdownMenuItem data-testid={`book-export-manuscript-${book.id}`} onClick={() => downloadWork(bookManuscriptExportPath(book.id))}>{isZh ? "导出正文" : "Export manuscript"}</DropdownMenuItem>
@@ -168,5 +214,6 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
     </div>
     <ConfirmDialog open={Boolean(deleteTarget)} title={isZh ? "删除作品" : "Delete work"} message={isZh ? `删除《${deleteTarget?.title ?? ""}》及其全部内容？此操作无法撤销。` : `Delete ${deleteTarget?.title ?? ""} and its contents? This cannot be undone.`} confirmLabel={pending ? (isZh ? "正在删除…" : "Deleting…") : t("common.delete")} cancelLabel={t("common.cancel")} variant="danger" onConfirm={() => void deleteWork()} onCancel={() => { if (!pending) setDeleteTarget(null); }} />
     {settingsBookId ? <BookSettingsDrawer bookId={settingsBookId} open onClose={() => { setSettingsBookId(null); reload(); }} t={t} isZh={isZh} onDeleted={() => { setSettingsBookId(null); bumpBookDataVersion(); reload(); }} /> : null}
+    <input ref={coverFileRef} type="file" accept={BOOK_COVER_ACCEPT} className="sr-only" tabIndex={-1} data-testid="home-book-cover-file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCover(file); event.target.value = ""; }} />
   </section>;
 }

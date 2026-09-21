@@ -129,7 +129,7 @@ describe("P1-3 织卷", () => {
 
 describe("P1-4 书房", () => {
   it("uses 本卷要抵达 / 等你过目 / 四步一览 and drops the old write-next branch", () => {
-    const study = read("src/pages/BookStudy.tsx");
+    const study = read("src/pages/BookStudy.tsx") + read("src/components/BookCoverEditor.tsx");
     expect(study).toMatch(/serial-cockpit-home/);
     expect(study).toMatch(/本卷要抵达/);
     expect(study).toMatch(/等你过目/);
@@ -139,6 +139,8 @@ describe("P1-4 书房", () => {
     expect(study).not.toMatch(/待定 \$\{openCount\}/);
     expect(study).not.toMatch(/「\{oneLine\}」/);
     expect(study).toMatch(/fourStepCopy/);
+    expect(study).toMatch(/BookCoverEditor/);
+    expect(study).toMatch(/上传封面/);
     expect(study).not.toMatch(/skipPreviousApproval/);
     expect(study).not.toMatch(/cockpit-write-next-button/);
     expect(study).not.toMatch(/打开大纲/);

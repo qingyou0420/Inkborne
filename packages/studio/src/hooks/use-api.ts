@@ -124,6 +124,11 @@ export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
     return [normalized, "/api/v1/authoring/workspace"];
   }
 
+  const bookCover = normalized.match(/^\/api\/v1\/books\/([^/]+)\/cover$/);
+  if (bookCover) {
+    return ["/api/v1/books", `/api/v1/books/${bookCover[1]}`];
+  }
+
   const bookAction = normalized.match(/^\/api\/v1\/books\/([^/]+)\/(write-next|draft)$/);
   if (bookAction) {
     return ["/api/v1/books", `/api/v1/books/${bookAction[1]}`];
@@ -281,6 +286,8 @@ export async function fetchJson<T>(
     invalidateApiPaths(deriveInvalidationPaths(path));
   } else if (method !== "GET" && url.startsWith("/api/v1/author")) {
     invalidateApiPaths(["/api/v1/author"]);
+  } else if (method !== "GET" && /\/books\/[^/]+\/cover$/.test(url)) {
+    invalidateApiPaths(deriveInvalidationPaths(path));
   }
   return result;
 }

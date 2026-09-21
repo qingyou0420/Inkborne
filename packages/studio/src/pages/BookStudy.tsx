@@ -10,6 +10,7 @@ import { workspaceQuery } from "../lib/authoring-workspace";
 import { findImpactTriageRun, isCanonImpactWatch, studyImpactAttention } from "../lib/impact-view";
 import { showToast } from "../lib/toast";
 import { useEffect, useMemo, useState } from "react";
+import { BookCoverEditor } from "../components/BookCoverEditor";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { stageStateLabel } from "../components/StageDot";
 import type { WritePreflightEvaluation } from "../components/SerialCockpitStrip";
@@ -27,6 +28,7 @@ import {
 } from "../lib/copy-map";
 import { formatStartedOn, fourStepCopy } from "../lib/stage-copy";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
+import { useChatStore } from "../store/chat";
 
 function formatStudyWords(total: number, isZh: boolean): string {
   if (!isZh) return `${total.toLocaleString()} words`;
@@ -53,7 +55,9 @@ interface BookData {
     readonly status: string;
     readonly language?: string;
     readonly createdAt?: string;
+    readonly updatedAt?: string;
     readonly targetChapters?: number;
+    readonly coverImagePath?: string;
   };
   readonly chapters: ReadonlyArray<ChapterMeta>;
   readonly nextChapter: number;
@@ -105,6 +109,7 @@ export function BookStudy({
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
   const { data: authoring, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const bumpBookDataVersion = useChatStore((s) => s.bumpBookDataVersion);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<CockpitReviewItem>>([]);
@@ -266,16 +271,28 @@ export function BookStudy({
 
   return (
     <div className="space-y-8 fade-in" data-testid="serial-cockpit-home">
-      <header className="space-y-2">
-        <p className="text-[13px] text-muted-foreground">{isZh ? "本书" : "This book"}</p>
-        <h1 className="font-serif text-[32px] font-medium leading-10">{book.title}</h1>
-        <p className="text-sm text-muted-foreground">
-          {[
-            book.genre,
-            formatStartedOn(book.createdAt, isZh),
-            formatStudyWords(totalWords, isZh),
-          ].filter(Boolean).join(" · ")}
-        </p>
+      <header className="flex flex-wrap items-start gap-6">
+        <BookCoverEditor
+          bookId={bookId}
+          title={book.title}
+          coverSrc={book.coverImagePath}
+          isZh={isZh}
+          onChanged={() => {
+            bumpBookDataVersion();
+            void refetch();
+          }}
+        />
+        <div className="min-w-0 flex-1 space-y-2">
+          <p className="text-[13px] text-muted-foreground">{isZh ? "本书" : "This book"}</p>
+          <h1 className="font-serif text-[32px] font-medium leading-10">{book.title}</h1>
+          <p className="text-sm text-muted-foreground">
+            {[
+              book.genre,
+              formatStartedOn(book.createdAt, isZh),
+              formatStudyWords(totalWords, isZh),
+            ].filter(Boolean).join(" · ")}
+          </p>
+        </div>
       </header>
 
       {snapshot?.volume && (
