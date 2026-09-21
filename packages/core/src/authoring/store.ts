@@ -13,12 +13,14 @@ import {
   AuthoringArtifactMetaSchema,
   AuthoringReviewReportSchema,
   AuthoringRunRecordSchema,
+  ImpactReportSchema,
   SettingsCatalogSchema,
   WorkflowManifestSchema,
   type AuthoringArtifactMeta,
   type AuthoringReviewReport,
   type AuthoringRunRecord,
   type AuthoringStage,
+  type ImpactReport,
   type SettingsCatalog,
   type WorkflowManifest,
 } from "./types.js";
@@ -224,6 +226,47 @@ export async function listReports(root: AuthoringStoreRoot, stage?: AuthoringSta
     items.push(report);
   }
   return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function saveImpactReport(
+  root: AuthoringStoreRoot,
+  report: z.input<typeof ImpactReportSchema> | ImpactReport,
+): Promise<ImpactReport> {
+  const dir = join(authoringRootDir(root), "impact");
+  await mkdir(dir, { recursive: true });
+  const parsed = ImpactReportSchema.parse(report);
+  await writeFile(join(dir, `${parsed.impactId}.json`), `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+  return parsed;
+}
+
+export async function loadImpactReport(root: AuthoringStoreRoot, impactId: string): Promise<ImpactReport | undefined> {
+  return readJson(join(authoringRootDir(root), "impact", `${impactId}.json`), (raw) => ImpactReportSchema.parse(raw));
+}
+
+export async function listImpactReports(root: AuthoringStoreRoot): Promise<ImpactReport[]> {
+  const dir = join(authoringRootDir(root), "impact");
+  if (!(await exists(dir))) return [];
+  const files = await readdir(dir);
+  const items: ImpactReport[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    const report = await readJson(join(dir, file), (raw) => ImpactReportSchema.parse(raw));
+    if (report) items.push(report);
+  }
+  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function loadCurrentImpact(root: AuthoringStoreRoot): Promise<ImpactReport | undefined> {
+  const manifest = await loadManifest(root);
+  const mentioned = manifest.watches
+    .map((watch) => watch.impactReportId)
+    .filter((id): id is string => Boolean(id) && id !== "pending");
+  for (const id of mentioned) {
+    const report = await loadImpactReport(root, id);
+    if (report && !report.supersededBy) return report;
+  }
+  const listed = await listImpactReports(root);
+  return listed.find((report) => !report.supersededBy);
 }
 
 export function reportAppliesTo(report: AuthoringReviewReport, artifactId: string): boolean {

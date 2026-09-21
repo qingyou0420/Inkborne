@@ -11,6 +11,7 @@ import { deriveBookIdFromTitle } from "../utils/book-id.js";
 import { serializeCanon } from "./canon.js";
 import { isBookPresent } from "./context.js";
 import { bindDraftToBook, loadDraft } from "./drafts.js";
+import { nextCanonImpactState } from "./stages/impact.js";
 import { loadManifest, saveArtifact, saveManifest, type AuthoringStoreRoot } from "./store.js";
 import type { AuthoringArtifactMeta, CanonDocument } from "./types.js";
 
@@ -70,6 +71,7 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
   readonly bookId: string;
   readonly bookDir: string;
   readonly created: boolean;
+  readonly impactPending?: boolean;
 }> {
   const draft = input.draftId ? await loadDraft(input.projectRoot, input.draftId) : undefined;
   const boundId = input.existingBookId || draft?.bookId;
@@ -93,42 +95,26 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
     await writeFile(join(bookDir, "story", "canon.md"), canonBody.endsWith("\n") ? canonBody : `${canonBody}\n`, "utf-8");
     await syncBookJsonTitle(bookDir, input.canon);
     const root: AuthoringStoreRoot = { projectRoot: input.projectRoot, bookId, draftId: input.draftId };
+    let impactPending = false;
     if (input.fromArtifact) {
-      await saveArtifact(root, { ...input.fromArtifact.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
+      const adopted = await saveArtifact(root, { ...input.fromArtifact.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
       const manifest = await loadManifest(root);
       const previous = manifest.adopted.ask;
       const artifactId = input.fromArtifact.meta.artifactId;
+      const impact = await nextCanonImpactState(root, manifest, previous, adopted);
+      impactPending = impact.impactPending;
       await saveManifest(root, {
         ...manifest,
         bookId,
         draftId: input.draftId ?? manifest.draftId,
         adopted: { ...manifest.adopted, ask: artifactId },
         candidates: { ...manifest.candidates, ask: artifactId },
-        watches: previous && previous !== artifactId
-          ? [
-              ...manifest.watches,
-              {
-                id: `ask-${Date.now()}`,
-                stage: "ground",
-                sourceKind: "canon",
-                sourceId: artifactId,
-                label: "正典已采用新版本，设定可能需要核对",
-                acknowledged: false,
-              },
-              {
-                id: `ask-weave-${Date.now()}`,
-                stage: "weave",
-                sourceKind: "canon",
-                sourceId: artifactId,
-                label: "正典已采用新版本，大纲可能需要核对",
-                acknowledged: false,
-              },
-            ]
-          : manifest.watches,
+        watches: impact.watches,
+        impactBaseline: impact.impactBaseline,
       });
     }
     if (input.draftId) await bindDraftToBook({ projectRoot: input.projectRoot, draftId: input.draftId, bookId, title: input.canon.title });
-    return { bookId, bookDir, created: false };
+    return { bookId, bookDir, created: false, impactPending };
   }
   if (exists) {
     return { bookId, bookDir, created: false };
@@ -188,6 +174,7 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
     candidates: { ask: artifact.artifactId, ground: [], write: {} },
     coverage: {},
     watches: [],
+    impactBaseline: { ask: artifact.artifactId },
     updatedAt: now,
   });
   if (input.draftId) {

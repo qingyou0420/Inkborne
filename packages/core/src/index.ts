@@ -94,6 +94,7 @@ export {
   isLightweightAuthoringBook,
   loadCanonDocument,
   loadManifest,
+  saveManifest,
   listArtifacts,
   listReports,
   listRuns,
@@ -121,6 +122,15 @@ export {
   reviewAskCanon,
   reviseAskCanon,
   adoptAskCanon,
+  triageCanonImpact,
+  closeImpactItems,
+  resolveImpactItems,
+  loadCurrentImpact,
+  loadImpactReport,
+  saveImpactReport,
+  impactWorkspaceSummary,
+  nextCanonImpactState,
+  canonFieldDiff,
   proposeSettingsCatalog,
   generateGroundEntries,
   reviewGroundEntries,
@@ -150,6 +160,9 @@ export {
   type AuthoringRunRecord,
   type AskBookCreateInput,
   type AskBookCreateResult,
+  type ImpactReport,
+  type ImpactItem,
+  type ImpactWorkspaceSummary,
 } from "./authoring/index.js";
 export { type CurrentState, type ParticleLedger, type PendingHooks, type PendingHook, type LedgerEntry } from "./models/state.js";
 export { type GenreProfile, type ParsedGenreProfile, GenreProfileSchema, parseGenreProfile } from "./models/genre-profile.js";

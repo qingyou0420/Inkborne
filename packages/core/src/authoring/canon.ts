@@ -147,3 +147,50 @@ export function canonFromCompat(input: {
 function firstNonEmpty(...values: string[]): string {
   return values.find((value) => value.trim()) ?? "";
 }
+
+export const CANON_IMPACT_FIELDS = [
+  { field: "title", label: "书名", kind: "text" },
+  { field: "genre", label: "类型", kind: "text" },
+  { field: "targetChapters", label: "目标章数", kind: "number" },
+  { field: "chapterWordCount", label: "每章字数", kind: "number" },
+  { field: "oneLine", label: "一句话故事", kind: "text" },
+  { field: "proposition", label: "核心命题", kind: "text" },
+  { field: "protagonist", label: "主角与核心欲望", kind: "text" },
+  { field: "conflict", label: "主要冲突", kind: "text" },
+  { field: "voice", label: "叙事视角与文风", kind: "text" },
+  { field: "boundaries", label: "故事边界", kind: "text" },
+  { field: "direction", label: "初始方向", kind: "text" },
+] as const;
+
+export type CanonImpactField = (typeof CANON_IMPACT_FIELDS)[number]["field"];
+
+export interface CanonFieldChange {
+  readonly field: CanonImpactField;
+  readonly label: string;
+  readonly before: string;
+  readonly after: string;
+  readonly kind: "text" | "number";
+}
+
+function canonFieldText(value: unknown): string {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+/** Field-level canon diff. `openQuestions` is intentionally ignored. */
+export function canonFieldDiff(from: CanonDocument, to: CanonDocument): CanonFieldChange[] {
+  const changes: CanonFieldChange[] = [];
+  for (const spec of CANON_IMPACT_FIELDS) {
+    const before = canonFieldText(from[spec.field]);
+    const after = canonFieldText(to[spec.field]);
+    if (before === after) continue;
+    changes.push({
+      field: spec.field,
+      label: spec.label,
+      before,
+      after,
+      kind: spec.kind,
+    });
+  }
+  return changes;
+}

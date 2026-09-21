@@ -30,6 +30,7 @@ import {
   type AuthoringStoreRoot,
 } from "../store.js";
 import { canonLengthRequiredError, createLightweightBook, hasConfirmedCanonLength, syncBookJsonTitle } from "../book-create.js";
+import { nextCanonImpactState } from "./impact.js";
 import {
   AuthoringRunRecordSchema,
   type AuthoringLlmFn,
@@ -629,7 +630,7 @@ export async function reviseAskCanon(input: AskRuntime & {
 export async function adoptAskCanon(input: AskRuntime & {
   readonly artifactId: string;
   readonly language?: "zh" | "en";
-}): Promise<{ bookId: string; created: boolean; artifactId: string }> {
+}): Promise<{ bookId: string; created: boolean; artifactId: string; impactPending?: boolean }> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到可采用的正典。");
   const canon = parseCanon(loaded.body);
@@ -637,35 +638,22 @@ export async function adoptAskCanon(input: AskRuntime & {
     const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
     await writeFile(join(bookDir, "story", "canon.md"), loaded.body, "utf-8");
     await syncBookJsonTitle(bookDir, canon);
-    await saveArtifact(input.root, { ...loaded.meta, status: "adopted", bodyPath: "story/canon.md" }, loaded.body);
+    const adopted = await saveArtifact(input.root, { ...loaded.meta, status: "adopted", bodyPath: "story/canon.md" }, loaded.body);
     const manifest = await loadManifest(input.root);
     const previous = manifest.adopted.ask;
+    const impact = await nextCanonImpactState(input.root, manifest, previous, adopted);
     await saveManifest(input.root, {
       ...manifest,
       adopted: { ...manifest.adopted, ask: loaded.meta.artifactId },
-      watches: previous && previous !== loaded.meta.artifactId
-        ? [
-            ...manifest.watches,
-            {
-              id: `ask-${Date.now()}`,
-              stage: "ground",
-              sourceKind: "canon",
-              sourceId: loaded.meta.artifactId,
-              label: "正典已采用新版本，设定可能需要核对",
-              acknowledged: false,
-            },
-            {
-              id: `ask-weave-${Date.now()}`,
-              stage: "weave",
-              sourceKind: "canon",
-              sourceId: loaded.meta.artifactId,
-              label: "正典已采用新版本，大纲可能需要核对",
-              acknowledged: false,
-            },
-          ]
-        : manifest.watches,
+      watches: impact.watches,
+      impactBaseline: impact.impactBaseline,
     });
-    return { bookId: input.root.bookId, created: false, artifactId: loaded.meta.artifactId };
+    return {
+      bookId: input.root.bookId,
+      created: false,
+      artifactId: loaded.meta.artifactId,
+      impactPending: impact.impactPending,
+    };
   }
   if (!hasConfirmedCanonLength(canon)) {
     throw canonLengthRequiredError();
@@ -677,5 +665,10 @@ export async function adoptAskCanon(input: AskRuntime & {
     language: input.language,
     fromArtifact: loaded,
   });
-  return { bookId: created.bookId, created: created.created, artifactId: loaded.meta.artifactId };
+  return {
+    bookId: created.bookId,
+    created: created.created,
+    artifactId: loaded.meta.artifactId,
+    impactPending: created.impactPending,
+  };
 }
