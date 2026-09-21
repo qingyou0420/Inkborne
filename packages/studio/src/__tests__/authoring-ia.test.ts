@@ -148,8 +148,14 @@ describe("authoring four-agent IA", () => {
     expect(write).not.toMatch(/上游已有新采用版，审查依据可能需要更新/);
     expect(study).toMatch(/studyImpactAttention/);
     expect(study).toMatch(/相对正典重算影响/);
+    expect(study).toMatch(/study-impact-ack/);
+    expect(study).toMatch(/标为已核对/);
+    expect(write).toMatch(/write-impact-globals/);
+    expect(read("src/App.tsx")).toMatch(/invalidationPathsForAuthoringRunSse/);
+    expect(read("src/hooks/use-api.ts")).toMatch(/invalidationPathsForAuthoringRunSse/);
     expect(read("src/components/AskCanonPanel.tsx")).toMatch(/impactRunId/);
     expect(read("src/lib/authoring-workspace.ts")).toMatch(/readonly impact\?: AuthoringImpactSummary/);
+    expect(read("src/lib/impact-view.ts")).toMatch(/impactGlobalsCopy/);
   });
 
   it("keeps the catalog and outline unchanged when no impact items are open", () => {

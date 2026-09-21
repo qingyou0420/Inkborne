@@ -4,6 +4,7 @@ import {
   chapterMutationInvalidationPaths,
   deriveInvalidationPaths,
   fetchJson,
+  invalidationPathsForAuthoringRunSse,
   invalidationPathsForChapterMutationSse,
   StudioApiError,
 } from "./use-api";
@@ -203,6 +204,25 @@ describe("deriveInvalidationPaths", () => {
     expect(invalidationPathsForChapterMutationSse({
       event: "write:complete",
       data: { bookId: "demo", chapterNumber: 4 },
+    })).toEqual([]);
+  });
+
+  it("refreshes the book workspace when an authoring run settles over SSE", () => {
+    expect(invalidationPathsForAuthoringRunSse({
+      event: "authoring:run",
+      data: { bookId: "demo", status: "completed", runId: "run-1" },
+    })).toEqual(["/api/v1/authoring/workspace?bookId=demo"]);
+    expect(invalidationPathsForAuthoringRunSse({
+      event: "authoring:run",
+      data: { draftId: "draft-1", status: "failed" },
+    })).toEqual(["/api/v1/authoring/workspace?draftId=draft-1"]);
+    expect(invalidationPathsForAuthoringRunSse({
+      event: "authoring:run",
+      data: { bookId: "demo", status: "running" },
+    })).toEqual([]);
+    expect(invalidationPathsForAuthoringRunSse({
+      event: "write:complete",
+      data: { bookId: "demo", status: "completed" },
     })).toEqual([]);
   });
 });

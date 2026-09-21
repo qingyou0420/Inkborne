@@ -353,6 +353,23 @@ export function BookStudy({
                         {isZh ? "去织卷" : "Go to Weave"}
                       </button>
                     ) : null}
+                    {item.key.startsWith("impact") && impactLine && (impactLine.degraded || impactLine.legacy || impactLine.globals) ? (
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline-offset-2 hover:underline"
+                        data-testid="study-impact-ack"
+                        onClick={() => {
+                          void postApi("/authoring/impact/resolve", { bookId, as: "reviewed" }).then(() => {
+                            showToast(isZh ? "已标为已核对" : "Marked reviewed");
+                            void refetchAuthoring();
+                          }).catch((error: unknown) => {
+                            showToast(error instanceof Error ? error.message : String(error), "error");
+                          });
+                        }}
+                      >
+                        {isZh ? "标为已核对" : "Mark reviewed"}
+                      </button>
+                    ) : null}
                   </span>
                 ) : item.label}
               </li>

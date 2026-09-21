@@ -264,6 +264,9 @@ function watchLabel(stage: "ground" | "weave", report: ImpactReport, counts: { g
   if (report.degraded) {
     return `${span} 已采用，影响分辨失败：${report.degraded.reason}，可重算`;
   }
+  if (counts.ground === 0 && counts.weave === 0 && report.globals.length) {
+    return `${span}：${report.globals.map((item) => item.note).filter(Boolean).join("；")}`;
+  }
   if (stage === "ground") return `${span}：设定 ${counts.ground} 条需核对`;
   return `${span}：章概要 ${counts.weave} 章需核对`;
 }
@@ -273,6 +276,16 @@ function degradedUnresolved(report: ImpactReport): boolean {
   return Boolean(report.degraded) && report.items.length === 0;
 }
 
+function globalsUnresolved(report: ImpactReport): boolean {
+  return report.globals.length > 0 && !report.items.some((item) => item.status === "open") && !degradedUnresolved(report);
+}
+
+function reminderUnresolved(report: ImpactReport | undefined): boolean {
+  if (!report || report.supersededBy) return false;
+  if (report.items.some((item) => item.status === "open")) return true;
+  return degradedUnresolved(report) || globalsUnresolved(report);
+}
+
 async function syncImpactWatches(
   root: AuthoringStoreRoot,
   report: ImpactReport,
@@ -280,7 +293,7 @@ async function syncImpactWatches(
 ): Promise<void> {
   const manifest = await loadManifest(root);
   const counts = openCounts(report.items);
-  const holdDegraded = degradedUnresolved(report) && !options?.acknowledgeDegraded;
+  const holdDegraded = (degradedUnresolved(report) || globalsUnresolved(report)) && !options?.acknowledgeDegraded;
   const watches = upsertCanonWatches(manifest, {
     fromArtifactId: report.from.artifactId,
     toArtifactId: report.to.artifactId,
@@ -758,6 +771,11 @@ async function writeStageReports(input: {
   ];
   let groundReportId: string | undefined;
   let weaveReportId: string | undefined;
+  const globalsLine = input.report.globals
+    .map((item) => item.note.trim())
+    .filter(Boolean)
+    .join("；");
+  const withGlobals = (summary: string): string => (globalsLine ? `${summary} 全局项：${globalsLine}` : summary);
   if (groundItems.length) {
     const targetRefs = [...new Set(groundItems.flatMap((item) => {
       if (item.key === "ground:catalog") return ["catalog"];
@@ -774,9 +792,9 @@ async function writeStageReports(input: {
       inputRefs,
       actualReviewModel: input.model,
       createdAt: nowIso(),
-      summary: input.report.degraded
+      summary: withGlobals(input.report.degraded
         ? `影响分辨降级：${input.report.degraded.reason}`
-        : `设定 ${groundItems.length} 条需对照新正典核对。`,
+        : `设定 ${groundItems.length} 条需对照新正典核对。`),
       issues: reviewIssues(groundItems, input.report.changes),
       stale: false,
       incomplete: false,
@@ -796,9 +814,9 @@ async function writeStageReports(input: {
       inputRefs,
       actualReviewModel: input.model,
       createdAt: nowIso(),
-      summary: input.report.degraded
+      summary: withGlobals(input.report.degraded
         ? `影响分辨降级：${input.report.degraded.reason}`
-        : `章概要 ${weaveItems.filter((item) => item.key !== "weave:structure").length} 章需对照新正典核对。`,
+        : `章概要 ${weaveItems.filter((item) => item.key !== "weave:structure").length} 章需对照新正典核对。`),
       issues: reviewIssues(weaveItems, input.report.changes),
       stale: false,
       incomplete: false,
@@ -862,6 +880,22 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
       progressTotal: 1,
       progressLabel: "正典内容未变，无需分辨影响",
     }, input.onProgress);
+    const current = await loadCurrentImpact(input.root);
+    if (!reminderUnresolved(current)) {
+      const latest = await loadManifest(input.root);
+      const pending = latest.watches.filter((watch) => watch.sourceKind === "canon" && !watch.acknowledged);
+      if (pending.length) {
+        await saveManifest(input.root, {
+          ...latest,
+          watches: latest.watches.map((watch) => (
+            watch.sourceKind === "canon" && !watch.acknowledged
+              ? { ...watch, acknowledged: true, openCount: 0 }
+              : watch
+          )),
+          impactBaseline: { ask: toId },
+        });
+      }
+    }
     return { unchanged: true };
   }
 
@@ -1102,6 +1136,18 @@ async function closeMatchingItems(
 ): Promise<ImpactReport> {
   const items = report.items.map((item) => mutate(item) ?? item);
   return ImpactReportSchema.parse({ ...report, items });
+}
+
+export async function closeImpactItemsAfterAdopt(
+  root: AuthoringStoreRoot,
+  input: { readonly ground?: readonly string[]; readonly weaveBody?: string; readonly weaveArtifactId?: string },
+): Promise<ImpactReport | undefined> {
+  try {
+    return await closeImpactItems(root, input);
+  } catch (error) {
+    console.warn("[authoring] closeImpactItems after adopt failed", error instanceof Error ? error.message : error);
+    return undefined;
+  }
 }
 
 export async function closeImpactItems(
