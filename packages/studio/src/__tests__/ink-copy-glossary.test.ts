@@ -25,6 +25,9 @@ const glossaryFiles = [
   "src/pages/BookGround.tsx",
   "src/pages/BookStudy.tsx",
   "src/pages/ShortReader.tsx",
+  "src/lib/impact-view.ts",
+  "src/components/AuthoringGroundPanel.tsx",
+  "src/components/AuthoringWritePanel.tsx",
 ] as const;
 
 describe("P0-A ink copy glossary", () => {

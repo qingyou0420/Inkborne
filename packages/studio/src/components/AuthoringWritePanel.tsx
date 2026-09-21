@@ -10,8 +10,14 @@ import { previousChapterSettleHold, producedArtifactForScope, selectScopedAuthor
 import { writeStateMissing } from "../lib/write-directory";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
-import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
+import type { AuthoringImpactSummary, AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { currentWriteArtifact, reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
+import {
+  findImpactTriageRun,
+  rememberImpactFocus,
+  writeImpactActionLabel,
+  writeImpactBanner,
+} from "../lib/impact-view";
 import { GenerationRequirements } from "./GenerationRequirements";
 import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
@@ -300,6 +306,15 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
     : authoringRun.run?.status === "failed"
       ? (authoringRun.run.error ?? (isZh ? "这次操作失败" : "This run failed"))
       : null;
+  const triage = findImpactTriageRun(data?.runs);
+  const impactBanner = writeImpactBanner({
+    impact: data?.impact,
+    watches: data?.manifest?.watches,
+    chapterNumber,
+    triageRunning: triage?.status === "running" || triage?.status === "pausing",
+    authoringBook: data?.authoringBook,
+    isZh,
+  });
 
   return (
     <section className={`manuscript-workspace ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-write-panel" aria-busy={Boolean(busy)}>
@@ -316,7 +331,44 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
         </div>
         {previousSettleActive ? <p className="manuscript-notice" data-testid="write-previous-settle-hold">{isZh ? `正在整理第 ${chapterNumber - 1} 章状态，完成后可写下一章` : `Settling chapter ${chapterNumber - 1} before writing the next chapter.`}</p> : null}
         {chapterStateMissing && !previousSettleActive ? <p className="manuscript-notice" data-testid="write-state-missing">{isZh ? "本章已采用，但状态尚未整理。" : "This chapter is adopted, but its state is not settled."}</p> : null}
-        {data?.manifest?.watches?.some((watch) => !watch.acknowledged) ? <p className="manuscript-notice">{isZh ? "上游已有新采用版，审查依据可能需要更新。" : "Upstream content changed; the review basis may need updating."}</p> : null}
+        {impactBanner ? (
+          <div className="manuscript-notice" data-testid="write-impact-banner">
+            <p>{impactBanner.text}</p>
+            {impactBanner.chapterText ? <p>{impactBanner.chapterText}</p> : null}
+            {impactBanner.actions.length > 0 ? (
+              <p className="flex flex-wrap gap-2">
+                {impactBanner.actions.map((action) => (
+                  <button
+                    key={action}
+                    type="button"
+                    className="btn-ghost"
+                    data-testid={`write-impact-${action}`}
+                    onClick={() => {
+                      if (action === "ground") goBookAuthoringStage(bookId, "ground");
+                      else if (action === "weave") goBookAuthoringStage(bookId, "weave");
+                      else if (action === "chapter") {
+                        rememberImpactFocus(`chapter:${chapterNumber}`);
+                        goBookAuthoringStage(bookId, "weave");
+                      } else if (action === "recompute") {
+                        void run("impact", async () => {
+                          const result = await postApi<{ runId?: string; status?: string }>("/authoring/impact/recompute", { bookId });
+                          if (result.runId) setActiveRunId(result.runId);
+                          showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+                        });
+                      } else {
+                        void run("impact", async () => {
+                          await postApi<{ ok: boolean; impact?: AuthoringImpactSummary }>("/authoring/impact/resolve", { bookId, as: "reviewed" });
+                        });
+                      }
+                    }}
+                  >
+                    {writeImpactActionLabel(action, isZh)}
+                  </button>
+                ))}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {switchedInBackground ? <p className="manuscript-notice">{isZh ? "候选已在别处更新。你的手改已保留，保存将另存为新候选。" : "Another candidate was selected. Your edits are retained and will save as a new candidate."}</p> : null}
       </header>
       {error ? <div className="manuscript-error" role="alert"><span>{error}</span>{!failure ? <button type="button" className="btn-ghost" onClick={() => { void refetch(); void refetchArtifact(); }}>{isZh ? "重新加载" : "Retry loading"}</button> : null}</div> : null}

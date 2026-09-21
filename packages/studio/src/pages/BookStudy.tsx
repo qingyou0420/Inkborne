@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { fetchJson, useApi } from "../hooks/use-api";
+import { fetchJson, postApi, useApi } from "../hooks/use-api";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
+import { findImpactTriageRun, isCanonImpactWatch, studyImpactAttention } from "../lib/impact-view";
+import { showToast } from "../lib/toast";
 import { useEffect, useMemo, useState } from "react";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { stageStateLabel } from "../components/StageDot";
@@ -102,7 +104,7 @@ export function BookStudy({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
-  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data: authoring, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<CockpitReviewItem>>([]);
@@ -211,8 +213,24 @@ export function BookStudy({
       onClick: () => setCanonOpen((open) => !open),
     });
   }
+  const triage = findImpactTriageRun(authoring?.runs);
+  const impactLine = studyImpactAttention({
+    impact: authoring?.impact,
+    watches: authoring?.manifest?.watches,
+    triageRunning: triage?.status === "running" || triage?.status === "pausing",
+    authoringBook: authoring?.authoringBook,
+    isZh,
+  });
+  if (impactLine) {
+    attentionItems.push({
+      key: impactLine.key,
+      label: impactLine.label,
+      onClick: () => goStage(nav, bookId, impactLine.groundOpen >= impactLine.weaveOpen ? "ground" : "weave"),
+    });
+  }
   for (const watch of authoring?.manifest?.watches ?? []) {
     if (watch.acknowledged) continue;
+    if (isCanonImpactWatch(watch)) continue;
     attentionItems.push({
       key: `watch-${watch.id}`,
       label: watch.label,
@@ -295,15 +313,47 @@ export function BookStudy({
 
       {attentionItems.length > 0 && (
         <section className="space-y-2" data-testid="cockpit-attention">
-          <div className="text-sm font-medium">{isZh ? "等你过目" : "Waiting for you"}</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium">{isZh ? "等你过目" : "Waiting for you"}</div>
+            {authoring?.authoringBook ? (
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                data-testid="impact-recompute"
+                onClick={() => {
+                  void postApi("/authoring/impact/recompute", { bookId }).then(() => {
+                    showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+                    void refetch();
+                    void refetchAuthoring();
+                  }).catch((error: unknown) => {
+                    showToast(error instanceof Error ? error.message : String(error), "error");
+                  });
+                }}
+              >
+                {isZh ? "相对正典重算影响" : "Recompute canon impact"}
+              </button>
+            ) : null}
+          </div>
           <ul className="space-y-1 text-sm">
             {attentionItems.map((item) => (
-              <li key={item.key}>
+              <li key={item.key} data-testid={item.key.startsWith("impact") ? "study-impact-attention" : undefined}>
                 {item.onClick ? (
-                  <button type="button" className="underline-offset-2 hover:underline" onClick={item.onClick}>
-                    {item.label}
-                    {isZh ? " → 去看" : " → Open"}
-                  </button>
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <button type="button" className="underline-offset-2 hover:underline" onClick={item.onClick}>
+                      {item.label}
+                      {isZh ? " → 去看" : " → Open"}
+                    </button>
+                    {item.key.startsWith("impact") && impactLine && impactLine.groundOpen > 0 ? (
+                      <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" onClick={() => goStage(nav, bookId, "ground")}>
+                        {isZh ? "去研墨" : "Go to Ground"}
+                      </button>
+                    ) : null}
+                    {item.key.startsWith("impact") && impactLine && impactLine.weaveOpen > 0 ? (
+                      <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" onClick={() => goStage(nav, bookId, "weave")}>
+                        {isZh ? "去织卷" : "Go to Weave"}
+                      </button>
+                    ) : null}
+                  </span>
                 ) : item.label}
               </li>
             ))}

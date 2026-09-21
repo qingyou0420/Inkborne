@@ -7,6 +7,15 @@
 import { fetchJson, useApi } from "../hooks/use-api";
 import { showToast } from "../lib/toast";
 import { workspaceQuery, type AuthoringWorkspace } from "../lib/authoring-workspace";
+import {
+  defaultImpactFilter,
+  openStructureImpact,
+  openWeaveItemForNode,
+  shouldShowImpactFilter,
+  takeImpactFocus,
+  truncateImpactReason,
+  type ImpactCatalogFilter,
+} from "../lib/impact-view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
@@ -92,7 +101,10 @@ function nodeVisible(
   node: VolumeMapChapterNode,
   filter: Filter,
   query: string,
+  impactFilter: ImpactCatalogFilter,
+  impact: AuthoringWorkspace["impact"],
 ): boolean {
+  if (impactFilter === "needs-review" && !openWeaveItemForNode(impact, node.id, node.chapterNumber, node.endChapter)) return false;
   if (filter === "coarse" && node.kind !== "range") return false;
   if (filter === "pending" && (node.kind !== "range" && isRefinedChapter(node))) return false;
   if (filter === "refined" && !isRefinedChapter(node)) return false;
@@ -132,6 +144,8 @@ function OutlineWorkspaceBook({
   const [editingSelected, setEditingSelected] = useState(false);
   const [directoryOpen, setDirectoryOpen] = useState(true);
   const [filter, setFilter] = useState<Filter>("all");
+  const [impactFilter, setImpactFilter] = useState<ImpactCatalogFilter>("all");
+  const impactSeeded = useRef<string | null>(null);
   const [query, setQuery] = useState("");
   const weaveBeforeLeave = useRef<(() => Promise<boolean>) | null>(null);
   const registerWeaveBeforeLeave = useCallback((guard: (() => Promise<boolean>) | null) => { weaveBeforeLeave.current = guard; }, []);
@@ -202,17 +216,38 @@ function OutlineWorkspaceBook({
   };
   useEffect(() => { installUnloadGuard(); }, []);
 
+  const impact = authoring?.impact;
+  const showImpactFilter = shouldShowImpactFilter(impact?.openCount.weave ?? 0, authoring?.authoringBook);
+  const structureImpact = openStructureImpact(impact);
+
+  useEffect(() => {
+    const focused = takeImpactFocus();
+    if (focused) setSelectedId(focused);
+  }, [bookId]);
+
+  useEffect(() => {
+    if (!showImpactFilter) {
+      if (impactFilter === "needs-review") setImpactFilter("all");
+      return;
+    }
+    const token = impact?.impactId ?? "pending";
+    if (impactSeeded.current === token) return;
+    impactSeeded.current = token;
+    setImpactFilter(defaultImpactFilter(impact?.openCount.weave ?? 0));
+  }, [showImpactFilter, impact?.impactId, impact?.openCount.weave, impactFilter]);
+
   const visibleVolumes = tree.volumes
     .map((volume) => ({
       ...volume,
-      chapters: volume.chapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase())),
+      chapters: volume.chapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase(), showImpactFilter ? impactFilter : "all", impact)),
     }))
     .filter((volume) => {
       if (volume.chapters.length > 0) return true;
+      if (showImpactFilter && impactFilter === "needs-review") return false;
       if (query && !`${volume.title} ${volume.body} ${volume.okr}`.toLowerCase().includes(query.trim().toLowerCase())) return false;
       return filter === "all";
     });
-  const visibleOrphans = tree.orphanChapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase()));
+  const visibleOrphans = tree.orphanChapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase(), showImpactFilter ? impactFilter : "all", impact));
   const targetChapters = data?.book.targetChapters && data.book.targetChapters > 0
     ? data.book.targetChapters
     : Math.max(tree.chapterCount, 1);
@@ -412,6 +447,27 @@ function OutlineWorkspaceBook({
       ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
+            {showImpactFilter ? (
+              <div className="flex items-center gap-2 text-[12px]" data-testid="impact-filter">
+                <button
+                  type="button"
+                  data-testid="impact-filter-needs-review"
+                  className={impactFilter === "needs-review" ? "font-medium text-foreground" : "text-muted-foreground"}
+                  onClick={() => setImpactFilter("needs-review")}
+                >
+                  {isZh ? `需核对 ${impact?.openCount.weave ?? 0}` : `Needs review ${impact?.openCount.weave ?? 0}`}
+                </button>
+                <span className="text-muted-foreground">·</span>
+                <button
+                  type="button"
+                  data-testid="impact-filter-all"
+                  className={impactFilter === "all" ? "font-medium text-foreground" : "text-muted-foreground"}
+                  onClick={() => setImpactFilter("all")}
+                >
+                  {isZh ? `全部 ${tree.chapterCount}` : `All ${tree.chapterCount}`}
+                </button>
+              </div>
+            ) : null}
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -462,7 +518,10 @@ function OutlineWorkspaceBook({
                   onClick={() => void selectNode(BOOK_OUTLINE_ID)}
                 >
                   {t("weave.bookOutline")}
-                  <small>{isZh ? "规划" : "Plan"}</small>
+                  <small>
+                    {isZh ? "规划" : "Plan"}
+                    {structureImpact ? (isZh ? " · 分卷需重规划" : " · volumes need replanning") : ""}
+                  </small>
                 </button>
                 <p className="px-3 py-2 text-xs text-muted-foreground">{isZh ? "已采用卷纲" : "Adopted outline"}</p>
                 <div className="flex-1">
@@ -483,6 +542,7 @@ function OutlineWorkspaceBook({
                         node={node}
                         selected={selectedId === node.id}
                         written={written.has(node.chapterNumber)}
+                        impactItem={openWeaveItemForNode(impact, node.id, node.chapterNumber, node.endChapter)}
                         onClick={() => void selectNode(node.id)}
                         isZh={isZh}
                       />
@@ -505,6 +565,7 @@ function OutlineWorkspaceBook({
                     node={node}
                     selected={selectedId === node.id}
                     written={written.has(node.chapterNumber)}
+                    impactItem={openWeaveItemForNode(impact, node.id, node.chapterNumber, node.endChapter)}
                     onClick={() => void selectNode(node.id)}
                     isZh={isZh}
                   />
@@ -792,12 +853,14 @@ function ChapterRow({
   node,
   selected,
   written,
+  impactItem,
   onClick,
   isZh,
 }: {
   readonly node: VolumeMapChapterNode;
   readonly selected: boolean;
   readonly written: boolean;
+  readonly impactItem?: { readonly verdict: "affected" | "maybe"; readonly reason: string } | undefined;
   readonly onClick: () => void;
   readonly isZh: boolean;
 }) {
@@ -811,12 +874,13 @@ function ChapterRow({
       type="button"
       onClick={onClick}
       data-testid={coarse ? "outline-coarse-row" : "outline-chapter-row"}
+      title={impactItem?.reason}
       className={`flex w-full items-center gap-2 px-5 py-1.5 text-left text-sm border-b border-border/20 ${
         coarse ? "text-muted-foreground/70" : ""
       } ${selected ? "bg-primary/10 text-primary" : "hover:bg-muted/30 text-muted-foreground"}`}
     >
-      {coarse ? null : <StageDot state={written ? "done" : "todo"} />}
-      <span className="truncate">{label}{shortTitle ? ` ${truncateOutlineLabel(shortTitle)}` : ""}</span>
+      {impactItem ? <span className="impact-dot" data-verdict={impactItem.verdict} /> : coarse ? null : <StageDot state={written ? "done" : "todo"} />}
+      <span className="min-w-0 truncate">{label}{shortTitle ? ` ${truncateOutlineLabel(shortTitle)}` : ""}{impactItem ? ` · ${truncateImpactReason(impactItem.reason, 24)}` : ""}</span>
     </button>
   );
 }

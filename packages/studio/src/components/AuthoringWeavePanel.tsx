@@ -10,9 +10,17 @@ import { invalidateBookStage } from "../hooks/use-book-stage";
 import { useChatStore } from "../store/chat";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
-import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
+import type { AuthoringImpactSummary, AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { GenerationRequirements } from "./GenerationRequirements";
-import { resolveAdoptArtifactId, workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
+import { resolveAdoptArtifactId, workspaceQuery, reportById, reportForArtifact } from "../lib/authoring-workspace";
+import {
+  impactRegenerateRequirements,
+  openImpactItems,
+  openStructureImpact,
+  openWeaveItemForNode,
+  weaveReviseRangeFromIssues,
+} from "../lib/impact-view";
+import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
 import { pollWeaveRun, readWeaveSegment, replaceWeaveSegment, resolveWeaveVolumeRange } from "../lib/weave-editor-state";
 import { weaveLengthGateCopy } from "../lib/stage-copy";
@@ -96,6 +104,7 @@ export function AuthoringWeavePanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [generation, setGeneration] = useState<{ issueIds?: ReadonlyArray<string>; reuseStale?: boolean; mode?: "chapters" | "structure" } | null>(null);
   const [requirementNotes, setRequirementNotes] = useState("");
+  const [canonDiffOpen, setCanonDiffOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const decision = useDraftDecision(isZh);
   const restoredEdit = useRef(pendingWeaveEdits.get(bookId));
@@ -133,6 +142,11 @@ export function AuthoringWeavePanel({
     || (filledChapterCount === 0 && plannedVolumes.length > 0);
   const hasValidVolumes = plannedVolumes.length > 0;
   const selectedSegment = selectedNodeId ? readWeaveSegment(editBody || structureBody, selectedNodeId) : null;
+  const impact = data?.impact;
+  const selectedImpact = selectedNodeId
+    ? openWeaveItemForNode(impact, selectedNodeId, Number(/:(\d+)/.exec(selectedNodeId)?.[1] || 0) || undefined)
+    : openStructureImpact(impact);
+  const openWeaveItems = openImpactItems(impact, "weave");
   const run = liveRun ?? (activeRunId && lastWeave?.runId === activeRunId ? lastWeave : null);
   const running = busy === "generate" || Boolean(run && (run.status === "running" || run.status === "pausing"));
 
@@ -329,6 +343,36 @@ export function AuthoringWeavePanel({
     return runAction("review", async () => { const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId); const next = await postApi<AuthoringReport>("/authoring/weave/review", { bookId, artifactId, coverage: isZh ? "整份规划" : "Entire outline", wait: true }); setReport(next); return next; });
   };
   const generationNotes = generationReviewNotes(activeReport, [currentId]);
+  const resolveImpact = (keys: string[], as: "reviewed" | "dismissed") => runAction("impact", async () => {
+    if (keys.length === 0) return;
+    await postApi<{ ok: boolean; impact?: AuthoringImpactSummary }>("/authoring/impact/resolve", { bookId, keys, as });
+    return true;
+  });
+  const recomputeImpact = () => runAction("impact", async () => {
+    const result = await postApi<{ runId?: string; status?: string }>("/authoring/impact/recompute", { bookId });
+    if (result.runId) {
+      setActiveRunId(result.runId);
+      setPollEpoch((epoch) => epoch + 1);
+      setLiveRun({ runId: result.runId, status: result.status ?? "running", progressLabel: "正在分辨正典改动的影响" });
+    }
+    showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+    return result;
+  });
+  const openImpactReport = () => {
+    const next = reportById(data?.reports, impact?.weaveReportId);
+    if (next) {
+      setReport(next);
+      setReportOpen(true);
+      return;
+    }
+    if (!impact?.weaveReportId) return;
+    void runAction("review", async () => {
+      const loaded = await fetchJson<AuthoringReport>(`/authoring/reports/${encodeURIComponent(impact.weaveReportId!)}?bookId=${encodeURIComponent(bookId)}`);
+      setReport(loaded);
+      setReportOpen(true);
+      return loaded;
+    });
+  };
 
   if (lengthMissing) {
     const gate = weaveLengthGateCopy(isZh);
@@ -351,6 +395,15 @@ export function AuthoringWeavePanel({
       {pollError && <p role="alert" className="text-sm text-destructive">{isZh ? "进度暂时无法读取，正在重试。" : "Unable to read progress. Retrying."} {pollError}</p>}
       {run?.error && <p role="alert" className="text-sm text-destructive">{run.error}</p>}
       {dirty && candidate && editBaseId.current !== candidate.artifactId && <p role="status" className="text-sm text-muted-foreground">{isZh ? "候选已有新版本。你的手改已保留，保存会生成新候选。" : "A newer candidate exists. Your edits are retained and will save as a new candidate."}</p>}
+      {selectedImpact ? (
+        <div className="ink-notice text-sm" data-testid="impact-entry-reason">
+          <p title={selectedImpact.reason}>{selectedImpact.reason}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" className="btn-ghost" data-testid="impact-resolve-reviewed" disabled={Boolean(busy) || running} onClick={() => void resolveImpact([selectedImpact.key], "reviewed")}>{isZh ? "标为已核对" : "Mark reviewed"}</button>
+            <button type="button" className="btn-ghost" data-testid="impact-resolve-dismissed" disabled={Boolean(busy) || running} onClick={() => void resolveImpact([selectedImpact.key], "dismissed")}>{isZh ? "忽略" : "Ignore"}</button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-serif text-2xl">{isZh ? "本书规划" : "Book plan"}</h2>
@@ -364,7 +417,7 @@ export function AuthoringWeavePanel({
         </div>
         <span className="text-xs text-muted-foreground">{dirty ? (isZh ? "未保存修改" : "Unsaved edits") : currentId === adoptedId && adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "候选" : "Candidate")}</span>
       </div>
-      <RegenerateDialog open={Boolean(generation)} title={generation?.mode === "structure" ? (isZh ? "重新规划分卷" : "Replan volumes") : (isZh ? "规划章节概要" : "Plan chapter summaries")} scopeLabel={generation?.mode === "structure" ? (isZh ? `全书 ${target || "—"} 章` : `Book ${target || "—"} ch`) : (isZh ? `第 ${startChapter}–${endChapter} 章` : `Chapters ${startChapter}–${endChapter}`)} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && report ? report.summary : generationNotes} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
+      <RegenerateDialog open={Boolean(generation)} title={generation?.mode === "structure" ? (isZh ? "重新规划分卷" : "Replan volumes") : (isZh ? "规划章节概要" : "Plan chapter summaries")} scopeLabel={generation?.mode === "structure" ? (isZh ? `全书 ${target || "—"} 章` : `Book ${target || "—"} ch`) : (isZh ? `第 ${startChapter}–${endChapter} 章` : `Chapters ${startChapter}–${endChapter}`)} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && report ? report.summary : generationNotes ?? impactRegenerateRequirements(openWeaveItems, isZh)} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
         if (!generation) return false;
         const ok = generation.issueIds && report && currentId ? (await runAction("revise", async () => {
           const result = await postApi<WeaveRun>("/authoring/weave/revise", {
@@ -514,6 +567,18 @@ export function AuthoringWeavePanel({
           <span className="text-xs text-muted-foreground">{isZh ? "作用于整份规划" : "Applies to the entire outline"}</span>
           <DropdownMenu><DropdownMenuTrigger className="quiet" aria-label={isZh ? "更多操作" : "More actions"} disabled={Boolean(busy) || running || dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger><DropdownMenuContent align="end">
             <DropdownMenuItem onClick={() => setGeneration({ mode: "structure" })}>{isZh ? "重新规划分卷" : "Replan volumes"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!impact?.weaveReportId} onClick={openImpactReport}>{isZh ? "按意见修订" : "Revise from notes"}</DropdownMenuItem>
+            {openWeaveItems.length > 0 ? <DropdownMenuItem onClick={() => {
+              const chapters = openWeaveItems.filter((item) => item.key !== "weave:structure");
+              const nums = chapters.map((item) => Number(item.targetId.replace(/^\D+/, ""))).filter((n) => Number.isInteger(n) && n > 0);
+              if (nums.length) {
+                setStartChapter(String(Math.min(...nums)));
+                setEndChapter(String(Math.max(...nums)));
+              }
+              setGeneration({ mode: openStructureImpact(impact) ? "structure" : "chapters" });
+            }}>{isZh ? "按影响重新生成所选" : "Regenerate by impact"}</DropdownMenuItem> : null}
+            <DropdownMenuItem data-testid="impact-recompute" onClick={() => void recomputeImpact()}>{isZh ? "相对正典重算影响" : "Recompute canon impact"}</DropdownMenuItem>
+            {impact?.from && impact.to ? <DropdownMenuItem onClick={() => setCanonDiffOpen(true)}>{isZh ? "查看正典改动" : "View canon changes"}</DropdownMenuItem> : null}
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!report} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
@@ -601,14 +666,19 @@ export function AuthoringWeavePanel({
         onRevise={(issueIds, reuseStale) => {
           if (!candidate || !report) return;
           if (editing || dirty) { showToast(isZh ? "请先保存或取消当前修改。" : "Save or cancel your edits first.", "info"); return; }
-          if (!isStructureCandidate) applyVolumeRange();
-          setGeneration({ issueIds, reuseStale, mode: isStructureCandidate ? "structure" : "chapters" });
+          const range = weaveReviseRangeFromIssues(report.issues.filter((issue) => issueIds.includes(issue.issueId)));
+          if (range.startChapter && range.endChapter) {
+            setStartChapter(String(range.startChapter));
+            setEndChapter(String(range.endChapter));
+          } else if (!isStructureCandidate) applyVolumeRange();
+          setGeneration({ issueIds, reuseStale, mode: range.structure || isStructureCandidate ? "structure" : "chapters" });
         }}
       />
       <ManuscriptHistoryDrawer open={historyOpen} bookId={bookId} title={isZh ? "规划版本" : "Outline versions"} artifacts={history} currentId={currentId} adoptedId={adoptedId} isZh={isZh} busy={Boolean(busy)} onClose={() => setHistoryOpen(false)} onRestore={async (artifactId, body) => {
         const ok = await runAction("restore", async () => { await putApi(`/authoring/artifacts/${encodeURIComponent(artifactId)}`, { bookId, body }); pendingSavedId.current = undefined; return true; });
         return ok === true;
       }} />
+      <AuthoringDiffDrawer open={canonDiffOpen} bookId={bookId} leftId={impact?.from.artifactId} rightId={impact?.to.artifactId} isZh={isZh} onClose={() => setCanonDiffOpen(false)} />
       {decision.dialog}
     </section>
   );

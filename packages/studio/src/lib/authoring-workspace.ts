@@ -49,7 +49,39 @@ export interface AuthoringCatalogEntry {
   readonly archived?: boolean;
 }
 
+export interface AuthoringImpactItem {
+  readonly key: string;
+  readonly stage: "ground" | "weave";
+  readonly targetId: string;
+  readonly label: string;
+  readonly verdict: "affected" | "maybe";
+  readonly fields: ReadonlyArray<string>;
+  readonly reason: string;
+  readonly hint?: string;
+  readonly method: "llm" | "heuristic" | "rule";
+  readonly snapshot?: string;
+  readonly status: "open" | "reviewed" | "regenerated" | "dismissed";
+  readonly resolvedAt?: string;
+  readonly resolvedArtifactId?: string;
+}
+
+export interface AuthoringImpactSummary {
+  readonly impactId: string;
+  readonly from: { readonly artifactId: string; readonly version: number };
+  readonly to: { readonly artifactId: string; readonly version: number };
+  readonly openCount: { readonly ground: number; readonly weave: number };
+  readonly items: ReadonlyArray<AuthoringImpactItem>;
+  readonly globals: ReadonlyArray<{ readonly field: string; readonly note: string }>;
+  readonly method: "llm" | "heuristic" | "mixed";
+  readonly degraded?: { readonly reason: string };
+  readonly partial?: boolean;
+  readonly runId?: string;
+  readonly groundReportId?: string;
+  readonly weaveReportId?: string;
+}
+
 export interface AuthoringWorkspace {
+  readonly impact?: AuthoringImpactSummary;
   readonly canon?: {
     readonly title?: string;
     readonly oneLine?: string;
@@ -133,6 +165,10 @@ export interface AuthoringWorkspace {
       readonly stage: string;
       readonly label: string;
       readonly acknowledged?: boolean;
+      readonly fromArtifactId?: string;
+      readonly toArtifactId?: string;
+      readonly impactReportId?: string;
+      readonly openCount?: number;
     }>;
   };
 }
@@ -149,6 +185,14 @@ export function reportForArtifact(
 ): AuthoringReport | undefined {
   if (!artifactId) return undefined;
   return (reports ?? []).find((item) => item.targetRefs.includes(artifactId));
+}
+
+export function reportById(
+  reports: ReadonlyArray<AuthoringReport> | undefined,
+  reportId: string | undefined,
+): AuthoringReport | undefined {
+  if (!reportId) return undefined;
+  return (reports ?? []).find((item) => item.reportId === reportId);
 }
 
 export function latestArtifact(
