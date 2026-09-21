@@ -230,7 +230,7 @@ export function BookStudy({
   }
   for (const watch of authoring?.manifest?.watches ?? []) {
     if (watch.acknowledged) continue;
-    if (authoring?.impact || isCanonImpactWatch(watch)) continue;
+    if (isCanonImpactWatch(watch)) continue;
     attentionItems.push({
       key: `watch-${watch.id}`,
       label: watch.label,
