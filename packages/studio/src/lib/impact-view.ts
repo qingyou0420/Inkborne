@@ -196,11 +196,32 @@ export function degradedImpactOpen(
 }
 
 export type WriteImpactBanner = {
-  readonly kind: "running" | "open" | "degraded" | "legacy";
+  readonly kind: "running" | "open" | "degraded" | "legacy" | "globals";
   readonly text: string;
   readonly chapterText?: string;
+  readonly globalsText?: string;
   readonly actions: ReadonlyArray<"ground" | "weave" | "chapter" | "recompute" | "ack">;
 };
+
+export function impactGlobalsNotes(impact: AuthoringImpactSummary | undefined | null): string[] {
+  return (impact?.globals ?? []).map((item) => item.note.trim()).filter(Boolean);
+}
+
+export function impactGlobalsCopy(impact: AuthoringImpactSummary | undefined | null): string {
+  return impactGlobalsNotes(impact).join("；");
+}
+
+/** Globals stay visible until the author acks the report's canon watches (same hold as degraded). */
+export function impactGlobalsOpen(
+  impact: AuthoringImpactSummary | undefined | null,
+  watches: ReadonlyArray<AuthoringWatch> | undefined,
+): boolean {
+  if (!impactGlobalsNotes(impact).length) return false;
+  if (impact && impactOpenTotal(impact) > 0) return false;
+  if (impact?.degraded && degradedImpactOpen(impact, watches)) return false;
+  const own = (watches ?? []).filter((watch) => watch.impactReportId === impact?.impactId);
+  return own.length === 0 || own.some((watch) => !watch.acknowledged);
+}
 
 export function writeImpactBanner(input: {
   readonly impact?: AuthoringImpactSummary | null;
@@ -248,6 +269,7 @@ export function writeImpactBanner(input: {
           ? `本章概要被标记受影响：${chapterItem.reason}`
           : `This chapter summary is marked affected: ${chapterItem.reason}`)
         : undefined,
+      globalsText: impactGlobalsCopy(impact) || undefined,
       actions,
     };
   }
@@ -265,6 +287,13 @@ export function writeImpactBanner(input: {
       kind: "legacy",
       text: input.isZh ? "上游正典有过变更，尚未分辨影响" : "The adopted canon changed before impact triage existed.",
       actions: ["recompute", "ack"],
+    };
+  }
+  if (impact && impactGlobalsOpen(impact, input.watches)) {
+    return {
+      kind: "globals",
+      text: impactGlobalsCopy(impact),
+      actions: ["ack"],
     };
   }
   return null;
@@ -285,6 +314,7 @@ export type StudyImpactAttention = {
   readonly weaveOpen: number;
   readonly degraded?: boolean;
   readonly legacy?: boolean;
+  readonly globals?: boolean;
 };
 
 export function studyImpactAttention(input: {
@@ -318,9 +348,12 @@ export function studyImpactAttention(input: {
         ground > 0 ? `${ground} settings` : "",
         weave > 0 ? `${weave} summaries` : "",
       ].filter(Boolean).join(", ");
+    const globals = impactGlobalsCopy(impact);
     return {
       key: `impact-${impact.impactId}`,
-      label: input.isZh ? `${span}：${parts}待核对` : `${span}: ${parts} need review`,
+      label: input.isZh
+        ? `${span}：${parts}待核对${globals ? `；${globals}` : ""}`
+        : `${span}: ${parts} need review${globals ? `; ${globals}` : ""}`,
       groundOpen: ground,
       weaveOpen: weave,
     };
@@ -345,6 +378,15 @@ export function studyImpactAttention(input: {
       legacy: true,
     };
   }
+  if (impact && impactGlobalsOpen(impact, input.watches)) {
+    return {
+      key: `impact-globals-${impact.impactId}`,
+      label: impactGlobalsCopy(impact),
+      groundOpen: 0,
+      weaveOpen: 0,
+      globals: true,
+    };
+  }
   return null;
 }
 
@@ -360,6 +402,7 @@ export function impactCompleteCopy(input: {
   if (!impact) return null;
   const ground = impact.openCount.ground;
   const weave = impact.openCount.weave;
+  const globals = impactGlobalsCopy(impact);
   if (impact.degraded && ground + weave === 0) {
     return {
       message: input.isZh
@@ -369,7 +412,14 @@ export function impactCompleteCopy(input: {
       action: input.isZh ? "去研墨" : "Go to Ground",
     };
   }
-  if (ground + weave === 0) return null;
+  if (ground + weave === 0) {
+    if (!globals) return null;
+    return {
+      message: input.isZh ? `影响分辨完成：${globals}` : `Impact ready: ${globals}`,
+      stage: "ground",
+      action: input.isZh ? "去研墨" : "Go to Ground",
+    };
+  }
   const parts = input.isZh
     ? [
       ground > 0 ? `设定 ${ground} 条` : "",
@@ -380,7 +430,9 @@ export function impactCompleteCopy(input: {
       weave > 0 ? `${weave} summaries` : "",
     ].filter(Boolean).join(", ");
   return {
-    message: input.isZh ? `影响分辨完成：${parts}需核对` : `Impact ready: ${parts} need review`,
+    message: input.isZh
+      ? `影响分辨完成：${parts}需核对${globals ? `；${globals}` : ""}`
+      : `Impact ready: ${parts} need review${globals ? `; ${globals}` : ""}`,
     stage: ground >= weave ? "ground" : "weave",
     action: ground >= weave
       ? (input.isZh ? "去研墨" : "Go to Ground")

@@ -335,6 +335,7 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
           <div className="manuscript-notice" data-testid="write-impact-banner">
             <p>{impactBanner.text}</p>
             {impactBanner.chapterText ? <p>{impactBanner.chapterText}</p> : null}
+            {impactBanner.globalsText ? <p data-testid="write-impact-globals">{impactBanner.globalsText}</p> : null}
             {impactBanner.actions.length > 0 ? (
               <p className="flex flex-wrap gap-2">
                 {impactBanner.actions.map((action) => (

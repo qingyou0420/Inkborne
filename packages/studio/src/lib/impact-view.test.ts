@@ -7,6 +7,7 @@ import {
   filterGroundEntries,
   findImpactTriageRun,
   impactCompleteCopy,
+  impactGlobalsOpen,
   impactOpenTotal,
   impactRegenerateRequirements,
   impactVersionSpan,
@@ -193,5 +194,34 @@ describe("impact-view copy", () => {
     ])?.runId).toBe("live");
     expect(isLegacyCanonWatch({ id: "x", stage: "ground", label: "旧提醒", acknowledged: false })).toBe(true);
     expect(isLegacyCanonWatch({ id: "y", stage: "ground", label: "新", acknowledged: false, impactReportId: "imp-1" })).toBe(false);
+  });
+
+  it("surfaces globals on toast, 等你过目, and the write banner", () => {
+    const withGlobals = {
+      ...impact,
+      globals: [{ field: "voice", note: "叙事视角与文风由「限制视角」改为「全知旁白」，影响落笔文风，不需逐条改设定" }],
+    };
+    expect(writeImpactBanner({ impact: withGlobals, isZh: true })?.globalsText).toMatch(/全知旁白/);
+    expect(studyImpactAttention({ impact: withGlobals, isZh: true })?.label).toMatch(/全知旁白/);
+    expect(impactCompleteCopy({ impact: withGlobals, isZh: true })?.message).toMatch(/全知旁白/);
+    const onlyGlobals = {
+      ...impact,
+      openCount: { ground: 0, weave: 0 },
+      items: [],
+      globals: [{ field: "title", note: "书名由「醉词」改为「醉词楼」" }],
+    };
+    const pending = [{ id: "g", stage: "ground" as const, label: "全局", acknowledged: false, impactReportId: "imp-1" }];
+    const acked = [{ ...pending[0]!, acknowledged: true }];
+    expect(impactGlobalsOpen(onlyGlobals, pending)).toBe(true);
+    expect(writeImpactBanner({ impact: onlyGlobals, watches: pending, isZh: true })).toMatchObject({
+      kind: "globals",
+      text: "书名由「醉词」改为「醉词楼」",
+      actions: ["ack"],
+    });
+    expect(studyImpactAttention({ impact: onlyGlobals, watches: pending, isZh: true })?.globals).toBe(true);
+    expect(impactCompleteCopy({ impact: onlyGlobals, isZh: true })?.message).toBe("影响分辨完成：书名由「醉词」改为「醉词楼」");
+    expect(impactGlobalsOpen(onlyGlobals, acked)).toBe(false);
+    expect(writeImpactBanner({ impact: onlyGlobals, watches: acked, isZh: true })).toBeNull();
+    expect(studyImpactAttention({ impact: onlyGlobals, watches: acked, isZh: true })).toBeNull();
   });
 });

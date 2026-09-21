@@ -71,6 +71,25 @@ export function invalidationPathsForChapterMutationSse(input: {
   return chapterMutationInvalidationPaths(bookId, chapter);
 }
 
+const AUTHORING_RUN_TERMINAL = new Set(["completed", "failed", "partial", "cancelled"]);
+
+/** Background ask-canon triage finishes as `authoring:run`; refresh the open workspace (no extra polling). */
+export function invalidationPathsForAuthoringRunSse(input: {
+  readonly event: string;
+  readonly data: unknown;
+}): ReadonlyArray<string> {
+  if (input.event !== "authoring:run") return [];
+  const data = input.data as { bookId?: unknown; draftId?: unknown; status?: unknown } | null;
+  if (typeof data?.status !== "string" || !AUTHORING_RUN_TERMINAL.has(data.status)) return [];
+  if (typeof data.bookId === "string" && data.bookId) {
+    return [`/api/v1/authoring/workspace?bookId=${encodeURIComponent(data.bookId)}`];
+  }
+  if (typeof data.draftId === "string" && data.draftId) {
+    return [`/api/v1/authoring/workspace?draftId=${encodeURIComponent(data.draftId)}`];
+  }
+  return [];
+}
+
 export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
   const normalized = buildApiUrl(path);
   if (!normalized) return [];

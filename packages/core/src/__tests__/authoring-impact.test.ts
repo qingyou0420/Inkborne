@@ -21,6 +21,7 @@ import {
   loadSettingsCatalog,
   newArtifactId,
   saveArtifact,
+  saveManifest,
   saveSettingsCatalog,
   type AuthoringStoreRoot,
 } from "../authoring/store.js";
@@ -204,6 +205,7 @@ describe("canon impact triage", () => {
     await adoptCanonVersion(root, withCanon({
       protagonist: "沈砚替父赎罪",
       conflict: "醉词楼易主，东家不再坐镇",
+      voice: "全知旁白",
     }), 2);
     const llm: AuthoringLlmFn = async (call) => {
       expect(call.roleId).toBe("ask.review");
@@ -243,6 +245,67 @@ describe("canon impact triage", () => {
     const weave = await loadReport(root, result.report!.weaveReportId!);
     expect(ground?.issues.map((issue) => issue.target)).toContain("shen-yan");
     expect(weave?.issues.map((issue) => issue.target)).toContain("12");
+    expect(result.report?.globals.some((item) => item.field === "voice")).toBe(true);
+    expect(ground?.summary).toMatch(/全局项：/);
+    expect(weave?.summary).toMatch(/全局项：/);
+  });
+
+  it("keeps voice-only globals visible until the author acknowledges them", async () => {
+    dir = await mkdtemp(join(tmpdir(), "impact-globals-"));
+    const created = await createLightweightBook({ projectRoot: dir, canon: baseCanon });
+    const root: AuthoringStoreRoot = { projectRoot: dir, bookId: created.bookId };
+    const adopted = await adoptCanonVersion(root, withCanon({ voice: "全知旁白" }), 2);
+    const result = await triageCanonImpact({
+      root,
+      project: project(),
+      llm: async () => JSON.stringify({ items: [] }),
+    });
+    expect(result.report?.items).toEqual([]);
+    expect(result.report?.degraded).toBeUndefined();
+    expect(result.report?.globals.some((item) => item.note.includes("全知旁白"))).toBe(true);
+    const manifest = await loadManifest(root);
+    expect(manifest.watches.filter((watch) => watch.sourceKind === "canon").every((watch) => !watch.acknowledged)).toBe(true);
+    expect(manifest.impactBaseline?.ask).not.toBe(adopted.artifactId);
+    await resolveImpactItems(root, { as: "reviewed" });
+    const after = await loadManifest(root);
+    expect(after.watches.filter((watch) => watch.sourceKind === "canon").every((watch) => watch.acknowledged)).toBe(true);
+    expect(after.impactBaseline?.ask).toBe(adopted.artifactId);
+  });
+
+  it("acknowledges leftover pending watches when recompute finds unchanged canon", async () => {
+    dir = await mkdtemp(join(tmpdir(), "impact-unchanged-watch-"));
+    const created = await createLightweightBook({ projectRoot: dir, canon: baseCanon });
+    const root: AuthoringStoreRoot = { projectRoot: dir, bookId: created.bookId };
+    const manifest = await loadManifest(root);
+    const askId = manifest.adopted.ask!;
+    await saveManifest(root, {
+      ...manifest,
+      watches: [
+        {
+          id: "legacy-g",
+          stage: "ground",
+          sourceKind: "canon",
+          sourceId: askId,
+          label: "正典已采用新版本，设定可能需要核对",
+          acknowledged: false,
+          impactReportId: "pending",
+        },
+        {
+          id: "legacy-w",
+          stage: "weave",
+          sourceKind: "canon",
+          sourceId: askId,
+          label: "正典已采用新版本，大纲可能需要核对",
+          acknowledged: false,
+          impactReportId: "pending",
+        },
+      ],
+    });
+    const result = await triageCanonImpact({ root, project: project(), llm: async () => JSON.stringify({ items: [] }) });
+    expect(result.unchanged).toBe(true);
+    const after = await loadManifest(root);
+    expect(after.watches.filter((watch) => watch.sourceKind === "canon").every((watch) => watch.acknowledged)).toBe(true);
+    expect(after.impactBaseline?.ask).toBe(askId);
   });
 
   it("falls back to name/alias heuristic when a batch returns invalid JSON", async () => {

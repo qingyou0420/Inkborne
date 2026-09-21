@@ -23,6 +23,7 @@ describe("P0-7 chrome lift", () => {
     expect(app).toMatch(/deriveBookChromeTab/);
     expect(app).toMatch(/shouldInvalidateBookStageEvent/);
     expect(app).toMatch(/invalidationPathsForChapterMutationSse/);
+    expect(app).toMatch(/invalidationPathsForAuthoringRunSse/);
     expect(app).toMatch(/max-w-\[880px\]/);
     expect(app).toMatch(/max-w-\[1200px\]/);
     for (const file of [

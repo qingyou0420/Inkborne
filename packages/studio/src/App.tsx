@@ -46,7 +46,7 @@ import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
-import { invalidateApiPaths, invalidationPathsForChapterMutationSse, postApi, useApi } from "./hooks/use-api";
+import { invalidateApiPaths, invalidationPathsForAuthoringRunSse, invalidationPathsForChapterMutationSse, postApi, useApi } from "./hooks/use-api";
 import { X } from "lucide-react";
 import { useChatStore } from "./store/chat";
 import { applyAppearanceToDocument } from "./lib/appearance";
@@ -259,8 +259,11 @@ export function App() {
   }, [focusMode]);
 
   const onStageSse = useCallback((message: { event: string; data: unknown }) => {
-    const chapterPaths = invalidationPathsForChapterMutationSse(message);
-    if (chapterPaths.length) invalidateApiPaths(chapterPaths);
+    const refreshPaths = [
+      ...invalidationPathsForChapterMutationSse(message),
+      ...invalidationPathsForAuthoringRunSse(message),
+    ];
+    if (refreshPaths.length) invalidateApiPaths(refreshPaths);
     if (!shouldInvalidateBookStageEvent(message.event, message.data as { status?: string } | null)) return;
     const data = message.data as { bookId?: string } | null;
     invalidateBookStage(typeof data?.bookId === "string" ? data.bookId : activeBookId);
