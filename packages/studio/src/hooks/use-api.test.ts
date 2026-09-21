@@ -93,6 +93,17 @@ describe("fetchJson", () => {
       "最新第 1 章处于状态降级（state-degraded）。继续写下一章前，请先修复状态，或重写这一章。",
     );
   });
+
+  it("maps Failed to fetch / NetworkError to a short engine-down hint", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+
+    await expect(fetchJson("/books", {}, { fetchImpl })).rejects.toMatchObject({
+      name: "StudioApiError",
+      message: "引擎连不上，请重启应用",
+    });
+  });
 });
 
 describe("deriveInvalidationPaths", () => {

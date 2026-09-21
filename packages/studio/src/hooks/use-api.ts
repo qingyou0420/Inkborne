@@ -217,7 +217,16 @@ export async function fetchJson<T>(
   }
 
   const fetchImpl = deps?.fetchImpl ?? fetch;
-  const res = await fetchImpl(url, { cache: "no-store", ...init });
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { cache: "no-store", ...init });
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    if (/Failed to fetch|NetworkError/i.test(raw)) {
+      throw new StudioApiError(localizeKnownRuntimeMessage(raw));
+    }
+    throw e;
+  }
   const method = String(init.method ?? "GET").toUpperCase();
 
   if (!res.ok) {

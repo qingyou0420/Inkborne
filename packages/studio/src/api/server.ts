@@ -188,6 +188,7 @@ import {
 import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
+import { attachmentDisposition } from "./attachment-disposition.js";
 import { ApiError } from "./errors.js";
 import {
   formatAgentModelReboundNotice,
@@ -265,11 +266,6 @@ const PIPELINE_STAGES: Record<string, ReadonlyArray<BilingualLabel>> = {
 
 function pipelineStages(agent: string, lang: StudioLanguage = "zh"): string[] | undefined {
   return PIPELINE_STAGES[agent]?.map((stage) => pick(lang, stage.zh, stage.en));
-}
-
-function attachmentDisposition(fileName: string): string {
-  const safeAscii = fileName.replace(/[^A-Za-z0-9._-]+/g, "_") || "download";
-  return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 const AGENT_LABELS: Record<string, BilingualLabel> = {
@@ -6448,7 +6444,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(responseBody, {
         headers: {
           "Content-Type": artifact.contentType,
-          "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
+          "Content-Disposition": attachmentDisposition(artifact.fileName),
         },
       });
     } catch {
@@ -7676,7 +7672,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(new Uint8Array(archive), {
         headers: {
           "Content-Type": "application/gzip",
-          "Content-Disposition": `attachment; filename="${encodeURIComponent(id)}.tar.gz"`,
+          "Content-Disposition": attachmentDisposition(`${id}.tar.gz`),
         },
       });
     } catch (error) {
