@@ -176,12 +176,23 @@ export function weaveReviseRangeFromIssues(issues: ReadonlyArray<AuthoringIssue>
   };
 }
 
+/** Pre-#140 watches never got a report; `pending` means triage never finished writing one. */
 export function isLegacyCanonWatch(watch: AuthoringWatch): boolean {
-  return !watch.acknowledged && !watch.impactReportId;
+  return !watch.acknowledged && (!watch.impactReportId || watch.impactReportId === "pending");
 }
 
 export function legacyCanonWatches(watches: ReadonlyArray<AuthoringWatch> | undefined): AuthoringWatch[] {
   return (watches ?? []).filter(isLegacyCanonWatch);
+}
+
+/** A degraded report stays visible until the author acks it; the ack lives on its canon watches. */
+export function degradedImpactOpen(
+  impact: AuthoringImpactSummary | undefined | null,
+  watches: ReadonlyArray<AuthoringWatch> | undefined,
+): boolean {
+  if (!impact?.degraded) return false;
+  const own = (watches ?? []).filter((watch) => watch.impactReportId === impact.impactId);
+  return own.length === 0 || own.some((watch) => !watch.acknowledged);
 }
 
 export type WriteImpactBanner = {
@@ -240,7 +251,7 @@ export function writeImpactBanner(input: {
       actions,
     };
   }
-  if (impact?.degraded) {
+  if (impact?.degraded && degradedImpactOpen(impact, input.watches)) {
     return {
       kind: "degraded",
       text: input.isZh
@@ -249,7 +260,7 @@ export function writeImpactBanner(input: {
       actions: ["recompute", "ack"],
     };
   }
-  if (!impact && legacyCanonWatches(input.watches).length > 0) {
+  if (legacyCanonWatches(input.watches).length > 0) {
     return {
       kind: "legacy",
       text: input.isZh ? "上游正典有过变更，尚未分辨影响" : "The adopted canon changed before impact triage existed.",
@@ -314,7 +325,7 @@ export function studyImpactAttention(input: {
       weaveOpen: weave,
     };
   }
-  if (impact?.degraded) {
+  if (impact?.degraded && degradedImpactOpen(impact, input.watches)) {
     return {
       key: `impact-degraded-${impact.impactId}`,
       label: input.isZh
@@ -325,7 +336,7 @@ export function studyImpactAttention(input: {
       degraded: true,
     };
   }
-  if (!impact && legacyCanonWatches(input.watches).length > 0) {
+  if (legacyCanonWatches(input.watches).length > 0) {
     return {
       key: "impact-legacy",
       label: input.isZh ? "上游正典有过变更，尚未分辨影响" : "The adopted canon changed before impact triage existed.",
