@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchJson, StudioApiError } from "./use-api";
+import { isTransientNetworkFetchError } from "../lib/error-copy";
 import { pollWeaveRun } from "../lib/weave-editor-state";
 
 export const AUTHORING_RUN_NOT_FOUND_LIMIT = 10;
@@ -42,6 +43,11 @@ export function isBackgroundAuthoringStart(result: { runId?: string; status?: st
   return Boolean(result.runId && result.status === "running" && !result.artifactId && !result.reportId);
 }
 
+/** Completed runs already wrote artifacts; a jittery poll should not look like engine death. */
+export function suppressSettledAuthoringRunPollError(cause: unknown, lastStatus?: string): boolean {
+  return lastStatus === "completed" && isTransientNetworkFetchError(cause);
+}
+
 export function formatAuthoringRunElapsed(createdAt?: string, now = Date.now()): string {
   if (!createdAt) return "";
   const parsed = Date.parse(createdAt);
@@ -68,11 +74,13 @@ export function useAuthoringRun(
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [epoch, setEpoch] = useState(0);
+  const lastKnownRunRef = useRef<AuthoringRunView | null>(null);
 
   useEffect(() => {
     if (!runId || (!bookId && !draftId)) {
       setRun(null);
       setError(null);
+      lastKnownRunRef.current = null;
       return undefined;
     }
     const query = bookId
@@ -81,10 +89,14 @@ export function useAuthoringRun(
     return pollWeaveRun({
       read: () => fetchJson<AuthoringRunView>(`/authoring/runs/${encodeURIComponent(runId)}?${query}`),
       update: (next) => {
+        lastKnownRunRef.current = next;
         setRun(next);
         setError(null);
       },
-      error: (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
+      error: (cause) => {
+        if (suppressSettledAuthoringRunPollError(cause, lastKnownRunRef.current?.status)) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      },
       settled: async () => undefined,
       keepPollingOnError: keepPollingAuthoringRunError,
     });

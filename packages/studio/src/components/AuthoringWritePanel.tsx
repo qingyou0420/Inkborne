@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
+import { isTransientNetworkFetchError } from "../lib/error-copy";
 import { postApi, putApi, useApi } from "../hooks/use-api";
 import { isAuthoringRunActive, isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { previousChapterSettleHold, producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
@@ -215,7 +216,14 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
   const storedReport = report ?? workspaceReport;
   const activeReport = storedReport && dirty ? { ...storedReport, stale: true, staleReason: isZh ? "正文已有未保存手改，这份报告对应修改前的稿件。" : "Unsaved edits have changed the reviewed text." } : storedReport;
-  const error = failure ?? authoringRun.error ?? workspaceError ?? artifactError;
+  const writeRunCompleted = authoringRun.settled && authoringRun.run?.status === "completed";
+  const softenTransientRefreshError = (message: string | null) => (
+    message && writeRunCompleted && data && isTransientNetworkFetchError(message) ? null : message
+  );
+  const error = failure
+    ?? softenTransientRefreshError(authoringRun.error)
+    ?? softenTransientRefreshError(workspaceError)
+    ?? softenTransientRefreshError(artifactError);
   const switchedInBackground = dirty && candidate?.artifactId !== editBaseId.current;
   const history = (data?.artifacts ?? []).filter((item) => item.stage === "write" && item.scope === scope);
   const selectVersion = async (artifactId: string) => {

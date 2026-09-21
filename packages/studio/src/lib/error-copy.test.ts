@@ -46,12 +46,12 @@ describe("localizeKnownRuntimeMessage", () => {
     expect(message).not.toMatch(/produced no token/i);
   });
 
-  it("maps browser network failures to a short engine-down hint", () => {
-    expect(localizeKnownRuntimeMessage("Failed to fetch")).toBe("引擎连不上，请重启应用");
-    expect(localizeKnownRuntimeMessage("NetworkError when attempting to fetch resource.")).toBe(
-      "引擎连不上，请重启应用",
-    );
-    expect(localizeKnownRuntimeMessage("NetworkError")).toBe("引擎连不上，请重启应用");
+  it("maps browser network failures to a retry hint without implying engine death", () => {
+    const expected = "请求暂时失败，请重试；若正文已出现可先刷新";
+    expect(localizeKnownRuntimeMessage("Failed to fetch")).toBe(expected);
+    expect(localizeKnownRuntimeMessage("NetworkError when attempting to fetch resource.")).toBe(expected);
+    expect(localizeKnownRuntimeMessage("NetworkError")).toBe(expected);
+    expect(localizeKnownRuntimeMessage(expected)).toBe(expected);
   });
 
   it("localizes in-process write locks as 写入被占用, not a read failure", () => {

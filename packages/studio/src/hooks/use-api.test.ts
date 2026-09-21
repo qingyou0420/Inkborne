@@ -95,14 +95,14 @@ describe("fetchJson", () => {
     );
   });
 
-  it("maps Failed to fetch / NetworkError to a short engine-down hint", async () => {
+  it("maps Failed to fetch / NetworkError to a transient retry hint", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     });
 
     await expect(fetchJson("/books", {}, { fetchImpl })).rejects.toMatchObject({
       name: "StudioApiError",
-      message: "引擎连不上，请重启应用",
+      message: "请求暂时失败，请重试；若正文已出现可先刷新",
     });
   });
 });
