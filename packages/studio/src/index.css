@@ -1061,6 +1061,21 @@ input, select, textarea {
   font-weight: 400;
   margin-top: 2px;
 }
+.impact-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+.impact-dot[data-verdict="maybe"] { opacity: 0.4; }
+.one-directory button.dir-item small.impact-reason {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  white-space: normal;
+}
 .one-directory .dir-item { width: auto; flex: 1; min-width: 0; }
 .one-document { min-width: 0; max-width: 770px; padding: 4px 0 40px; }
 .version-state { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted-foreground); }

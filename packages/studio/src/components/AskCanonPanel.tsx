@@ -8,6 +8,7 @@ import { askRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRu
 import { invalidateBookStage } from "../hooks/use-book-stage";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
+import { findImpactTriageRun, impactCompleteCopy, isImpactTriageRun } from "../lib/impact-view";
 import { registerNavigationGuard } from "../lib/edit-navigation";
 import { chatSelectors, useChatStore } from "../store/chat";
 import type { SessionRuntime } from "../store/chat/types";
@@ -69,7 +70,11 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const [historyError, setHistoryError] = useState<string>();
   const historyRequest = useRef(0);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [impactRunId, setImpactRunId] = useState<string | null>(null);
+  const [impactBookId, setImpactBookId] = useState<string | undefined>(bookId);
+  const toastedImpact = useRef<string | null>(null);
   const authoringRun = useAuthoringRun(bookId, activeRunId, draftId);
+  const impactRun = useAuthoringRun(impactBookId, impactRunId);
   const [lengthOpen, setLengthOpen] = useState(false);
   const [lengthDraft, setLengthDraft] = useState<Record<CanonFieldName, string>>({ title: "", genre: "", targetChapters: "", chapterWordCount: "" });
   const [generateOpen, setGenerateOpen] = useState(false);
@@ -97,13 +102,15 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     } catch (failure) { if (mounted.current) setDraftError(failure instanceof Error ? failure.message : String(failure)); }
   };
   useEffect(() => { void ensureDraft(); }, [bookId, session?.sessionId]);
-  const lastAskRun = selectScopedAuthoringRun(data?.runs, "ask");
+  const lastAskRun = selectScopedAuthoringRun((data?.runs ?? []).filter((item) => !isImpactTriageRun(item)), "ask");
+  const pendingImpact = findImpactTriageRun(data?.runs);
   useEffect(() => {
     if (activeRunId) return;
     if (lastAskRun && shouldAutoTakeoverAuthoringRun(lastAskRun)) setActiveRunId(lastAskRun.runId);
   }, [activeRunId, lastAskRun]);
   useEffect(() => {
     if (!authoringRun.settled || !authoringRun.run) return;
+    if (isImpactTriageRun(authoringRun.run)) return;
     void refetch();
     if (authoringRun.run.producedArtifactIds?.[0]) editor.current.expectCandidate(authoringRun.run.producedArtifactIds[0]);
     if (mounted.current) {
@@ -112,6 +119,27 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       if (authoringRun.run.status === "failed") setActionError(authoringRun.run.error);
     }
   }, [authoringRun.settled, authoringRun.run, refetch]);
+  useEffect(() => {
+    if (impactRunId || !pendingImpact || (pendingImpact.status !== "running" && pendingImpact.status !== "pausing")) return;
+    if (pendingImpact.runId) {
+      setImpactRunId(pendingImpact.runId);
+      setImpactBookId(bookId);
+    }
+  }, [bookId, impactRunId, pendingImpact]);
+  useEffect(() => {
+    if (!impactRun.settled || !impactRun.run || !impactBookId) return;
+    if (toastedImpact.current === impactRun.run.runId) return;
+    toastedImpact.current = impactRun.run.runId;
+    void fetchJson<AuthoringWorkspace>(`/authoring/workspace?bookId=${encodeURIComponent(impactBookId)}`).then((workspace) => {
+      const copy = impactCompleteCopy({ impact: workspace.impact, isZh });
+      if (!copy) return;
+      showToast(copy.message, "success", {
+        label: copy.action,
+        onClick: () => goBookAuthoringStage(impactBookId, copy.stage),
+      });
+    }).catch(() => undefined);
+    void refetch();
+  }, [impactBookId, impactRun.settled, impactRun.run, isZh, refetch]);
   useEffect(() => {
     if (data && editor.current.load(candidate, busyRef.current)) setEditState(editor.current.snapshot);
   }, [data, candidate?.artifactId, candidate?.body, busy, dirty]);
@@ -217,14 +245,20 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const adoptCurrent = async () => {
     const artifactId = await prepareCurrentArtifact();
     const savedId = await persistIfDirty(creatingBook);
-    const result = await postApi<{ message?: string; bookId?: string }>("/authoring/ask/adopt", { ...scope, artifactId: savedId ?? artifactId });
+    const result = await postApi<{ message?: string; bookId?: string; impactRunId?: string }>("/authoring/ask/adopt", { ...scope, artifactId: savedId ?? artifactId });
     invalidateBookStage(result.bookId ?? bookId);
     useChatStore.getState().bumpBookDataVersion();
     const nextBookId = result.bookId ?? bookId;
-    showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"), "success", nextBookId ? {
-      label: isZh ? "进入研墨" : "Go to Ground",
-      onClick: () => goBookAuthoringStage(nextBookId, "ground"),
-    } : undefined);
+    if (result.impactRunId && nextBookId) {
+      setImpactRunId(result.impactRunId);
+      setImpactBookId(nextBookId);
+      showToast(isZh ? "正典已采用，正在分辨对设定与规划的影响…" : "Canon adopted. Resolving impact on settings and the plan…", "success");
+    } else {
+      showToast(result.message ?? (isZh ? "正典已采用" : "Canon adopted"), "success", nextBookId ? {
+        label: isZh ? "进入研墨" : "Go to Ground",
+        onClick: () => goBookAuthoringStage(nextBookId, "ground"),
+      } : undefined);
+    }
     if (mounted.current && result.bookId && !bookId) onAdopted?.(result.bookId);
   };
   const startAdopt = () => void run("adopt", async () => {
@@ -310,6 +344,11 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
           <button type="button" className="ask-canon-primary" data-testid={creatingBook ? "ask-adopt-create" : "ask-adopt"} disabled={(!candidate && !canPrepare) || locked || !ready || isAdopted} onClick={startAdopt}><Check size={15} />{isAdopted ? (isZh ? "已采用" : "Adopted") : creatingBook ? (isZh ? "采用并建书" : "Adopt and create book") : (isZh ? "采用" : "Adopt")}</button>
           <DropdownMenu><DropdownMenuTrigger className="ask-canon-menu-trigger" disabled={locked} aria-label={isZh ? "正典操作" : "Canon actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" side="top">
             <DropdownMenuItem disabled={!ready || locked || Boolean(session?.isChatStreaming)} onClick={() => { setActionError(undefined); setGenerationIssueIds(report && !stale && !report.incomplete ? report.issues.map((issue) => issue.issueId) : []); setGenerateOpen(true); }}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+            {bookId && data?.authoringBook !== false ? <DropdownMenuItem data-testid="impact-recompute" disabled={locked} onClick={() => void run("impact", async () => {
+              const result = await postApi<{ runId?: string }>("/authoring/impact/recompute", { bookId });
+              if (result.runId) { setImpactRunId(result.runId); setImpactBookId(bookId); }
+              showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+            })}>{isZh ? "相对正典重算影响" : "Recompute canon impact"}</DropdownMenuItem> : null}
             <DropdownMenuItem disabled={!artifacts.length} onClick={() => openHistory(currentArtifactId)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!data?.adoptedAskId} onClick={() => openHistory(data?.adoptedAskId)}>{isZh ? "查看已采用" : "View adopted"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>

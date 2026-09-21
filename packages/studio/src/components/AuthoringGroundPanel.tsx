@@ -10,9 +10,21 @@ import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-author
 import { groundRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun } from "../lib/authoring-run-selection";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
-import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
+import type { AuthoringImpactSummary, AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { GenerationRequirements } from "./GenerationRequirements";
-import { workspaceQuery, reportForArtifact } from "../lib/authoring-workspace";
+import { workspaceQuery, reportById, reportForArtifact } from "../lib/authoring-workspace";
+import {
+  defaultImpactFilter,
+  filterGroundEntries,
+  impactRegenerateRequirements,
+  openCatalogImpact,
+  openGroundItemForEntry,
+  openImpactItems,
+  shouldShowImpactFilter,
+  truncateImpactReason,
+  type ImpactCatalogFilter,
+} from "../lib/impact-view";
+import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
 import { groundGenerationScope, groundRevisionScope } from "../lib/ground-task-scope";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
@@ -60,6 +72,9 @@ function AuthoringGroundBook({
   const [editing, setEditing] = useState(false);
   const [directoryOpen, setDirectoryOpen] = useState(true);
   const [batchMode, setBatchMode] = useState(false);
+  const [catalogFilter, setCatalogFilter] = useState<ImpactCatalogFilter>("all");
+  const [canonDiffOpen, setCanonDiffOpen] = useState(false);
+  const impactSeeded = useRef<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [generation, setGeneration] = useState<{ entryIds: string[]; regenerate?: boolean; issueIds?: ReadonlyArray<string>; reuseStale?: boolean; report?: AuthoringReport } | null>(null);
   const [requirementNotes, setRequirementNotes] = useState("");
@@ -67,7 +82,12 @@ function AuthoringGroundBook({
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const authoringRun = useAuthoringRun(bookId, activeRunId);
   const decision = useDraftDecision(isZh);
-  const visible = entries.filter((entry) => !entry.archived);
+  const visibleAll = entries.filter((entry) => !entry.archived);
+  const impact = data?.impact;
+  const openGroundItems = openImpactItems(impact, "ground");
+  const catalogImpact = openCatalogImpact(impact);
+  const showImpactFilter = shouldShowImpactFilter(impact?.openCount.ground ?? 0, data?.authoringBook);
+  const visible = filterGroundEntries(visibleAll, impact, showImpactFilter ? catalogFilter : "all");
   const generationScope = groundGenerationScope(entries, selected);
   const focused = visible.find((entry) => entry.id === (focusedId ?? visible[0]?.id));
   const focusedArtifactId = focused?.candidateArtifactId ?? focused?.adoptedArtifactId;
@@ -209,6 +229,26 @@ function AuthoringGroundBook({
     return () => window.removeEventListener("keydown", saveShortcut);
   });
 
+  useEffect(() => {
+    if (!showImpactFilter) {
+      if (catalogFilter === "needs-review") setCatalogFilter("all");
+      return;
+    }
+    const token = impact?.impactId ?? "pending";
+    if (impactSeeded.current === token) return;
+    impactSeeded.current = token;
+    setCatalogFilter(defaultImpactFilter(impact?.openCount.ground ?? 0));
+    setBatchMode(true);
+    setSelected(openGroundItems.filter((item) => item.targetId !== "catalog").map((item) => item.targetId));
+  }, [showImpactFilter, impact?.impactId, impact?.openCount.ground, catalogFilter, openGroundItems]);
+
+  useEffect(() => {
+    if (!showImpactFilter || catalogFilter !== "needs-review") return;
+    if (focused && visible.some((entry) => entry.id === focused.id)) return;
+    const first = visible[0];
+    if (first) setFocusedId(first.id);
+  }, [showImpactFilter, catalogFilter, focused, visible]);
+
   const grouped = useMemo(() => {
     const map = new Map<string, typeof visible>();
     for (const entry of visible) {
@@ -233,7 +273,7 @@ function AuthoringGroundBook({
       return next;
     });
   };
-  const generationNotes = generationReviewNotes(report, (generation?.entryIds ?? []).map((id) => { const item = visible.find((entry) => entry.id === id); return item?.candidateArtifactId ?? item?.adoptedArtifactId; }));
+  const generationNotes = generationReviewNotes(report, (generation?.entryIds ?? []).map((id) => { const item = visibleAll.find((entry) => entry.id === id); return item?.candidateArtifactId ?? item?.adoptedArtifactId; }));
   const generateEntries = (entryIds: string[], regenerate: boolean, requirements = "") => run("generate", async () => {
     await persistIfDirty();
     const result = await postApi<{ runId?: string; status?: string; generated?: string[] }>("/authoring/ground/generate", { bookId, entryIds, regenerate, requirements: withGenerationReview(requirements, generationNotes) });
@@ -247,6 +287,37 @@ function AuthoringGroundBook({
     if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
     return result;
   });
+  const resolveImpact = (keys: string[], as: "reviewed" | "dismissed") => run("impact", async () => {
+    if (keys.length === 0) return;
+    await postApi<{ ok: boolean; impact?: AuthoringImpactSummary }>("/authoring/impact/resolve", { bookId, keys, as });
+    return true;
+  });
+  const recomputeImpact = () => run("impact", async () => {
+    const result = await postApi<{ runId?: string; status?: string }>("/authoring/impact/recompute", { bookId });
+    if (result.runId) setActiveRunId(result.runId);
+    showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+    return result;
+  });
+  const openImpactReport = () => {
+    const next = reportById(data?.reports, impact?.groundReportId);
+    if (next) {
+      setReport(next);
+      setReportOpen(true);
+      return;
+    }
+    if (!impact?.groundReportId) return;
+    void run("review", async () => {
+      const loaded = await fetchJson<AuthoringReport>(`/authoring/reports/${encodeURIComponent(impact.groundReportId!)}?bookId=${encodeURIComponent(bookId)}`);
+      setReport(loaded);
+      setReportOpen(true);
+      return loaded;
+    });
+  };
+  const selectedImpactItems = actionIds
+    .map((id) => openGroundItemForEntry(impact, id))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const selectedImpactKeys = selectedImpactItems.map((item) => item.key);
+  const focusedImpact = openGroundItemForEntry(impact, focused?.id);
   const abandonRun = () => {
     if (!activeRunId) return;
     void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
@@ -298,6 +369,8 @@ function AuthoringGroundBook({
               <DropdownMenuItem onClick={() => { setBatchMode((value) => !value); setSelected([]); }}>{batchMode ? (isZh ? "结束多选" : "Finish selecting") : (isZh ? "批量选择" : "Select a batch")}</DropdownMenuItem>
               <DropdownMenuItem disabled={generationScope.entryIds.length === 0} onClick={() => generationScope.regenerate ? setGeneration(generationScope) : void generateEntries(generationScope.entryIds, false, requirementNotes)}>{generateLabel}</DropdownMenuItem>
               <DropdownMenuItem onClick={() => void startCatalog()}>{isZh ? "重新拟定目录" : "Rebuild catalog"}</DropdownMenuItem>
+              {data?.authoringBook !== false ? <DropdownMenuItem data-testid="impact-recompute" onClick={() => void recomputeImpact()}>{isZh ? "相对正典重算影响" : "Recompute canon impact"}</DropdownMenuItem> : null}
+              {impact?.from && impact.to ? <DropdownMenuItem onClick={() => setCanonDiffOpen(true)}>{isZh ? "查看正典改动" : "View canon changes"}</DropdownMenuItem> : null}
             </DropdownMenuContent>
           </DropdownMenu>}
         </div>
@@ -305,6 +378,46 @@ function AuthoringGroundBook({
 
       <div className={`one-workspace ${!directoryOpen ? "directory-collapsed" : ""}`}>
         <nav className="one-directory ground-directory" hidden={!directoryOpen} aria-label={isZh ? "设定目录" : "Setting catalog"}>
+          {showImpactFilter ? (
+            <div className="flex flex-wrap items-center gap-2 px-0 pb-2 text-[12px]" data-testid="impact-filter">
+              <button
+                type="button"
+                data-testid="impact-filter-needs-review"
+                className={catalogFilter === "needs-review" ? "font-medium text-foreground" : "text-muted-foreground"}
+                onClick={() => {
+                  setCatalogFilter("needs-review");
+                  setBatchMode(true);
+                  setSelected(openGroundItems.filter((item) => item.targetId !== "catalog").map((item) => item.targetId));
+                }}
+              >
+                {isZh ? `需核对 ${impact?.openCount.ground ?? 0}` : `Needs review ${impact?.openCount.ground ?? 0}`}
+              </button>
+              <span className="text-muted-foreground">·</span>
+              <button
+                type="button"
+                data-testid="impact-filter-all"
+                className={catalogFilter === "all" ? "font-medium text-foreground" : "text-muted-foreground"}
+                onClick={() => setCatalogFilter("all")}
+              >
+                {isZh ? `全部 ${visibleAll.length}` : `All ${visibleAll.length}`}
+              </button>
+            </div>
+          ) : null}
+          {catalogImpact && (catalogFilter === "needs-review" || catalogFilter === "all") ? (
+            <button
+              type="button"
+              className="dir-item"
+              data-testid="impact-catalog-item"
+              title={catalogImpact.reason}
+              onClick={() => void startCatalog()}
+            >
+              {catalogImpact.label}
+              <small>
+                <span className="impact-dot" data-verdict={catalogImpact.verdict} />
+                {truncateImpactReason(catalogImpact.reason)}
+              </small>
+            </button>
+          ) : null}
           {grouped.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {isZh ? "还没有设定目录。先根据正典拟定。" : "No catalog yet. Propose one from the canon."}
@@ -320,6 +433,7 @@ function AuthoringGroundBook({
                     : entry.adoptedArtifactId
                       ? (isZh ? "已采用" : "adopted")
                       : (isZh ? "未生成" : "empty");
+                const impactItem = openGroundItemForEntry(impact, entry.id);
                 return (
                   <div key={entry.id} className="flex items-start gap-2">
                     {batchMode ? <input
@@ -339,10 +453,12 @@ function AuthoringGroundBook({
                       className={`dir-item ${focused?.id === entry.id && !legacySectionId ? "active" : ""}`}
                       disabled={Boolean(busy) || legacyBusy}
                       aria-current={focused?.id === entry.id && !legacySectionId ? "page" : undefined}
+                      title={impactItem?.reason}
                       onClick={() => void selectEntry(entry.id)}
                     >
                       {entry.name}
-                      <small>{status}</small>
+                      <small>{impactItem ? <span className="impact-dot" data-verdict={impactItem.verdict} /> : null}{status}</small>
+                      {impactItem ? <small className="impact-reason" data-testid="impact-reason">{truncateImpactReason(impactItem.reason)}</small> : null}
                     </button>
                   </div>
                 );
@@ -376,6 +492,7 @@ function AuthoringGroundBook({
                     ? <span className="badge-quiet">{isZh ? "已采用" : "adopted"}</span>
                     : <span className="badge-quiet">{isZh ? "未生成" : "empty"}</span>}
               </div>
+              {focusedImpact ? <p className="text-xs leading-6 text-muted-foreground" data-testid="impact-entry-reason" title={focusedImpact.reason}>{focusedImpact.reason}</p> : null}
               {artifactLoading ? <p role="status" className="text-sm text-muted-foreground">{isZh ? "正在读取设定…" : "Loading setting…"}</p> : null}
               {draft.dirty && draft.baseId !== focusedArtifactId ? <p role="status" className="text-sm text-muted-foreground">{isZh ? "手改已保留，基于较早版本；保存会另建候选。" : "Your edits are retained from an earlier version. Saving creates a new candidate."}</p> : null}
               {artifactError ? <p role="alert" className="text-sm text-destructive">{artifactError}<button type="button" className="btn-ghost" onClick={() => setArtifactRetry((value) => value + 1)}>{isZh ? "重试" : "Retry"}</button></p> : null}
@@ -413,6 +530,17 @@ function AuthoringGroundBook({
             >
               {busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : batchMode ? (isZh ? `审查所选 ${actionIds.length} 项` : `Review ${actionIds.length} selected`) : (isZh ? "审查" : "Review")}
             </button>
+            {selectedImpactItems.length > 0 ? <button
+              type="button"
+              className="btn-secondary text-sm disabled:opacity-40"
+              disabled={blocked || draft.dirty}
+              onClick={() => setGeneration({
+                entryIds: selectedImpactItems.map((item) => item.targetId),
+                regenerate: true,
+              })}
+            >
+              {isZh ? "按影响重新生成所选" : "Regenerate by impact"}
+            </button> : null}
             <button
               type="button"
               className="btn-secondary text-sm disabled:opacity-40"
@@ -428,10 +556,15 @@ function AuthoringGroundBook({
             >
               {batchMode ? (isZh ? `采用所选 ${actionIds.length} 项` : `Adopt ${actionIds.length} selected`) : currentAdopted ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}
             </button>
+            {selectedImpactKeys.length > 0 ? <>
+              <button type="button" className="quiet" data-testid="impact-resolve-reviewed" disabled={blocked} onClick={() => void resolveImpact(selectedImpactKeys, "reviewed")}>{isZh ? "标为已核对" : "Mark reviewed"}</button>
+              <button type="button" className="quiet" data-testid="impact-resolve-dismissed" disabled={blocked} onClick={() => void resolveImpact(selectedImpactKeys, "dismissed")}>{isZh ? "忽略" : "Ignore"}</button>
+            </> : null}
             <DropdownMenu>
               <DropdownMenuTrigger className="quiet" aria-label={isZh ? "更多操作" : "More actions"} disabled={blocked || draft.dirty}><MoreHorizontal size={17} /></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem disabled={actionIds.length === 0} onClick={() => setGeneration({ entryIds: actionIds })}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+                <DropdownMenuItem disabled={!impact?.groundReportId} onClick={openImpactReport}>{isZh ? "按意见修订" : "Revise from notes"}</DropdownMenuItem>
                 <DropdownMenuItem disabled={!focused || batchMode} onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
                 <DropdownMenuItem disabled={!report} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
               </DropdownMenuContent>
@@ -461,7 +594,7 @@ function AuthoringGroundBook({
           setGeneration({ entryIds: scope.entryIds, issueIds, reuseStale, report });
         }}
       />
-      <RegenerateDialog open={Boolean(generation)} title={isZh ? (generation?.issueIds ? "按意见重新生成设定" : "生成设定") : "Generate settings"} scopeLabel={generation?.entryIds.map((id) => visible.find((entry) => entry.id === id)?.name ?? id).join("、")} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.report?.summary ?? generationNotes} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
+      <RegenerateDialog open={Boolean(generation)} title={isZh ? (generation?.issueIds ? "按意见重新生成设定" : generation?.regenerate ? "按影响重新生成设定" : "生成设定") : "Generate settings"} scopeLabel={generation?.entryIds.map((id) => visibleAll.find((entry) => entry.id === id)?.name ?? id).join("、")} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.report?.summary ?? generationNotes ?? (generation?.regenerate ? impactRegenerateRequirements(selectedImpactItems, isZh) : undefined)} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
         if (!generation) return false;
         const ok = await run(generation.issueIds ? "revise" : "generate", async () => {
           if (generation.issueIds) {
@@ -470,7 +603,7 @@ function AuthoringGroundBook({
             const revised = await postApi<{ runId?: string; status?: string }>("/authoring/ground/revise", { bookId, reportId: generation.report!.reportId, selectedIssueIds: generation.issueIds, reuseStale: generation.reuseStale, requirements });
             if (isBackgroundAuthoringStart(revised) && revised.runId) setActiveRunId(revised.runId);
           } else {
-            const generated = await postApi<{ runId?: string; status?: string }>("/authoring/ground/generate", { bookId, entryIds: generation.entryIds, regenerate: generation.regenerate ?? true, requirements: withGenerationReview(requirements, generationNotes) });
+            const generated = await postApi<{ runId?: string; status?: string }>("/authoring/ground/generate", { bookId, entryIds: generation.entryIds, regenerate: generation.regenerate ?? true, requirements: withGenerationReview(requirements || impactRegenerateRequirements(generation.entryIds.map((id) => openGroundItemForEntry(impact, id)).filter((item): item is NonNullable<typeof item> => Boolean(item)), isZh), generationNotes) });
             if (isBackgroundAuthoringStart(generated) && generated.runId) setActiveRunId(generated.runId);
           }
           if (!activeRunId) { artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); }
@@ -483,6 +616,7 @@ function AuthoringGroundBook({
         const ok = await run("restore", async () => { await putApi(`/authoring/artifacts/${encodeURIComponent(artifactId)}`, { bookId, body }); editor.generated(); setArtifactRetry((value) => value + 1); return true; });
         return ok === true;
       }} />
+      <AuthoringDiffDrawer open={canonDiffOpen} bookId={bookId} leftId={impact?.from.artifactId} rightId={impact?.to.artifactId} isZh={isZh} onClose={() => setCanonDiffOpen(false)} />
       {decision.dialog}
     </section>
   );

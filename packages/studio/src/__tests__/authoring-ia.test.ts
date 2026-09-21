@@ -122,4 +122,38 @@ describe("authoring four-agent IA", () => {
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/api\/v1\/authoring\/ground\/revise/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/api\/v1\/authoring\/weave\/revise/);
   });
+
+  it("defaults 研墨 / 织卷 to 需核对 when impact items are open", () => {
+    const ground = read("src/components/AuthoringGroundPanel.tsx");
+    const weave = read("src/pages/OutlineWorkspace.tsx") + read("src/components/AuthoringWeavePanel.tsx");
+    const write = read("src/components/AuthoringWritePanel.tsx");
+    const study = read("src/pages/BookStudy.tsx");
+    expect(ground).toMatch(/shouldShowImpactFilter/);
+    expect(ground).toMatch(/defaultImpactFilter/);
+    expect(ground).toMatch(/需核对/);
+    expect(ground).toMatch(/\/authoring\/impact\/resolve/);
+    expect(ground).toMatch(/标为已核对/);
+    expect(ground).toMatch(/按影响重新生成所选/);
+    expect(ground).toMatch(/相对正典重算影响/);
+    expect(weave).toMatch(/需核对/);
+    expect(weave).toMatch(/分卷需重规划/);
+    expect(weave).toMatch(/\/authoring\/impact\/resolve/);
+    expect(write).toMatch(/writeImpactBanner/);
+    expect(write).toMatch(/write-impact-banner/);
+    expect(write).not.toMatch(/watches\?\.some\(\(watch\) => !watch\.acknowledged\)/);
+    expect(write).not.toMatch(/上游已有新采用版，审查依据可能需要更新/);
+    expect(study).toMatch(/studyImpactAttention/);
+    expect(study).toMatch(/相对正典重算影响/);
+    expect(read("src/components/AskCanonPanel.tsx")).toMatch(/impactRunId/);
+    expect(read("src/lib/authoring-workspace.ts")).toMatch(/readonly impact\?: AuthoringImpactSummary/);
+  });
+
+  it("keeps the catalog and outline unchanged when no impact items are open", () => {
+    const ground = read("src/components/AuthoringGroundPanel.tsx");
+    const weave = read("src/pages/OutlineWorkspace.tsx");
+    expect(ground).toMatch(/shouldShowImpactFilter\(impact\?\.openCount\.ground \?\? 0/);
+    expect(ground).toMatch(/showImpactFilter \? catalogFilter : "all"/);
+    expect(weave).toMatch(/showImpactFilter \? impactFilter : "all"/);
+    expect(weave).toMatch(/shouldShowImpactFilter\(impact\?\.openCount\.weave \?\? 0/);
+  });
 });
