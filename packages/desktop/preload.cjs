@@ -9,6 +9,13 @@ const desktopBridge = {
   saveFirstRun: (payload) => ipcRenderer.invoke("app:saveFirstRun", payload),
   testModel: (payload) => ipcRenderer.invoke("app:testModel", payload),
   restartEngine: () => ipcRenderer.invoke("app:restartEngine"),
+  getEngineStatus: () => ipcRenderer.invoke("app:engineStatus"),
+  probeEngine: () => ipcRenderer.invoke("app:probeEngine"),
+  onEngineStatus: (listener) => {
+    const wrapped = (_event, detail) => listener(detail);
+    ipcRenderer.on("engine:status", wrapped);
+    return () => ipcRenderer.removeListener("engine:status", wrapped);
+  },
   getUpdateSettings: () => ipcRenderer.invoke("app:getUpdateSettings"),
   setGithubUpdateToken: (token) => ipcRenderer.invoke("app:setGithubUpdateToken", token),
   checkUpdate: (opts) => ipcRenderer.invoke("app:checkUpdate", opts),

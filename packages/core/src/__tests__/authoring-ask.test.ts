@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -234,5 +234,30 @@ describe("ask stage", () => {
     await expect(pending).rejects.toBeInstanceOf(AuthoringRunCancelledError);
     expect((await loadRun(ctx.root, runId))?.status).toBe("cancelled");
     expect((await loadManifest(ctx.root)).candidates.ask).toBeUndefined();
+  });
+
+  it("keeps the original model error when the actual ask catch cannot persist failed", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ask-eio-"));
+    const store = { projectRoot: root, bookId: "demo" };
+    const llm: AuthoringLlmFn = async () => {
+      const dir = join(root, "books", "demo", "story", "workflow", "runs");
+      const files = await readdir(dir);
+      const runFile = files.find((file) => file.endsWith(".json") && !file.endsWith(".control.json"));
+      if (runFile) {
+        const path = join(dir, runFile);
+        await rm(path);
+        await mkdir(path);
+      }
+      throw new Error("synthetic model failure");
+    };
+    await expect(generateAskCanon({
+      root: store,
+      project: project(),
+      conversation: "合成对话",
+      llm,
+    })).rejects.toMatchObject({
+      message: "synthetic model failure",
+      persistError: expect.anything(),
+    });
   });
 });

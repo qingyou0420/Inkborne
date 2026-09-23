@@ -2,7 +2,7 @@
  * 幻想作家 desktop shell: single-instance Electron + InkOS Studio engine child.
  * Modified 2026-09-01 for FantaWriter 2.0 P0 (AGPL-3.0).
  */
-const { app, BrowserWindow, shell, dialog, ipcMain, Menu } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, Menu, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
@@ -18,6 +18,14 @@ const {
   attachSpawnedEngine,
   clearEngineHandle,
 } = require("./lib/engine-handle.cjs");
+const {
+  waitForSpawnExit,
+  waitUntilPidGone,
+  shouldAdoptHealth,
+  createRestartBudget,
+  nextEngineStatus,
+  isPidAlive,
+} = require("./lib/engine-lifecycle.cjs");
 const { versionFromSetupName, setupFileNameForVersion } = require("./lib/setup-artifact.cjs");
 const {
   DEFAULT_GITHUB_REPO,
@@ -56,6 +64,11 @@ let quitting = false;
 let instanceToken = "";
 let projectRoot = "";
 let enginePort = 0;
+let stoppingEngine = false;
+let recoveringEngine = false;
+let restartJob = null;
+let engineStatus = "connecting";
+const autoRestartBudget = createRestartBudget();
 /** @type {string[]} */
 const serverLog = [];
 
@@ -85,6 +98,19 @@ function appendLog(line) {
     /* ignore */
   }
   console.log(line);
+}
+
+function setEngineStatus(status, extra = {}) {
+  engineStatus = nextEngineStatus({
+    quitting,
+    recovering: recoveringEngine || status === "recovering",
+    healthOk: status === "ready",
+    starting: status === "connecting",
+  }) || status;
+  appendLog(`engine status=${engineStatus}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("engine:status", { status: engineStatus, ...extra });
+  }
 }
 
 function ensureDir(dir) {
@@ -271,9 +297,17 @@ function startEngine(listenPort, root) {
     appendLog(`engine exited code=${code} signal=${signal}`);
     if (engineProcess === child) engineProcess = null;
     if (engineHandle.child === child) clearEngineHandle(engineHandle);
-    if (!quitting && code && code !== 0) {
+    if (quitting || stoppingEngine || recoveringEngine) return;
+    if (!autoRestartBudget.canAutoRestart()) {
+      setEngineStatus("needs-attention");
       dialog.showErrorBox("引擎已退出", `墨生万象引擎子进程退出（${code}）。\n日志：${getLogPath()}`);
+      return;
     }
+    autoRestartBudget.recordAttempt();
+    restartEngine().then(() => autoRestartBudget.recordSuccess()).catch((error) => {
+      appendLog(`auto restart failed: ${error instanceof Error ? error.message : error}`);
+      setEngineStatus("needs-attention");
+    });
   });
   return `http://${HOST}:${listenPort}`;
 }
@@ -294,44 +328,72 @@ function postJson(url, timeoutMs = 4000) {
 }
 
 async function stopEngine({ graceful = true } = {}) {
-  if (!hasLiveEngine(engineHandle) && !engineProcess) return;
+  if (!hasLiveEngine(engineHandle) && !engineProcess) {
+    return { pidGone: true, portFree: true, port: 0, pid: 0 };
+  }
+  stoppingEngine = true;
   const child = engineHandle.child || engineProcess;
   const port = engineHandle.port || enginePort;
   const pid = engineKillPid(engineHandle) || child?.pid || 0;
-  if (graceful && port) {
-    try {
-      await postJson(`http://${HOST}:${port}/api/v1/engine/shutdown`, 4000);
-      await new Promise((resolve) => setTimeout(resolve, 600));
-    } catch {
-      /* still kill */
-    }
-  }
   try {
-    if (process.platform === "win32" && pid) {
-      spawn("taskkill", ["/pid", String(pid), "/f", "/t"], { windowsHide: true });
-    } else if (child && child.kill) {
-      child.kill("SIGTERM");
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      if (child.exitCode === null) child.kill("SIGKILL");
-    } else if (pid) {
+    if (graceful && port) {
       try {
-        process.kill(pid, "SIGTERM");
+        await postJson(`http://${HOST}:${port}/api/v1/engine/shutdown`, 4000);
+        await new Promise((resolve) => setTimeout(resolve, 600));
       } catch {
-        /* already gone */
-      }
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        /* already gone */
+        /* still kill */
       }
     }
-  } catch {
-    /* ignore */
+    try {
+      if (process.platform === "win32" && pid) {
+        const killer = spawn("taskkill", ["/pid", String(pid), "/f", "/t"], { windowsHide: true });
+        await waitForSpawnExit(killer, 8000);
+      } else if (child && child.kill) {
+        child.kill("SIGTERM");
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (child.exitCode === null) child.kill("SIGKILL");
+      } else if (pid) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* already gone */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    const pidGone = pid ? await waitUntilPidGone(pid, { timeoutMs: 8000, intervalMs: 100 }) : true;
+    let portFree = true;
+    if (port) {
+      portFree = false;
+      const started = Date.now();
+      while (Date.now() - started < 5000) {
+        if (await canBindPort(port)) {
+          portFree = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    }
+    if (pidGone) {
+      engineProcess = null;
+      if (engineHandle.child) engineHandle.child = null;
+      engineHandle.pid = 0;
+    }
+    if (pidGone && portFree) {
+      enginePort = 0;
+      clearEngineHandle(engineHandle);
+    }
+    return { pidGone, portFree, port, pid };
+  } finally {
+    stoppingEngine = false;
   }
-  engineProcess = null;
-  enginePort = 0;
-  clearEngineHandle(engineHandle);
 }
 
 function provisionProjectRoot(cfg) {
@@ -346,7 +408,7 @@ function provisionProjectRoot(cfg) {
   return root;
 }
 
-async function resolveEngineUrl() {
+async function resolveEngineUrl(options = {}) {
   const shellCfg = loadShellConfig();
   projectRoot = provisionProjectRoot(shellCfg);
   ensureProjectLayout(projectRoot);
@@ -357,10 +419,11 @@ async function resolveEngineUrl() {
     instanceToken = shellCfg.instanceToken;
   }
 
-  let port = shellCfg.enginePort;
+  const allowNewPort = options.allowNewPort !== false;
+  let port = shellCfg.enginePort || options.requiredPort;
   if (port) {
     const existing = await probeHealth(port);
-    if (existing?.ok && existing.instanceToken === instanceToken) {
+    if (shouldAdoptHealth(existing, { instanceToken, ignorePid: options.ignorePid })) {
       appendLog(`接管已有引擎 port=${port} pid=${existing.pid}`);
       enginePort = port;
       adoptEngine(engineHandle, existing, port);
@@ -368,6 +431,9 @@ async function resolveEngineUrl() {
       return `http://${HOST}:${port}`;
     }
     if (existing?.ok && existing.instanceToken !== instanceToken) {
+      if (!allowNewPort) {
+        throw new Error(`已固定端口 ${port} 被其它引擎占用，无法在原端口恢复。`);
+      }
       appendLog(`端口 ${port} 被其它引擎占用，改钉新端口`);
       port = await pickListenPort(SCAN_START);
       saveShellConfig({ APP_DATA_PORT: String(port) });
@@ -375,6 +441,9 @@ async function resolveEngineUrl() {
       throw new Error(`已固定端口 ${port} 被占用。请关闭占用程序后重试。`);
     }
   } else {
+    if (!allowNewPort) {
+      throw new Error("没有可复用的引擎端口，已停止自动恢复。");
+    }
     port = await pickListenPort(SCAN_START);
     saveShellConfig({ APP_DATA_PORT: String(port) });
   }
@@ -543,10 +612,39 @@ function buildMenu() {
 }
 
 async function restartEngine() {
-  appendLog("restart engine requested");
-  await stopEngine({ graceful: true });
-  const url = await resolveEngineUrl();
-  mainWindow?.loadURL(url);
+  if (restartJob) return restartJob;
+  restartJob = (async () => {
+    appendLog("restart engine requested");
+    recoveringEngine = true;
+    setEngineStatus("recovering");
+    const oldPid = engineKillPid(engineHandle);
+    const oldPort = engineHandle.port || enginePort;
+    const stopped = await stopEngine({ graceful: true });
+    if (oldPort && (!stopped.pidGone || !stopped.portFree)) {
+      recoveringEngine = false;
+      setEngineStatus("needs-attention");
+      throw new Error(`引擎未能在原端口 ${oldPort} 恢复。请手动处理。`);
+    }
+    try {
+      const url = await resolveEngineUrl({
+        ignorePid: oldPid,
+        allowNewPort: false,
+        requiredPort: oldPort || undefined,
+      });
+      recoveringEngine = false;
+      autoRestartBudget.recordSuccess();
+      setEngineStatus("ready", { url });
+      return url;
+    } catch (error) {
+      recoveringEngine = false;
+      setEngineStatus("needs-attention");
+      throw error;
+    }
+  })().finally(() => {
+    recoveringEngine = false;
+    restartJob = null;
+  });
+  return restartJob;
 }
 
 function parseSemver(v) {
@@ -936,8 +1034,14 @@ function registerIpc() {
   });
 
   ipcMain.handle("app:restartEngine", async () => {
-    await restartEngine();
-    return { ok: true };
+    const url = await restartEngine();
+    return { ok: true, url, status: engineStatus };
+  });
+  ipcMain.handle("app:engineStatus", () => ({ status: engineStatus, port: enginePort }));
+  ipcMain.handle("app:probeEngine", async () => {
+    if (!enginePort) return { ok: false };
+    const health = await probeHealth(enginePort);
+    return health || { ok: false };
   });
 
   ipcMain.handle("app:getUpdateSettings", () => {
@@ -1036,7 +1140,39 @@ async function boot() {
   buildMenu();
   try {
     const url = await resolveEngineUrl();
+    setEngineStatus("ready", { url });
     createWindow(url);
+    if (powerMonitor && typeof powerMonitor.on === "function") {
+      let resumeTimer;
+      powerMonitor.on("resume", () => {
+        clearTimeout(resumeTimer);
+        resumeTimer = setTimeout(async () => {
+          if (quitting || recoveringEngine || stoppingEngine) return;
+          const health = enginePort ? await probeHealth(enginePort) : null;
+          if (health?.ok) {
+            setEngineStatus("ready");
+            return;
+          }
+          const pid = engineKillPid(engineHandle);
+          if (isPidAlive(pid)) {
+            appendLog("wake: engine pid still alive; not force-killing");
+            setEngineStatus("needs-attention");
+            return;
+          }
+          if (!autoRestartBudget.canAutoRestart()) {
+            setEngineStatus("needs-attention");
+            return;
+          }
+          autoRestartBudget.recordAttempt();
+          try {
+            await restartEngine();
+          } catch (error) {
+            appendLog(`wake restart failed: ${error instanceof Error ? error.message : error}`);
+            setEngineStatus("needs-attention");
+          }
+        }, 800);
+      });
+    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     dialog.showErrorBox("启动失败", `${msg}\n\n日志：${getLogPath()}`);

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildApiUrl,
@@ -6,8 +9,20 @@ import {
   fetchJson,
   invalidationPathsForAuthoringRunSse,
   invalidationPathsForChapterMutationSse,
+  shouldCommitApiResult,
+  shouldReuseInflightRefetch,
   StudioApiError,
 } from "./use-api";
+import {
+  beginRecoveryRead,
+  clearRequestDiagnostics,
+  connectionReadyShouldRefetch,
+  emitEngineConnection,
+  endRecoveryRead,
+  listRequestDiagnostics,
+  resetRecoveryRead,
+  shouldRetryRead,
+} from "../lib/engine-connection";
 
 describe("buildApiUrl", () => {
   it("returns null for blank paths so callers can skip requests", () => {
@@ -95,15 +110,114 @@ describe("fetchJson", () => {
     );
   });
 
-  it("maps Failed to fetch / NetworkError to a transient retry hint", async () => {
-    const fetchImpl = vi.fn(async () => {
+  it("maps Failed to fetch to a transient copy when health still answers", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/health")) {
+        return new Response(JSON.stringify({ ok: true, pid: 99 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       throw new TypeError("Failed to fetch");
     });
 
     await expect(fetchJson("/books", {}, { fetchImpl })).rejects.toMatchObject({
       name: "StudioApiError",
+      kind: "transient",
       message: "请求暂时失败，请重试；若正文已出现可先刷新",
     });
+  });
+
+  it("does not call a 500 Failed to fetch body a local engine outage", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ error: "Failed to fetch" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(fetchJson("/books", {}, { fetchImpl })).rejects.toMatchObject({
+      name: "StudioApiError",
+      status: 500,
+      kind: "upstream",
+      message: "上游服务暂时失败，请稍后重试",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges overlapping GETs and does not self-restart after one retry while health stays up", async () => {
+    clearRequestDiagnostics();
+    emitEngineConnection({ status: "ready" }, { force: true });
+    let bookGets = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/health")) {
+        return new Response(JSON.stringify({ ok: true, pid: 3 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      bookGets += 1;
+      throw new TypeError("Failed to fetch");
+    });
+    const readWithRetry = async () => {
+      try {
+        return await fetchJson("/books/fixture", {}, { fetchImpl });
+      } catch (cause) {
+        const kind = cause instanceof StudioApiError ? cause.kind : "unknown";
+        if (!shouldRetryRead("GET", 0, kind)) throw cause;
+        return fetchJson("/books/fixture", {}, { fetchImpl });
+      }
+    };
+    await Promise.allSettled([readWithRetry(), readWithRetry()]);
+    expect(bookGets).toBeLessThanOrEqual(2);
+    const afterFirstCycle = bookGets;
+    await Promise.allSettled([readWithRetry()]);
+    expect(bookGets - afterFirstCycle).toBeLessThanOrEqual(2);
+    expect(connectionReadyShouldRefetch("ready", "ready")).toBe(false);
+    resetRecoveryRead("/api/v1/books/fixture");
+    expect(beginRecoveryRead("/api/v1/books/fixture")).toBe(true);
+    expect(beginRecoveryRead("/api/v1/books/fixture")).toBe(true);
+    endRecoveryRead("/api/v1/books/fixture");
+    expect(beginRecoveryRead("/api/v1/books/fixture")).toBe(false);
+    const recovery = listRequestDiagnostics().find((row) => row.healthOk === true);
+    expect(recovery?.category).toBe("transient");
+  });
+
+  it("reuses only the same URL in-flight refetch and ignores stale results", () => {
+    expect(shouldReuseInflightRefetch({
+      inflightUrl: "/api/v1/authoring/artifacts/v1",
+      nextUrl: "/api/v1/authoring/artifacts/v1",
+      inflightGeneration: 2,
+      currentGeneration: 2,
+    })).toBe(true);
+    expect(shouldReuseInflightRefetch({
+      inflightUrl: "/api/v1/authoring/artifacts/v1",
+      nextUrl: "/api/v1/authoring/artifacts/v2",
+      inflightGeneration: 2,
+      currentGeneration: 2,
+    })).toBe(false);
+    expect(shouldReuseInflightRefetch({
+      inflightUrl: undefined,
+      nextUrl: "/api/v1/authoring/artifacts/v2",
+      currentGeneration: 1,
+    })).toBe(false);
+    expect(shouldReuseInflightRefetch({
+      inflightUrl: "/api/v1/authoring/artifacts/v1",
+      nextUrl: "/api/v1/authoring/artifacts/v1",
+      inflightGeneration: 1,
+      currentGeneration: 2,
+    })).toBe(false);
+    expect(shouldCommitApiResult("/api/v1/books/old", "/api/v1/books/new", 1, 2)).toBe(false);
+    expect(shouldCommitApiResult("/api/v1/books/new", "/api/v1/books/new", 2, 2)).toBe(true);
+    expect(shouldCommitApiResult("/api/v1/books/old", "/api/v1/books/old", 1, 2)).toBe(false);
+  });
+
+  it("drops inflight ownership when the path becomes empty so the same URL can commit again", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "use-api.ts"), "utf8");
+    expect(source).toMatch(/if \(!url\) \{[\s\S]*refetchInflight\.current = null/);
+    expect(source).toMatch(/inflightGeneration === input\.currentGeneration/);
   });
 });
 

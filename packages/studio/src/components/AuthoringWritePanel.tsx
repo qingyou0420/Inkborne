@@ -5,7 +5,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
 import { isTransientNetworkFetchError } from "../lib/error-copy";
-import { postApi, putApi, useApi } from "../hooks/use-api";
+import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import {
+  AUTHORING_SUBMIT_UNKNOWN_MESSAGE,
+  AuthoringSubmitUnknownError,
+  isAuthoringSubmitUnknown,
+  matchActiveAuthoringSubmit,
+  recoverAuthoringSubmit,
+  submitAuthoringAction,
+} from "../lib/recover-authoring-submit";
 import { isAuthoringRunActive, isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { previousChapterSettleHold, producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
 import { writeStateMissing } from "../lib/write-directory";
@@ -152,24 +160,36 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
     return saved.artifactId;
   };
 
+  const [submitUnknown, setSubmitUnknown] = useState<string | null>(null);
+  const lookupWorkspaceRuns = () => fetchJson<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const run = async (label: string, fn: () => Promise<unknown>, notifyParent = false): Promise<boolean> => {
     if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(label);
     setFailure(null);
+    let keepBusy = false;
     try {
       await fn();
       await refetch();
       if (notifyParent) onChanged?.();
       return true;
     } catch (error) {
+      if (isAuthoringSubmitUnknown(error)) {
+        keepBusy = true;
+        setSubmitUnknown(label);
+        setFailure(error.message);
+        setBusy("unknown");
+        return false;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setFailure(message);
       showToast(message, "error");
       return false;
     } finally {
-      busyRef.current = false;
-      setBusy(null);
+      if (!keepBusy) {
+        busyRef.current = false;
+        setBusy(null);
+      }
     }
   };
 
@@ -251,7 +271,18 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
     return run("review", async () => {
       const artifactId = pendingSavedId.current ?? candidate?.artifactId;
       if (!artifactId) throw new Error(isZh ? "先写本章或生成候选。" : "Write or generate a candidate first.");
-      const next = await postApi<AuthoringReport & { runId?: string; status?: string }>("/authoring/write/review", { bookId, artifactId, coverage: `第 ${chapterNumber} 章` });
+      const submitted = await submitAuthoringAction<AuthoringReport & { runId?: string; status?: string }>({
+        post: () => postApi("/authoring/write/review", { bookId, artifactId, coverage: `第 ${chapterNumber} 章` }),
+        readWorkspace: lookupWorkspaceRuns,
+        match: matchActiveAuthoringSubmit("write", "review", scope),
+      });
+      if (submitted.kind === "bound") {
+        setActiveRunId(submitted.run.runId);
+        setSubmitUnknown(null);
+        return;
+      }
+      if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+      const next = submitted.result;
       if (isBackgroundAuthoringStart(next) && next.runId) {
         setActiveRunId(next.runId);
         return;
@@ -261,7 +292,19 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
   };
   const generationNotes = generationReviewNotes(activeReport, [pendingSavedId.current ?? candidate?.artifactId]);
   const startWriteJob = async (path: "/authoring/write/generate" | "/authoring/write/revise", payload: Record<string, unknown>) => {
-    const generated = await postApi<{ artifactId?: string; runId?: string; status?: string }>(path, payload);
+    const submitted = await submitAuthoringAction<{ artifactId?: string; runId?: string; status?: string }>({
+      post: () => postApi(path, payload),
+      readWorkspace: lookupWorkspaceRuns,
+      match: matchActiveAuthoringSubmit("write", path.endsWith("/revise") ? "revise" : "generate", scope),
+    });
+    if (submitted.kind === "bound") {
+      setActiveRunId(submitted.run.runId);
+      setSubmitUnknown(null);
+      setReportOpen(false);
+      return;
+    }
+    if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+    const generated = submitted.result;
     if (isBackgroundAuthoringStart(generated) && generated.runId) {
       setActiveRunId(generated.runId);
       setReportOpen(false);
@@ -380,7 +423,20 @@ export function AuthoringWritePanel({ bookId, chapterNumber, chapterTitle, isZh,
         ) : null}
         {switchedInBackground ? <p className="manuscript-notice">{isZh ? "候选已在别处更新。你的手改已保留，保存将另存为新候选。" : "Another candidate was selected. Your edits are retained and will save as a new candidate."}</p> : null}
       </header>
-      {error ? <div className="manuscript-error" role="alert"><span>{error}</span>{!failure ? <button type="button" className="btn-ghost" onClick={() => { void refetch(); void refetchArtifact(); }}>{isZh ? "重新加载" : "Retry loading"}</button> : null}</div> : null}
+      {error ? <div className="manuscript-error" role="alert"><span>{error}</span>{!failure ? <button type="button" className="btn-ghost" onClick={() => { void refetch(); void refetchArtifact(); }}>{isZh ? "重新加载" : "Retry loading"}</button> : null}{submitUnknown ? <button type="button" className="btn-ghost" data-testid="authoring-submit-check" onClick={() => {
+        void recoverAuthoringSubmit({
+          readWorkspace: lookupWorkspaceRuns,
+          match: matchActiveAuthoringSubmit("write", submitUnknown === "review" ? "review" : submitUnknown === "revise" ? "revise" : "generate", scope),
+        }).then((recovered) => {
+          if (recovered.kind === "bound") {
+            setActiveRunId(recovered.run.runId);
+            setSubmitUnknown(null);
+            setFailure(null);
+            busyRef.current = false;
+            setBusy(null);
+          } else setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+        });
+      }}>{isZh ? "核对" : "Check"}</button> : null}</div> : null}
       {editing ? <textarea
         className="manuscript-editor prose-body"
         aria-label={isZh ? `第 ${chapterNumber} 章候选正文` : `Chapter ${chapterNumber} candidate text`}

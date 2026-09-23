@@ -6,6 +6,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import {
+  AUTHORING_SUBMIT_UNKNOWN_MESSAGE,
+  AuthoringSubmitUnknownError,
+  isAuthoringSubmitUnknown,
+  matchActiveAuthoringSubmit,
+  recoverAuthoringSubmit,
+  submitAuthoringAction,
+  type RecoverableAuthoringRun,
+} from "../lib/recover-authoring-submit";
 import { invalidateBookStage } from "../hooks/use-book-stage";
 import { useChatStore } from "../store/chat";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
@@ -118,6 +127,7 @@ export function AuthoringWeavePanel({
   const [liveRun, setLiveRun] = useState<WeaveRun | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [pollEpoch, setPollEpoch] = useState(0);
+  const [submitUnknown, setSubmitUnknown] = useState<{ operation: string } | null>(null);
   const actionRef = useRef(false);
   const generated = coverage?.chaptersGenerated ?? 0;
   const canonTarget = data?.canon?.targetChapters;
@@ -148,7 +158,7 @@ export function AuthoringWeavePanel({
     : openStructureImpact(impact);
   const openWeaveItems = openImpactItems(impact, "weave");
   const run = liveRun ?? (activeRunId && lastWeave?.runId === activeRunId ? lastWeave : null);
-  const running = busy === "generate" || Boolean(run && (run.status === "running" || run.status === "pausing"));
+  const running = busy === "generate" || busy === "review" || busy === "unknown" || Boolean(submitUnknown) || Boolean(run && (run.status === "running" || run.status === "pausing"));
 
   useEffect(() => {
     if (!data || dirtyRef.current || actionRef.current) return;
@@ -179,7 +189,7 @@ export function AuthoringWeavePanel({
       settled: async () => {
         await refetch();
         onChanged?.();
-        if (!cancelled) setBusy((current) => current === "generate" ? null : current);
+        if (!cancelled) setBusy((current) => current === "generate" || current === "review" ? null : current);
       },
       error: (error) => setPollError(error instanceof Error ? error.message : String(error)),
     });
@@ -189,11 +199,42 @@ export function AuthoringWeavePanel({
     };
   }, [activeRunId, bookId, onChanged, refetch, pollEpoch]);
 
+  const bindRecoveredRun = (recovered: RecoverableAuthoringRun, label: string) => {
+    setSubmitUnknown(null);
+    setFailure(null);
+    setActiveRunId(recovered.runId);
+    setPollEpoch((epoch) => epoch + 1);
+    setLiveRun({
+      runId: recovered.runId,
+      status: recovered.status,
+      progressLabel: recovered.progressLabel,
+    });
+    setBusy(label);
+  };
+
+  const lookupWorkspaceRuns = () => fetchJson<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+
+  const checkUnknownSubmit = () => {
+    if (!submitUnknown) return;
+    void (async () => {
+      const recovered = await recoverAuthoringSubmit({
+        readWorkspace: lookupWorkspaceRuns,
+        match: matchActiveAuthoringSubmit("weave", submitUnknown.operation),
+      });
+      if (recovered.kind === "bound") {
+        bindRecoveredRun(recovered.run, submitUnknown.operation);
+        return;
+      }
+      setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+    })();
+  };
+
   const runAction = async (label: string, fn: () => Promise<unknown>, after?: "adopt") => {
     if (actionRef.current) return undefined;
     actionRef.current = true;
     setBusy(label);
     setFailure(null);
+    let keepBusy = false;
     try {
       const result = await fn();
       await refetch();
@@ -201,13 +242,20 @@ export function AuthoringWeavePanel({
       if (after === "adopt") onAdopted?.();
       return result;
     } catch (error) {
+      if (isAuthoringSubmitUnknown(error)) {
+        keepBusy = true;
+        setSubmitUnknown({ operation: label === "generate" ? "generate" : label });
+        setFailure(error.message);
+        setBusy("unknown");
+        return undefined;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setFailure(message);
       showToast(message, "error");
       return undefined;
     } finally {
       actionRef.current = false;
-      setBusy(null);
+      if (!keepBusy) setBusy(null);
     }
   };
 
@@ -264,14 +312,30 @@ export function AuthoringWeavePanel({
     setFailure(null);
     try {
       await persistIfDirty();
-      const result = await postApi<WeaveRun & { beats?: unknown }>( "/authoring/weave/generate", {
-        bookId,
-        startChapter: Number(startChapter) || 1,
-        endChapter: Number(endChapter) || target,
-        targetChapters: target || undefined,
-        requirements,
+      const submitted = await submitAuthoringAction<WeaveRun & { beats?: unknown }>({
+        post: () => postApi("/authoring/weave/generate", {
+          bookId,
+          startChapter: Number(startChapter) || 1,
+          endChapter: Number(endChapter) || target,
+          targetChapters: target || undefined,
+          requirements,
+        }),
+        readWorkspace: lookupWorkspaceRuns,
+        match: matchActiveAuthoringSubmit("weave", "generate"),
       });
       pendingSavedId.current = undefined;
+      if (submitted.kind === "bound") {
+        bindRecoveredRun(submitted.run, "generate");
+        setReportOpen(false);
+        return true;
+      }
+      if (submitted.kind === "unknown") {
+        setSubmitUnknown({ operation: "generate" });
+        setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+        setBusy("unknown");
+        return false;
+      }
+      const result = submitted.result;
       if (result.runId) {
         setActiveRunId(result.runId);
         setPollEpoch((epoch) => epoch + 1);
@@ -340,7 +404,54 @@ export function AuthoringWeavePanel({
   const reviewCurrent = () => {
     if (actionRef.current || editing || dirty || running) return Promise.resolve(undefined);
     setReportOpen(true);
-    return runAction("review", async () => { const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId); const next = await postApi<AuthoringReport>("/authoring/weave/review", { bookId, artifactId, coverage: isZh ? "整份规划" : "Entire outline", wait: true }); setReport(next); return next; });
+    actionRef.current = true;
+    setBusy("review");
+    setFailure(null);
+    return (async () => {
+      let startedRun = false;
+      try {
+        const artifactId = resolveAdoptArtifactId(currentId, candidate?.artifactId);
+        const submitted = await submitAuthoringAction<{ runId?: string; status?: string } & Partial<AuthoringReport>>({
+          post: () => postApi("/authoring/weave/review", {
+            bookId,
+            artifactId,
+            coverage: isZh ? "整份规划" : "Entire outline",
+          }),
+          readWorkspace: lookupWorkspaceRuns,
+          match: matchActiveAuthoringSubmit("weave", "review"),
+        });
+        if (submitted.kind === "bound") {
+          startedRun = true;
+          bindRecoveredRun(submitted.run, "review");
+          return submitted.run;
+        }
+        if (submitted.kind === "unknown") {
+          setSubmitUnknown({ operation: "review" });
+          setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+          setBusy("unknown");
+          return undefined;
+        }
+        const next = submitted.result;
+        if (next.runId && (next.status === "running" || !next.issues)) {
+          startedRun = true;
+          setActiveRunId(next.runId);
+          setPollEpoch((epoch) => epoch + 1);
+          setLiveRun({ runId: next.runId, status: next.status ?? "running", progressLabel: isZh ? "正在审查规划" : "Reviewing outline" });
+          return next;
+        }
+        if (next.issues) setReport(next as AuthoringReport);
+        await refetch();
+        return next;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setFailure(message);
+        showToast(message, "error");
+        return undefined;
+      } finally {
+        actionRef.current = false;
+        if (!startedRun) setBusy((current) => current === "review" ? null : current);
+      }
+    })();
   };
   const generationNotes = generationReviewNotes(activeReport, [currentId]);
   const resolveImpact = (keys: string[], as: "reviewed" | "dismissed") => runAction("impact", async () => {
@@ -420,17 +531,27 @@ export function AuthoringWeavePanel({
       <RegenerateDialog open={Boolean(generation)} title={generation?.mode === "structure" ? (isZh ? "重新规划分卷" : "Replan volumes") : (isZh ? "规划章节概要" : "Plan chapter summaries")} scopeLabel={generation?.mode === "structure" ? (isZh ? `全书 ${target || "—"} 章` : `Book ${target || "—"} ch`) : (isZh ? `第 ${startChapter}–${endChapter} 章` : `Chapters ${startChapter}–${endChapter}`)} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && report ? report.summary : generationNotes ?? impactRegenerateRequirements(openWeaveItems, isZh)} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
         if (!generation) return false;
         const ok = generation.issueIds && report && currentId ? (await runAction("revise", async () => {
-          const result = await postApi<WeaveRun>("/authoring/weave/revise", {
-            bookId,
-            artifactId: currentId,
-            reportId: report.reportId,
-            selectedIssueIds: generation.issueIds,
-            startChapter: Number(startChapter) || 1,
-            endChapter: Number(endChapter) || target,
-            reuseStale: generation.reuseStale,
-            requirements,
-            reviseStructure: generation.mode === "structure",
+          const submitted = await submitAuthoringAction<WeaveRun>({
+            post: () => postApi("/authoring/weave/revise", {
+              bookId,
+              artifactId: currentId,
+              reportId: report.reportId,
+              selectedIssueIds: generation.issueIds,
+              startChapter: Number(startChapter) || 1,
+              endChapter: Number(endChapter) || target,
+              reuseStale: generation.reuseStale,
+              requirements,
+              reviseStructure: generation.mode === "structure",
+            }),
+            readWorkspace: lookupWorkspaceRuns,
+            match: matchActiveAuthoringSubmit("weave", "revise"),
           });
+          if (submitted.kind === "bound") {
+            bindRecoveredRun(submitted.run, "revise");
+            pendingSavedId.current = undefined; setReportOpen(false); return true;
+          }
+          if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+          const result = submitted.result;
           if (result.runId) {
             setActiveRunId(result.runId);
             setPollEpoch((epoch) => epoch + 1);
@@ -440,8 +561,18 @@ export function AuthoringWeavePanel({
         })) === true
           : generation.mode === "structure"
             ? (await runAction("generate", async () => {
-              const result = await postApi<{ runId?: string; status?: string }>("/authoring/weave/structure", { bookId, requirements });
+              const submitted = await submitAuthoringAction<{ runId?: string; status?: string }>({
+                post: () => postApi("/authoring/weave/structure", { bookId, requirements }),
+                readWorkspace: lookupWorkspaceRuns,
+                match: matchActiveAuthoringSubmit("weave", "generate"),
+              });
               pendingSavedId.current = undefined;
+              if (submitted.kind === "bound") {
+                bindRecoveredRun(submitted.run, "generate");
+                return submitted.run;
+              }
+              if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+              const result = submitted.result;
               if (result.runId) {
                 setActiveRunId(result.runId);
                 setPollEpoch((epoch) => epoch + 1);
@@ -548,6 +679,15 @@ export function AuthoringWeavePanel({
         </p>
       )}
       {failure ? <p role="alert" className="text-sm text-destructive">{failure}</p> : null}
+      {submitUnknown ? (
+        <div className="ink-notice text-sm" data-testid="authoring-submit-unknown">
+          <span>{AUTHORING_SUBMIT_UNKNOWN_MESSAGE}</span>
+          {" "}
+          <button type="button" className="btn-ghost" data-testid="authoring-submit-check" onClick={checkUnknownSubmit}>
+            {isZh ? "核对" : "Check"}
+          </button>
+        </div>
+      ) : null}
       <div className="manuscript-action-buttons ground-document-actions">
         {editing ? <>
           <button type="button" disabled={Boolean(busy) || running || !dirty} onClick={() => void runAction("save", async () => { await persistIfDirty(); setEditing(false); })}>{isZh ? "保存" : "Save"}</button>
@@ -593,8 +733,18 @@ export function AuthoringWeavePanel({
               return;
             }
             void runAction("generate", async () => {
-              const result = await postApi<{ runId?: string; status?: string }>("/authoring/weave/structure", { bookId, requirements: requirementNotes.trim() || undefined });
+              const submitted = await submitAuthoringAction<{ runId?: string; status?: string }>({
+                post: () => postApi("/authoring/weave/structure", { bookId, requirements: requirementNotes.trim() || undefined }),
+                readWorkspace: lookupWorkspaceRuns,
+                match: matchActiveAuthoringSubmit("weave", "generate"),
+              });
               pendingSavedId.current = undefined;
+              if (submitted.kind === "bound") {
+                bindRecoveredRun(submitted.run, "generate");
+                return submitted.run;
+              }
+              if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+              const result = submitted.result;
               if (result.runId) {
                 setActiveRunId(result.runId);
                 setPollEpoch((epoch) => epoch + 1);

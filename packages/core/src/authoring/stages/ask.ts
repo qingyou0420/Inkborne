@@ -334,6 +334,21 @@ async function persistAskRun(
   if (saved) onProgress?.(saved);
 }
 
+async function persistFailedAskRun(
+  root: AuthoringStoreRoot,
+  run: Omit<z.input<typeof AuthoringRunRecordSchema>, "updatedAt"> & { updatedAt?: string },
+  cause: unknown,
+  onProgress?: (run: AuthoringRunRecord) => void,
+): Promise<void> {
+  try {
+    await persistAskRun(root, run, onProgress);
+  } catch (persistError) {
+    const wrapped = cause instanceof Error ? cause : new Error(String(cause));
+    (wrapped as Error & { persistError?: unknown }).persistError = persistError;
+    throw wrapped;
+  }
+}
+
 export async function generateAskCanon(input: AskRuntime & {
   readonly conversation: string;
   readonly requirements?: string;
@@ -444,7 +459,7 @@ export async function generateAskCanon(input: AskRuntime & {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await persistAskRun(input.root, failed, input.onProgress);
+    await persistFailedAskRun(input.root, failed, error, input.onProgress);
     throw error;
   }
 }
@@ -622,7 +637,7 @@ export async function reviseAskCanon(input: AskRuntime & {
       error: error instanceof Error ? error.message : String(error),
       progressLabel: "修订正典失败",
     };
-    await persistAskRun(input.root, failed, input.onProgress);
+    await persistFailedAskRun(input.root, failed, error, input.onProgress);
     throw error;
   }
 }

@@ -1,4 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { downloadRequestDiagnostics } from "../lib/engine-connection";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SerialCockpitStrip, startDraft, startWriteNext } from "../components/SerialCockpitStrip";
 import { AuthoringWritePanel, type WriteLeaveGuard } from "../components/AuthoringWritePanel";
@@ -454,7 +455,15 @@ export function BookDetail({
     </div>
   );
 
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">Error: {error}</div>;
+  if (error && !data) {
+    return (
+      <div className="p-8 space-y-4 bg-destructive/5 rounded-xl border border-destructive/20" data-testid="write-reconnect">
+        <p className="text-destructive">{error}</p>
+        <button type="button" className="btn-ghost" onClick={() => void refetch()}>重新连接</button>
+        <button type="button" className="btn-ghost" data-testid="export-request-diagnostics" onClick={() => downloadRequestDiagnostics()}>导出连接诊断</button>
+      </div>
+    );
+  }
   if (!data) return null;
 
   const { book, chapters } = data;
@@ -477,7 +486,15 @@ export function BookDetail({
 
   return (
     <div className="write-workspace-page">
-
+      {error ? (
+        <div className="ink-notice text-sm mb-3" data-tone="danger" data-testid="write-refresh-error">
+          <span>{error}</span>
+          {" "}
+          <button type="button" className="btn-ghost" onClick={() => void refetch()}>重试</button>
+          {" "}
+          <button type="button" className="btn-ghost" data-testid="export-request-diagnostics" onClick={() => downloadRequestDiagnostics()}>导出连接诊断</button>
+        </div>
+      ) : null}
 
       {(writing || drafting || activity.lastError || actionMessage || (typeof bookActionPending === "string" && bookActionPending.startsWith("saved:"))) && (
         <div

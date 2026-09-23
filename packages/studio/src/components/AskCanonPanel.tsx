@@ -3,6 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, FileCheck2, MoreHorizontal, PanelRightClose, PanelRightOpen, PencilLine, Save } from "lucide-react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import {
+  AUTHORING_SUBMIT_UNKNOWN_MESSAGE,
+  AuthoringSubmitUnknownError,
+  isAuthoringSubmitUnknown,
+  matchActiveAuthoringSubmit,
+  recoverAuthoringSubmit,
+  submitAuthoringAction,
+} from "../lib/recover-authoring-submit";
 import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { askRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun } from "../lib/authoring-run-selection";
 import { invalidateBookStage } from "../hooks/use-book-stage";
@@ -63,6 +71,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
   const [busy, setBusy] = useState<string | null>(null);
   const busyRef = useRef(false);
   const [actionError, setActionError] = useState<string>();
+  const [submitUnknown, setSubmitUnknown] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItem, setHistoryItem] = useState<CanonVersion>();
@@ -156,15 +165,32 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     navigationDecision.current?.(allow); navigationDecision.current = null;
   };
 
+  const lookupWorkspaceRuns = () => fetchJson<AuthoringWorkspace>(`/authoring/workspace?${query}`);
   const run = async (label: string, action: () => Promise<unknown>): Promise<boolean> => {
     if (busyRef.current) return false;
     busyRef.current = true; setBusy(label); setActionError(undefined);
+    let keepBusy = false;
     try { await action(); return true; }
     catch (failure) {
+      if (isAuthoringSubmitUnknown(failure)) {
+        keepBusy = true;
+        if (mounted.current) {
+          setSubmitUnknown(label);
+          setActionError(failure.message);
+          setBusy("unknown");
+        }
+        return false;
+      }
       const message = failure instanceof Error ? failure.message : String(failure);
       if (mounted.current) setActionError(message);
       showToast(message, "error"); return false;
-    } finally { await refetch(); busyRef.current = false; if (mounted.current) setBusy(null); }
+    } finally {
+      await refetch();
+      if (!keepBusy) {
+        busyRef.current = false;
+        if (mounted.current) setBusy(null);
+      }
+    }
   };
   const persistIfDirty = async (requireLength = false): Promise<string | undefined> => {
     const fieldError = validateCanonFields(editor.current.snapshot.body, isZh, { requireLength });
@@ -232,7 +258,14 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     setReportOpen(true); setExpanded(true);
     void run("review", async () => {
       const artifactId = await prepareCurrentArtifact();
-      const next = await postApi<{ runId?: string; status?: string; reportId?: string }>("/authoring/ask/review", { ...scope, artifactId, conversation });
+      const submitted = await submitAuthoringAction<{ runId?: string; status?: string; reportId?: string }>({
+        post: () => postApi("/authoring/ask/review", { ...scope, artifactId, conversation }),
+        readWorkspace: lookupWorkspaceRuns,
+        match: matchActiveAuthoringSubmit("ask", "review"),
+      });
+      if (submitted.kind === "bound") { setActiveRunId(submitted.run.runId); setSubmitUnknown(null); return; }
+      if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+      const next = submitted.result;
       if (isBackgroundAuthoringStart(next) && next.runId) setActiveRunId(next.runId);
     });
   };
@@ -291,9 +324,21 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     else void regenerate("");
   };
   const regenerate = (requirements: string, authorRequirement = requirements) => run(revision ? "revise" : "generate", async () => {
-    const generated = revision
-      ? await postApi<{ artifactId?: string; runId?: string; status?: string }>("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
-      : await postApi<{ artifactId?: string; runId?: string; status?: string }>("/authoring/ask/generate", { ...scope, conversation, requirements, authorRequirement });
+    const generatedSubmit = await submitAuthoringAction<{ artifactId?: string; runId?: string; status?: string }>({
+      post: () => revision
+        ? postApi("/authoring/ask/revise", { ...scope, artifactId: resolveAdoptArtifactId(currentArtifactId, candidate?.artifactId), ...revision, conversation, authorRequirement, extraRequirement: authorRequirement })
+        : postApi("/authoring/ask/generate", { ...scope, conversation, requirements, authorRequirement }),
+      readWorkspace: lookupWorkspaceRuns,
+      match: matchActiveAuthoringSubmit("ask", revision ? "revise" : "generate"),
+    });
+    if (generatedSubmit.kind === "bound") {
+      setActiveRunId(generatedSubmit.run.runId);
+      setSubmitUnknown(null);
+      if (mounted.current) { setExpanded(true); setReportOpen(false); }
+      return;
+    }
+    if (generatedSubmit.kind === "unknown") throw new AuthoringSubmitUnknownError();
+    const generated = generatedSubmit.result;
     if (isBackgroundAuthoringStart(generated) && generated.runId) {
       setActiveRunId(generated.runId);
       if (mounted.current) { setExpanded(true); setReportOpen(false); }
@@ -335,6 +380,22 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
           {report && !busy ? <span>{report.incomplete ? (isZh ? "审查未完成" : "Review incomplete") : stale ? (isZh ? "审查对应旧稿" : "Review is outdated") : (isZh ? "已有审查意见" : "Review available")}</span> : null}
           {error || draftError || adoptedCopy.error ? <span role="alert">{error ?? draftError ?? adoptedCopy.error}<button type="button" onClick={() => void (draftError ? ensureDraft() : adoptedCopy.error ? adoptedCopy.refetch() : refetch())}>{isZh ? "重试加载" : "Retry loading"}</button></span> : null}
           {actionError ? <span role="alert" className="ask-canon-error">{actionError}</span> : null}
+          {submitUnknown ? (
+            <button type="button" className="btn-ghost" data-testid="authoring-submit-check" onClick={() => {
+              void recoverAuthoringSubmit({
+                readWorkspace: lookupWorkspaceRuns,
+                match: matchActiveAuthoringSubmit("ask", submitUnknown === "review" ? "review" : submitUnknown === "revise" ? "revise" : "generate"),
+              }).then((recovered) => {
+                if (recovered.kind === "bound") {
+                  setActiveRunId(recovered.run.runId);
+                  setSubmitUnknown(null);
+                  setActionError(undefined);
+                  busyRef.current = false;
+                  setBusy(null);
+                } else setActionError(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+              });
+            }}>{isZh ? "核对" : "Check"}</button>
+          ) : null}
         </div>
         <div className="ask-canon-actions">{editing ? <>
           <button type="button" className="ask-canon-primary" disabled={!editBaseId || !dirty || locked || !ready} onClick={() => void save()}><Save size={15} />{isZh ? "保存" : "Save"}</button><button type="button" disabled={locked} onClick={cancelEditing}>{isZh ? "取消" : "Cancel"}</button>

@@ -6,6 +6,14 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import {
+  AUTHORING_SUBMIT_UNKNOWN_MESSAGE,
+  AuthoringSubmitUnknownError,
+  isAuthoringSubmitUnknown,
+  matchActiveAuthoringSubmit,
+  recoverAuthoringSubmit,
+  submitAuthoringAction,
+} from "../lib/recover-authoring-submit";
 import { isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { groundRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun } from "../lib/authoring-run-selection";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
@@ -105,23 +113,35 @@ function AuthoringGroundBook({
   const report = reportOverride ?? reportForArtifact(data?.reports, draft.baseId) ?? null;
   const lastGroundRun = selectScopedAuthoringRun(data?.runs, "ground");
 
+  const [submitUnknown, setSubmitUnknown] = useState<string | null>(null);
+  const lookupWorkspaceRuns = () => fetchJson<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
   const run = async (label: string, fn: () => Promise<unknown>) => {
     if (operationBusy.current || legacyBusy) return;
     operationBusy.current = true;
     setBusy(label);
     setFailure(null);
+    let keepBusy = false;
     try {
       const result = await fn();
       await refetch();
       return result;
     } catch (error) {
+      if (isAuthoringSubmitUnknown(error)) {
+        keepBusy = true;
+        setSubmitUnknown(label);
+        setFailure(error.message);
+        setBusy("unknown");
+        return undefined;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setFailure(message);
       showToast(message, "error");
       return undefined;
     } finally {
-      operationBusy.current = false;
-      setBusy(null);
+      if (!keepBusy) {
+        operationBusy.current = false;
+        setBusy(null);
+      }
     }
   };
 
@@ -267,7 +287,14 @@ function AuthoringGroundBook({
     if (blocked || editing || draft.dirty || actionIds.length === 0) return Promise.resolve(undefined);
     setReportOpen(true);
     return run("review", async () => {
-      const next = await postApi<AuthoringReport & { runId?: string; status?: string }>("/authoring/ground/review", { bookId, entryIds: actionIds });
+      const submitted = await submitAuthoringAction<AuthoringReport & { runId?: string; status?: string }>({
+        post: () => postApi("/authoring/ground/review", { bookId, entryIds: actionIds }),
+        readWorkspace: lookupWorkspaceRuns,
+        match: matchActiveAuthoringSubmit("ground", "review"),
+      });
+      if (submitted.kind === "bound") { setActiveRunId(submitted.run.runId); setSubmitUnknown(null); return submitted.run; }
+      if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+      const next = submitted.result;
       if (isBackgroundAuthoringStart(next) && next.runId) { setActiveRunId(next.runId); return next; }
       setReport(next);
       return next;
@@ -276,7 +303,14 @@ function AuthoringGroundBook({
   const generationNotes = generationReviewNotes(report, (generation?.entryIds ?? []).map((id) => { const item = visibleAll.find((entry) => entry.id === id); return item?.candidateArtifactId ?? item?.adoptedArtifactId; }));
   const generateEntries = (entryIds: string[], regenerate: boolean, requirements = "") => run("generate", async () => {
     await persistIfDirty();
-    const result = await postApi<{ runId?: string; status?: string; generated?: string[] }>("/authoring/ground/generate", { bookId, entryIds, regenerate, requirements: withGenerationReview(requirements, generationNotes) });
+    const submitted = await submitAuthoringAction<{ runId?: string; status?: string; generated?: string[] }>({
+      post: () => postApi("/authoring/ground/generate", { bookId, entryIds, regenerate, requirements: withGenerationReview(requirements, generationNotes) }),
+      readWorkspace: lookupWorkspaceRuns,
+      match: matchActiveAuthoringSubmit("ground", "generate"),
+    });
+    if (submitted.kind === "bound") { setActiveRunId(submitted.run.runId); setSubmitUnknown(null); return true; }
+    if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+    const result = submitted.result;
     if (isBackgroundAuthoringStart(result) && result.runId) setActiveRunId(result.runId);
     else { artifactRequest.current += 1; editor.generated(); setArtifactRetry((value) => value + 1); }
     setReportOpen(false); return true;
@@ -516,6 +550,22 @@ function AuthoringGroundBook({
             </p>
           )}
           {failure ? <p role="alert" className="text-sm text-destructive">{failure}</p> : null}
+          {submitUnknown ? (
+            <button type="button" className="btn-ghost" data-testid="authoring-submit-check" onClick={() => {
+              void recoverAuthoringSubmit({
+                readWorkspace: lookupWorkspaceRuns,
+                match: matchActiveAuthoringSubmit("ground", submitUnknown === "review" ? "review" : "generate"),
+              }).then((recovered) => {
+                if (recovered.kind === "bound") {
+                  setActiveRunId(recovered.run.runId);
+                  setSubmitUnknown(null);
+                  setFailure(null);
+                  operationBusy.current = false;
+                  setBusy(null);
+                } else setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+              });
+            }}>{isZh ? "核对" : "Check"}</button>
+          ) : null}
           {draft.baseId || batchMode ? <div className="manuscript-action-buttons ground-document-actions">
             {editing ? <>
               <button type="button" disabled={blocked || !draft.dirty} onClick={() => void run("save", async () => { await persistIfDirty(); setEditing(false); })}>{isZh ? "保存" : "Save"}</button>

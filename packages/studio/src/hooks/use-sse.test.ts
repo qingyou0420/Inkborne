@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STUDIO_SSE_EVENTS, collectNewSSEMessages } from "./use-sse";
 import type { SSEMessage } from "./use-sse";
@@ -36,6 +39,7 @@ describe("STUDIO_SSE_EVENTS", () => {
       "fanfic:start",
       "fanfic:complete",
       "fanfic:error",
+      "authoring:run",
       "fanfic:refresh:start",
       "fanfic:refresh:complete",
       "fanfic:refresh:error",
@@ -86,5 +90,13 @@ describe("collectNewSSEMessages", () => {
     const { fresh, nextCursor } = collectNewSSEMessages(messages, 49);
     expect(fresh.map((message) => message.seq)).toEqual([50, 51, 52]);
     expect(nextCursor).toBe(52);
+  });
+});
+
+describe("SSE reconnect", () => {
+  it("dispatches a reconnect event only after a previous connection dropped", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "use-sse.ts"), "utf8");
+    expect(source).toContain("SSE_RECONNECT_EVENT");
+    expect(source).toContain("openedOnceRef.current && !connectedRef.current");
   });
 });

@@ -47,6 +47,7 @@ import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
 import { invalidateApiPaths, invalidationPathsForAuthoringRunSse, invalidationPathsForChapterMutationSse, postApi, useApi } from "./hooks/use-api";
+import { emitEngineConnection } from "./lib/engine-connection";
 import { X } from "lucide-react";
 import { useChatStore } from "./store/chat";
 import { applyAppearanceToDocument } from "./lib/appearance";
@@ -270,6 +271,16 @@ export function App() {
     bumpBookDataVersion();
   }, [activeBookId, bumpBookDataVersion]);
   useNewSSEMessages(sse.messages, onStageSse);
+
+  useEffect(() => {
+    const api = (window as { fantaWriter?: { onEngineStatus?: (listener: (detail: { status?: string; url?: string }) => void) => () => void } }).fantaWriter;
+    if (!api?.onEngineStatus) return undefined;
+    return api.onEngineStatus((detail) => {
+      if (detail.status === "ready") emitEngineConnection({ status: "ready" }, { force: true });
+      else if (detail.status === "recovering" || detail.status === "connecting") emitEngineConnection({ status: "checking" });
+      else if (detail.status === "needs-attention" || detail.status === "stopped") emitEngineConnection({ status: "unreachable" });
+    });
+  }, []);
 
   const startupGate = deriveStartupGate({ ready, projectError });
 

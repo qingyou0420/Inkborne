@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { z } from "zod";
@@ -97,11 +97,49 @@ export async function saveManifest(root: AuthoringStoreRoot, manifest: z.input<t
   );
 }
 
-export async function saveRun(root: AuthoringStoreRoot, run: z.input<typeof AuthoringRunRecordSchema> | AuthoringRunRecord): Promise<void> {
+export type ReplaceJsonFileOptions = {
+  readonly renameFile?: (from: string, to: string) => Promise<void>;
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function replaceJsonFile(
+  dest: string,
+  content: string,
+  options?: ReplaceJsonFileOptions | ((from: string, to: string) => Promise<void>),
+): Promise<void> {
+  const renameFile = typeof options === "function" ? options : options?.renameFile ?? rename;
+  await mkdir(dirname(dest), { recursive: true });
+  const tmp = `${dest}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, "utf-8");
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await renameFile(tmp, dest);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await delay(20 * (attempt + 1));
+    }
+  }
+  await rm(tmp, { force: true }).catch(() => undefined);
+  throw lastError;
+}
+
+export async function saveRun(
+  root: AuthoringStoreRoot,
+  run: z.input<typeof AuthoringRunRecordSchema> | AuthoringRunRecord,
+  options?: ReplaceJsonFileOptions,
+): Promise<void> {
   const dir = join(authoringRootDir(root), "runs");
-  await mkdir(dir, { recursive: true });
   const parsed = AuthoringRunRecordSchema.parse({ ...run, updatedAt: nowIso() });
-  await writeFile(join(dir, `${parsed.runId}.json`), `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+  await replaceJsonFile(
+    join(dir, `${parsed.runId}.json`),
+    `${JSON.stringify(parsed, null, 2)}\n`,
+    options,
+  );
 }
 
 export async function loadRun(root: AuthoringStoreRoot, runId: string): Promise<AuthoringRunRecord | undefined> {
@@ -115,8 +153,12 @@ export async function listRuns(root: AuthoringStoreRoot): Promise<AuthoringRunRe
   const items: AuthoringRunRecord[] = [];
   for (const file of files) {
     if (!file.endsWith(".json") || file.endsWith(".control.json")) continue;
-    const run = await readJson(join(dir, file), (raw) => AuthoringRunRecordSchema.parse(raw));
-    if (run) items.push(run);
+    try {
+      const run = await readJson(join(dir, file), (raw) => AuthoringRunRecordSchema.parse(raw));
+      if (run) items.push(run);
+    } catch {
+      continue;
+    }
   }
   return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

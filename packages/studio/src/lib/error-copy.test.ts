@@ -52,6 +52,7 @@ describe("localizeKnownRuntimeMessage", () => {
     expect(localizeKnownRuntimeMessage("NetworkError when attempting to fetch resource.")).toBe(expected);
     expect(localizeKnownRuntimeMessage("NetworkError")).toBe(expected);
     expect(localizeKnownRuntimeMessage(expected)).toBe(expected);
+    expect(expected).not.toContain("重启应用");
   });
 
   it("localizes in-process write locks as 写入被占用, not a read failure", () => {

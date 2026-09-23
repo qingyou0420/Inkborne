@@ -103,20 +103,138 @@ function emitAuthoringRun(deps: AuthoringRouteDeps, root: AuthoringStoreRoot, ru
   });
 }
 
-async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: unknown, deps?: AuthoringRouteDeps): Promise<void> {
-  const current = await loadRun(root, runId);
-  if (current && (current.status === "running" || current.status === "pausing")) {
-    const failed = {
-      ...current,
-      status: "failed" as const,
-      error: error instanceof Error ? error.message : String(error),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRun(root, failed);
-    if (deps) emitAuthoringRun(deps, root, failed);
-    return;
+const runOverlays = new Map<string, AuthoringRunRecord & { persistError?: string }>();
+
+function runOverlayKey(root: AuthoringStoreRoot, runId: string): string {
+  return `${root.projectRoot}::${root.bookId ?? ""}::${root.draftId ?? ""}::${runId}`;
+}
+
+function rememberRunOverlay(root: AuthoringStoreRoot, run: AuthoringRunRecord & { persistError?: string }): void {
+  runOverlays.set(runOverlayKey(root, run.runId), run);
+}
+
+function overlayFor(root: AuthoringStoreRoot, runId: string): (AuthoringRunRecord & { persistError?: string }) | undefined {
+  return runOverlays.get(runOverlayKey(root, runId));
+}
+
+function overlaysForRoot(root: AuthoringStoreRoot): Array<AuthoringRunRecord & { persistError?: string }> {
+  const prefix = `${root.projectRoot}::${root.bookId ?? ""}::${root.draftId ?? ""}::`;
+  const items: Array<AuthoringRunRecord & { persistError?: string }> = [];
+  for (const [key, run] of runOverlays) {
+    if (key.startsWith(prefix)) items.push(run);
   }
-  if (deps && current) emitAuthoringRun(deps, root, current);
+  return items;
+}
+
+function clearRunOverlay(root: AuthoringStoreRoot, runId: string): void {
+  runOverlays.delete(runOverlayKey(root, runId));
+}
+
+function persistErrorMessage(error: unknown): string | undefined {
+  if (error && typeof error === "object" && "persistError" in error) {
+    const nested = (error as { persistError?: unknown }).persistError;
+    return nested instanceof Error ? nested.message : nested != null ? String(nested) : undefined;
+  }
+  return undefined;
+}
+
+function abnormalRun(root: AuthoringStoreRoot, runId: string, error: string, persistError?: string, seed?: Partial<AuthoringRunRecord>): AuthoringRunRecord & { persistError?: string } {
+  const now = new Date().toISOString();
+  return {
+    runId,
+    stage: seed?.stage ?? "ask",
+    operation: seed?.operation ?? "generate",
+    roleId: seed?.roleId ?? "ask.main",
+    status: "failed",
+    bookId: seed?.bookId ?? root.bookId,
+    draftId: seed?.draftId ?? root.draftId,
+    scope: seed?.scope,
+    error,
+    persistError,
+    modelSnapshot: seed?.modelSnapshot ?? {},
+    producedArtifactIds: seed?.producedArtifactIds ?? [],
+    createdAt: seed?.createdAt ?? now,
+    updatedAt: now,
+    progressDone: seed?.progressDone ?? 0,
+    progressTotal: seed?.progressTotal,
+    progressLabel: seed?.progressLabel ?? "运行状态异常",
+  };
+}
+
+function mergeRunWithOverlay(root: AuthoringStoreRoot, run: AuthoringRunRecord | undefined, runId: string): (AuthoringRunRecord & { persistError?: string }) | undefined {
+  const overlay = overlayFor(root, runId);
+  if (!overlay) return run;
+  if (!run) return overlay;
+  if (run.status === "running" || run.status === "pausing") return overlay;
+  return run;
+}
+
+async function readRunForQuery(root: AuthoringStoreRoot, runId: string): Promise<(AuthoringRunRecord & { persistError?: string }) | undefined> {
+  try {
+    const disk = await loadRun(root, runId);
+    return mergeRunWithOverlay(root, disk, runId);
+  } catch (error) {
+    const overlay = overlayFor(root, runId);
+    if (overlay) return overlay;
+    const broken = abnormalRun(
+      root,
+      runId,
+      "运行记录损坏，任务已停止。",
+      error instanceof Error ? error.message : String(error),
+    );
+    rememberRunOverlay(root, broken);
+    return broken;
+  }
+}
+
+async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: unknown, deps?: AuthoringRouteDeps): Promise<void> {
+  const taskError = error instanceof Error ? error.message : String(error);
+  const nestedPersist = persistErrorMessage(error);
+  const remember = (failed: AuthoringRunRecord & { persistError?: string }, persistError?: unknown) => {
+    const persistText = persistError instanceof Error ? persistError.message : persistError != null ? String(persistError) : nestedPersist;
+    const overlay = {
+      ...failed,
+      persistError: persistText,
+      error: persistText ? `${taskError}；状态未能写入：${persistText}` : taskError,
+    };
+    rememberRunOverlay(root, overlay);
+    if (deps) {
+      try {
+        emitAuthoringRun(deps, root, overlay);
+      } catch {
+        /* notification is best-effort */
+      }
+    }
+  };
+  try {
+    const current = await loadRun(root, runId);
+    if (current && (current.status === "running" || current.status === "pausing")) {
+      const failed = {
+        ...current,
+        status: "failed" as const,
+        error: taskError,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await saveRun(root, failed);
+        clearRunOverlay(root, runId);
+        if (deps) emitAuthoringRun(deps, root, failed);
+        return;
+      } catch (persistError) {
+        console.error("authoring run persist failed", runId, taskError, persistError);
+        remember(failed, persistError);
+        return;
+      }
+    }
+    if (!current) {
+      remember(abnormalRun(root, runId, taskError, nestedPersist));
+      return;
+    }
+    if (deps) emitAuthoringRun(deps, root, current);
+  } catch (persistError) {
+    console.error("authoring run failure status unavailable", runId, taskError, persistError);
+    remember(abnormalRun(root, runId, taskError, nestedPersist ?? (persistError instanceof Error ? persistError.message : String(persistError))));
+  }
 }
 
 async function announceRun(deps: AuthoringRouteDeps, root: AuthoringStoreRoot, runId: string): Promise<void> {
@@ -189,6 +307,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
 
   const persistStartingRun = async (root: AuthoringStoreRoot, run: AuthoringRunRecord): Promise<void> => {
     await saveRun(root, run);
+    clearRunOverlay(root, run.runId);
     emitAuthoringRun(deps, root, run);
   };
 
@@ -202,6 +321,9 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     void work
       .then(() => announce ? announceRun(deps, root, runId) : undefined)
       .catch((error: unknown) => recordRunFailure(root, runId, error, deps))
+      .catch((error: unknown) => {
+        console.error("authoring background work unhandled", runId, error);
+      })
       .finally(() => { activeRunIds.delete(runId); });
   };
 
@@ -313,10 +435,16 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       listReports(root),
       loadCanonDocument(root).catch(() => null),
       loadSettingsCatalog(root).catch(() => ({ categories: [], entries: [] })),
-      listRuns(root).catch(() => []),
+      listRuns(root).catch(() => [] as AuthoringRunRecord[]),
       listChapterStateRefs(root).catch(() => ({})),
     ]);
-    const runs = (await Promise.all(listedRuns.map((run) => reclaimOrphanRun(root, run)))).filter(
+    const byId = new Map<string, AuthoringRunRecord>();
+    for (const run of listedRuns) byId.set(run.runId, run);
+    for (const overlay of overlaysForRoot(root)) {
+      const merged = mergeRunWithOverlay(root, byId.get(overlay.runId), overlay.runId);
+      if (merged) byId.set(overlay.runId, merged);
+    }
+    const runs = (await Promise.all([...byId.values()].map((run) => reclaimOrphanRun(root, run)))).filter(
       (run): run is AuthoringRunRecord => Boolean(run),
     );
     const candidateAskId = manifest.candidates.ask;
@@ -407,7 +535,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const bookId = c.req.query("bookId") || undefined;
     const draftId = c.req.query("draftId") || undefined;
     const root = storeRoot(deps.root, { bookId, draftId });
-    const run = await reclaimOrphanRun(root, await loadRun(root, c.req.param("runId")));
+    const run = await reclaimOrphanRun(root, await readRunForQuery(root, c.req.param("runId")));
     if (!run) return c.json({ error: "找不到运行记录" }, 404);
     return c.json(run);
   });
@@ -477,7 +605,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
           return c.json({ error: weaveRevisionError(error) }, 400);
         }
       }
-      void work.catch((error: unknown) => recordRunFailure(root, run.runId, error, deps));
+      watchAuthoringWork(root, run.runId, work);
       return c.json({ runId: run.runId, status: "running", operation: "revise", progressLabel: "继续修订" });
     }
     const requestedStart = run.checkpoint?.requestedStart;

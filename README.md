@@ -4,7 +4,7 @@ Windows 向的**本机桌面**长篇连载工作台（原名幻想作家 / Fanta
 
 内核与 Studio UI fork 自 [InkOS](https://github.com/Narcooo/inkos) v1.8.x（AGPL-3.0）。Electron 壳负责单实例、钉端口、窗口、首启向导和退出杀引擎。稿件落在你选的项目根目录（默认 `%USERPROFILE%\Documents\幻想作家\`），标准 InkOS 布局：`inkos.json`、`books/`、`.inkos/secrets.json`。密钥只写在本机项目里，**不进 git、不进安装包**。
 
-当前源码版本：**2.2.7**。本地构建安装包：`Inkborne-Setup-2.2.7.exe`（同时提供 `FantaWriter-Setup-*` 与 `Fantasy-Writer-Setup-*` 别名）。已公开发布的安装包见 [Releases](https://github.com/qingyou0420/Inkborne/releases)。
+当前源码版本：**2.2.10**。本地构建安装包：`Inkborne-Setup-2.2.10.exe`（同时提供 `FantaWriter-Setup-*` 与 `Fantasy-Writer-Setup-*` 别名）。已公开发布的安装包见 [Releases](https://github.com/qingyou0420/Inkborne/releases)。
 
 **[更新日志](./CHANGELOG.md)** · **[2.0 蓝图](./docs/2.0重构蓝图-InkOS内核桌面重建方案.md)** · **[上游说明](./docs/UPSTREAM.md)**
 
@@ -46,7 +46,7 @@ pnpm engine:smoke
 pnpm dist:win
 ```
 
-产物在 `dist-installer/Inkborne-Setup-2.2.7.exe`（另有 `FantaWriter-Setup-2.2.7.exe` 与 `Fantasy-Writer-Setup-2.2.7.exe` 别名）。更新扫描同时接受三套前缀。打包前会预构建 Studio、`INKOS_DISABLE_VITE_BUILD=1`，把 `packages/studio/dist` + core 装进 extraResources，并拒绝把 `.env` / `secrets.json` 打进安装包。
+产物在 `dist-installer/Inkborne-Setup-2.2.10.exe`（另有 `FantaWriter-Setup-2.2.10.exe` 与 `Fantasy-Writer-Setup-2.2.10.exe` 别名）。更新扫描同时接受三套前缀。打包前会预构建 Studio、`INKOS_DISABLE_VITE_BUILD=1`，把 `packages/studio/dist` + core 装进 extraResources，并拒绝把 `.env` / `secrets.json` 打进安装包。
 
 调试 CLI（显式根，不要靠 cwd）：
 

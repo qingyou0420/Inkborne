@@ -7,6 +7,13 @@ import {
   suppressSettledAuthoringRunPollError,
 } from "./use-authoring-run";
 import { pollWeaveRun } from "../lib/weave-editor-state";
+import {
+  AUTHORING_SUBMIT_UNKNOWN_MESSAGE,
+  isLostSubmitResponse,
+  matchActiveAuthoringSubmit,
+  recoverAuthoringSubmit,
+  submitAuthoringAction,
+} from "../lib/recover-authoring-submit";
 
 describe("suppressSettledAuthoringRunPollError", () => {
   it("ignores transient fetch failures once a write run already completed", () => {
@@ -76,5 +83,48 @@ describe("pollWeaveRun 404 stop", () => {
     expect(error).toHaveBeenCalledTimes(AUTHORING_RUN_NOT_FOUND_LIMIT);
     stop();
     vi.useRealTimers();
+  });
+});
+
+describe("recoverAuthoringSubmit", () => {
+  it("binds the existing running review and never posts again", async () => {
+    let posts = 0;
+    const lost = new StudioApiError("请求暂时失败，请重试；若正文已出现可先刷新");
+    lost.kind = "transient";
+    expect(isLostSubmitResponse(lost)).toBe(true);
+    const result = await submitAuthoringAction({
+      post: async () => {
+        posts += 1;
+        throw lost;
+      },
+      readWorkspace: async () => ({
+        runs: [{ runId: "review-accepted-1", stage: "weave", operation: "review", status: "running" }],
+      }),
+      match: matchActiveAuthoringSubmit("weave", "review"),
+    });
+    expect(posts).toBe(1);
+    expect(result).toEqual({
+      kind: "bound",
+      run: { runId: "review-accepted-1", stage: "weave", operation: "review", status: "running" },
+    });
+  });
+
+  it("stays unknown when no run exists and does not invent a retry post", async () => {
+    const lost = new StudioApiError("请求暂时失败，请重试；若正文已出现可先刷新");
+    lost.kind = "transient";
+    const result = await submitAuthoringAction({
+      post: async () => {
+        throw lost;
+      },
+      readWorkspace: async () => ({ runs: [] }),
+      match: matchActiveAuthoringSubmit("weave", "review"),
+    });
+    expect(result).toEqual({ kind: "unknown" });
+    const checked = await recoverAuthoringSubmit({
+      readWorkspace: async () => ({ runs: [] }),
+      match: matchActiveAuthoringSubmit("weave", "review"),
+    });
+    expect(checked.kind).toBe("unknown");
+    expect(AUTHORING_SUBMIT_UNKNOWN_MESSAGE).toContain("核对");
   });
 });

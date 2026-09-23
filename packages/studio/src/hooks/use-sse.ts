@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
+import { SSE_RECONNECT_EVENT } from "../lib/engine-connection";
 
 export interface SSEMessage {
   readonly event: string;
@@ -58,6 +59,7 @@ export const STUDIO_SSE_EVENTS = [
   "weave:progress",
   "weave:complete",
   "weave:error",
+  "authoring:run",
   "ping",
 ] as const;
 
@@ -92,13 +94,26 @@ export function useSSE(url = "/api/v1/events") {
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const seqRef = useRef(0);
+  const openedOnceRef = useRef(false);
+  const connectedRef = useRef(false);
 
   useEffect(() => {
     const es = new EventSource(url);
     esRef.current = es;
 
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
+    es.onopen = () => {
+      const reconnect = openedOnceRef.current && !connectedRef.current;
+      connectedRef.current = true;
+      openedOnceRef.current = true;
+      setConnected(true);
+      if (reconnect && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(SSE_RECONNECT_EVENT));
+      }
+    };
+    es.onerror = () => {
+      connectedRef.current = false;
+      setConnected(false);
+    };
 
     const handleEvent = (e: MessageEvent) => {
       try {
