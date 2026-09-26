@@ -7,6 +7,7 @@ describe("verified gateway model output budgets", () => {
   it.each([
     ["google/gemini-3.1-pro-preview", 65_535, 1_048_576],
     ["anthropic/claude-opus-5", 128_000, 1_000_000],
+    ["anthropic/claude-opus-5.5", 128_000, 1_000_000],
   ] as const)("preserves %s on the gateway while using its verified budget", (model, maxOutput, contextWindow) => {
     const client = createLLMClient(LLMConfigSchema.parse({
       provider: "openai",

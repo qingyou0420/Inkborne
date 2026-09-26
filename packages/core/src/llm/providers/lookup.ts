@@ -17,6 +17,8 @@ const PROVIDER_PRIORITY: readonly string[] = [
 // gateway limit is one token below Google's native API limit (65,536).
 // https://zenmux.ai/google/gemini-3.1-pro-preview
 // https://zenmux.ai/anthropic/claude-opus-5
+// Opus 5.5 verified on 2026-09-23:
+// https://zenmux.ai/anthropic/claude-opus-5.5
 const VERIFIED_GATEWAY_MODELS: readonly InkosModel[] = [
   {
     id: "google/gemini-3.1-pro-preview",
@@ -25,6 +27,11 @@ const VERIFIED_GATEWAY_MODELS: readonly InkosModel[] = [
   },
   {
     id: "anthropic/claude-opus-5",
+    maxOutput: 128_000,
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    id: "anthropic/claude-opus-5.5",
     maxOutput: 128_000,
     contextWindowTokens: 1_000_000,
   },

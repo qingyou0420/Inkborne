@@ -109,6 +109,7 @@ describe("Claude deprecated sampling fields at the HTTP boundary", () => {
     "claude-opus-4-7", "claude-opus-4.7", "anthropic/claude-opus-4-7-20260416",
     "claude-opus-4-8", "claude-opus-4.8", "anthropic.claude-opus-4-8-v1:0",
     "claude-opus-5", "anthropic/claude-opus-5:latest",
+    "anthropic/claude-opus-5.5",
     "claude-sonnet-5", "anthropic/claude-sonnet-5-20260915",
   ])("recognizes the gateway model ID %s", async (model) => {
     await chatCompletion(clientFor(model, false, "chat"), model, conversation, { temperature: 1.2, maxTokens: 64, retry: false });

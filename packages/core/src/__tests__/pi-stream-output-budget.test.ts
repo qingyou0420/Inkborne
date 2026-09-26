@@ -10,6 +10,7 @@ describe("guarded conversational stream output budget on the wire", () => {
   it.each([
     ["google/gemini-3.1-pro-preview", undefined, 65_535],
     ["anthropic/claude-opus-5", undefined, 128_000],
+    ["anthropic/claude-opus-5.5", undefined, 128_000],
     ["google/gemini-3.1-pro-preview", 4096, 4096],
   ] as const)("sends the reserved budget for %s (override=%s) without the SDK's 32K cap", async (modelId, maxTokens, expected) => {
     const payloads: Array<Record<string, unknown>> = [];
