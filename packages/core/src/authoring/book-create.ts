@@ -5,6 +5,7 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 import { join } from "node:path";
 import { BookConfigSchema, type BookConfig } from "../models/book.js";
 import { deriveBookIdFromTitle } from "../utils/book-id.js";
@@ -36,7 +37,7 @@ export async function syncBookJsonTitle(bookDir: string, canon: CanonDocument): 
       chapterWordCount: canon.chapterWordCount ?? raw.chapterWordCount,
       updatedAt: new Date().toISOString(),
     };
-    await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+    await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
   } catch {
     /* book.json is optional during a bound retry */
   }

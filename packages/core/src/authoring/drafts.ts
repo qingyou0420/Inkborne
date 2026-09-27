@@ -5,8 +5,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 import { AuthoringDraftRecordSchema, type AuthoringDraftRecord } from "./types.js";
 
 interface DraftIndex {
@@ -39,9 +40,7 @@ async function loadIndex(projectRoot: string): Promise<DraftIndex> {
 }
 
 async function saveIndex(projectRoot: string, index: DraftIndex): Promise<void> {
-  const path = indexPath(projectRoot);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(index, null, 2)}\n`, "utf-8");
+  await writeFileAtomic(indexPath(projectRoot), `${JSON.stringify(index, null, 2)}\n`);
 }
 
 export function newDraftId(): string {

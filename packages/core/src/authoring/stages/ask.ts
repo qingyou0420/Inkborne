@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { withBookWriteLock } from "../book-lock.js";
 import { parseCanon, serializeCanon } from "../canon.js";
+import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { asNumber, asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
@@ -266,12 +267,19 @@ export async function adoptAskCanon(input: AskRuntime & {
   readonly artifactId: string;
   readonly language?: "zh" | "en";
 }): Promise<{ bookId: string; created: boolean; artifactId: string }> {
+  return withBookWriteLock(input.root, "采用正典", () => adoptAskCanonInner(input));
+}
+
+async function adoptAskCanonInner(input: AskRuntime & {
+  readonly artifactId: string;
+  readonly language?: "zh" | "en";
+}): Promise<{ bookId: string; created: boolean; artifactId: string }> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到可采用的正典。");
   const canon = parseCanon(loaded.body);
   if (input.root.bookId) {
     const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
-    await writeFile(join(bookDir, "story", "canon.md"), serializeCanon(canon), "utf-8");
+    await writeFileAtomic(join(bookDir, "story", "canon.md"), serializeCanon(canon));
     await syncBookJsonTitle(bookDir, canon);
     await saveArtifact(input.root, { ...loaded.meta, status: "adopted", bodyPath: "story/canon.md" }, loaded.body);
     const manifest = await loadManifest(input.root);

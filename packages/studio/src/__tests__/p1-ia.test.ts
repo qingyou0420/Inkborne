@@ -57,9 +57,10 @@ describe("P1-2 落笔", () => {
     const settings = read("src/components/BookSettingsDrawer.tsx");
     const tools = read("src/components/BookToolsDrawer.tsx");
     expect(write).toMatch(/落笔/);
+    expect(write).toMatch(/落笔 · 写下一章/);
     expect(write).toMatch(/write-next-primary/);
     expect(write).toMatch(/book\.exportMenu/);
-    expect(write).toMatch(/book\.draftOnly/);
+    expect(write).not.toMatch(/book\.draftOnly/);
     expect(write).not.toMatch(/规划下一章/);
     expect(write).not.toMatch(/删除书籍/);
     expect(write).not.toMatch(/\[critical\]/);

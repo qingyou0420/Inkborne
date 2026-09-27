@@ -81,7 +81,7 @@ describe("sidebar create block", () => {
     expect(i18n).toMatch(/"nav\.style": \{ zh: "文风学习"/);
     expect(i18n).toMatch(/"nav\.genreTemplates": \{ zh: "题材模板"/);
     expect(i18n).toMatch(/"nav\.logs": \{ zh: "实时动态"/);
-    expect(i18n).toMatch(/"nav\.daemon": \{ zh: "守护进程"/);
+    expect(i18n).toMatch(/"nav\.daemon": \{ zh: "自动模式"/);
     expect(i18n).toMatch(/"nav\.authorProfile": \{ zh: "资料设置"/);
     expect(i18n).toMatch(/"nav\.newAsk": \{ zh: "新开会话"/);
     expect(i18n).toMatch(/"nav\.newAskPlaceholder": \{ zh: "新的会话"/);

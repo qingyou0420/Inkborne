@@ -14,6 +14,7 @@ import {
   BookWriteLockError,
   BOOK_LOCK_INTERACTIVE_WAIT_MS,
   formatBookWriteLockCopy,
+  readAuthoringOpenHooks,
   isBookWriteLockMessage,
   setBookLockLivenessCheck,
   PipelineRunner,
@@ -4092,11 +4093,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const markdown = await readFile(join(state.bookDir(id), "story", "pending_hooks.md"), "utf-8").catch(() => "");
       hooks = parsePendingHooksMarkdown(markdown);
     }
+    const authoringHooks = await readAuthoringOpenHooks(root, id).catch(() => []);
+    const seen = new Set(hooks.map((hook) => hook.hookId));
+    for (const hook of authoringHooks) {
+      if (seen.has(hook.hookId)) continue;
+      seen.add(hook.hookId);
+      hooks.push(hook);
+    }
     const due = selectDueHooks(hooks, chapterNumber).map((hook) => ({
       ...hook,
       dueState: classifyHookDue(hook, chapterNumber),
     }));
-    return c.json({ chapterNumber, hooks: due });
+    const dueIds = new Set(due.map((hook) => hook.hookId));
+    const openHooks = authoringHooks
+      .filter((hook) => !dueIds.has(hook.hookId))
+      .map((hook) => ({
+        hookId: hook.hookId,
+        label: hook.label,
+        startChapter: hook.startChapter,
+        targetChapter: hook.targetChapter,
+        status: hook.status,
+      }));
+    return c.json({ chapterNumber, hooks: due, openHooks });
   });
 
   app.get("/api/v1/books/:id/truth-proposals", async (c) => {

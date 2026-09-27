@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { ChapterMetaSchema, type ChapterMeta } from "../models/chapter.js";
+import { ChapterMetaSchema, type ChapterMeta, type ChapterStatus } from "../models/chapter.js";
 import { archiveChapterVersion } from "../state/chapter-workspace.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 
 function chapterFileName(chapterNumber: number, title: string): string {
   const safe = title.replace(/[^\w\u4e00-\u9fff]+/g, "-").slice(0, 20) || "chapter";
@@ -79,13 +80,17 @@ export async function persistAdoptedChapter(input: {
   readonly title: string;
   readonly body: string;
   readonly relativePath?: string;
+  readonly status?: ChapterStatus;
+  readonly auditIssues?: readonly string[];
+  readonly lengthWarnings?: readonly string[];
+  readonly extraWrites?: ReadonlyArray<AtomicFileWrite>;
+  readonly renameFile?: (from: string, to: string) => Promise<void>;
 }): Promise<{ relativePath: string; index: ReadonlyArray<ChapterMeta> }> {
   const chaptersDir = join(input.bookDir, "chapters");
   await mkdir(chaptersDir, { recursive: true });
   const relativePath = input.relativePath?.startsWith("chapters/")
     ? input.relativePath
     : `chapters/${chapterFileName(input.chapterNumber, input.title)}`;
-  const dest = join(input.bookDir, relativePath);
   const destName = relativePath.slice("chapters/".length);
   const padded = String(input.chapterNumber).padStart(4, "0");
   const files = await readdir(chaptersDir).catch(() => [] as string[]);
@@ -106,28 +111,36 @@ export async function persistAdoptedChapter(input: {
     }
     replaced.push(file);
   }
-  for (const file of replaced) {
-    if (file === destName) continue;
-    await unlink(join(chaptersDir, file));
-  }
   const body = input.body.endsWith("\n") ? input.body : `${input.body}\n`;
-  await writeFile(dest, body, "utf-8");
   const now = new Date().toISOString();
   const existing = await readIndex(input.bookDir);
   const entry: ChapterMeta = {
     number: input.chapterNumber,
     title: input.title || `第${input.chapterNumber}章`,
-    status: "ready-for-review",
+    status: input.status ?? "ready-for-review",
     wordCount: wordCount(input.body),
     createdAt: existing.find((item) => item.number === input.chapterNumber)?.createdAt ?? now,
     updatedAt: now,
-    auditIssues: [],
-    lengthWarnings: [],
+    auditIssues: [...(input.auditIssues ?? [])],
+    lengthWarnings: [...(input.lengthWarnings ?? [])],
   };
   const index = existing.some((item) => item.number === input.chapterNumber)
     ? existing.map((item) => item.number === input.chapterNumber ? { ...entry, createdAt: item.createdAt } : item)
     : [...existing, entry].sort((a, b) => a.number - b.number);
-  await writeFile(join(chaptersDir, "index.json"), `${JSON.stringify(index, null, 2)}\n`, "utf-8");
+  const writes: AtomicFileWrite[] = [
+    { relativePath, content: body },
+    { relativePath: "chapters/index.json", content: `${JSON.stringify(index, null, 2)}\n` },
+    ...(input.extraWrites ?? []).filter((item) => item.relativePath !== relativePath && item.relativePath !== "chapters/index.json"),
+  ];
+  await commitAtomicFileSet({
+    rootDir: input.bookDir,
+    writes,
+    ...(input.renameFile ? { renameFile: input.renameFile } : {}),
+  });
+  for (const file of replaced) {
+    if (file === destName) continue;
+    await unlink(join(chaptersDir, file)).catch(() => undefined);
+  }
   return { relativePath, index };
 }
 

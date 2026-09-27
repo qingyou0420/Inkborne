@@ -185,7 +185,7 @@ function notNextReason(nextChapter: number, isZh: boolean): CockpitPreflightReas
   return {
     code: "not_next_chapter",
     message: `Write this chapter is sequential. Write chapter ${nextChapter} first.`,
-    messageZh: `请先落墨第 ${nextChapter} 章，不能跳章。`,
+    messageZh: `请先落笔第 ${nextChapter} 章，不能跳章。`,
     jumpTo: "outline",
     chapterNumber: nextChapter,
   };

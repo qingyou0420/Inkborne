@@ -77,6 +77,7 @@ import {
 interface Nav {
   toDashboard: () => void;
   toBook: (id: string) => void;
+  toWrite?: (id: string) => void;
   toServices: () => void;
   toFilm: (projectId: string) => void;
   toFilmStudio: (projectId: string) => void;
@@ -720,7 +721,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     }
   };
 
-  const handleQuickAction = (command: string, requestedIntent?: "write_next") => {
+  const handleQuickAction = (command: string, requestedIntent?: "write_next" | "open_write") => {
+    if (requestedIntent === "open_write") {
+      if (activeBookId && nav.toWrite) nav.toWrite(activeBookId);
+      return;
+    }
     if (!activeSessionId) return;
     autoScrollPinnedRef.current = true;
     void sendMessage(activeSessionId, command, {

@@ -55,6 +55,11 @@ describe("authoring four-agent IA", () => {
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/write-candidate-body/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/loading && !data/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/parentArtifactId/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/baseBody/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/parentArtifactId/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/基于当前手改改写/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/另起一稿/);
+    expect(read("src/lib/unsaved-edits.ts")).toMatch(/__inkborneHasUnsavedEdits/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/authoring\/write\/hand/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/authoring\/write\/select/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/key=\{`\$\{bookId\}:\$\{writeChapter \?\? data\.nextChapter\}`\}/);

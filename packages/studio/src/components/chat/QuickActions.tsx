@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 
 export interface QuickActionsProps {
-  readonly onAction: (command: string, requestedIntent?: "write_next") => void;
+  readonly onAction: (command: string, requestedIntent?: "write_next" | "open_write") => void;
   readonly disabled: boolean;
   readonly isZh: boolean;
 }
@@ -17,17 +17,17 @@ interface ChipDef {
   readonly labelEn: string;
   readonly commandZh: string;
   readonly commandEn: string;
-  readonly requestedIntent?: "write_next";
+  readonly requestedIntent?: "write_next" | "open_write";
 }
 
 const CHIPS: ReadonlyArray<ChipDef> = [
   {
     icon: <Zap size={12} />,
-    labelZh: "落墨 · 写下一章",
-    labelEn: "落墨 · Write next",
+    labelZh: "落笔 · 写下一章",
+    labelEn: "落笔 · Write next",
     commandZh: "写下一章",
     commandEn: "write next",
-    requestedIntent: "write_next",
+    requestedIntent: "open_write",
   },
   {
     icon: <FileOutput size={12} />,

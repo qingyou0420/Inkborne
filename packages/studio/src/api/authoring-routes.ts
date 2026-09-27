@@ -46,6 +46,7 @@ import {
   reviseGroundEntry,
   reviseWeave,
   saveHandEditedArtifact,
+  withBookWriteLock,
   saveRunControl,
   testAuthoringRole,
   type AuthoringRoleConfig,
@@ -197,11 +198,12 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
 
   app.put("/api/v1/authoring/artifacts/:artifactId", async (c) => {
     const body = await c.req.json<{ bookId?: string; draftId?: string; body: string }>();
-    const meta = await saveHandEditedArtifact(
-      storeRoot(deps.root, body),
+    const root = storeRoot(deps.root, body);
+    const meta = await withBookWriteLock(root, "保存手改", () => saveHandEditedArtifact(
+      root,
       c.req.param("artifactId"),
       body.body ?? "",
-    );
+    ));
     return c.json({ ok: true, artifactId: meta.artifactId, version: meta.version, meta });
   });
 
@@ -523,7 +525,14 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   });
 
   app.post("/api/v1/authoring/write/generate", async (c) => {
-    const body = await c.req.json<{ bookId: string; chapterNumber: number; title?: string; requirements?: string }>();
+    const body = await c.req.json<{
+      bookId: string;
+      chapterNumber: number;
+      title?: string;
+      requirements?: string;
+      baseBody?: string;
+      parentArtifactId?: string;
+    }>();
     const project = await deps.loadProject();
     const result = await generateChapterDraft({
       root: storeRoot(deps.root, body),
@@ -531,6 +540,8 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       chapterNumber: body.chapterNumber,
       title: body.title,
       requirements: body.requirements,
+      baseBody: body.baseBody,
+      parentArtifactId: body.parentArtifactId,
     });
     return c.json(result);
   });

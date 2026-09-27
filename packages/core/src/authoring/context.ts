@@ -4,10 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { access, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import { access, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { findChapterNode, findVolumeOwningNode, parseVolumeMapTree, volumeMapLeadingNotesMarkdown } from "../utils/volume-map-tree.js";
 import { parseCanon, canonFromCompat, serializeCanon } from "./canon.js";
+import { loadWriteMemory, pickSettingsByMention } from "./serial-ledger.js";
 import { loadArtifact, loadManifest, loadSettingsCatalog, type AuthoringStoreRoot } from "./store.js";
 import type { AuthoringStage, CanonDocument, InputRef } from "./types.js";
 
@@ -148,18 +150,8 @@ export function serializeCanonBrief(canon: CanonDocument): string {
   ].filter(Boolean).join("\n");
 }
 
-function pickRelevantSettings(settings: string, needle: string, budget = 8000): string {
-  const chunks = settings.split(/\n(?=### )/);
-  if (settings.length <= budget) return settings;
-  const lowered = needle.toLowerCase();
-  const matched = chunks.filter((chunk) => chunk.toLowerCase().split(/\s+/).some((token) => token && lowered.includes(token.slice(0, 12))));
-  const preferred = matched.length > 0 ? matched : chunks.slice(0, Math.max(1, Math.ceil(chunks.length / 3)));
-  let acc = "";
-  for (const chunk of preferred) {
-    if (acc.length + chunk.length > budget) break;
-    acc += (acc ? "\n" : "") + chunk;
-  }
-  return acc || settings.slice(0, budget);
+function pickRelevantSettings(settings: string, texts: readonly string[], budget = 8000): string {
+  return pickSettingsByMention(settings, { texts }, budget);
 }
 
 function clipOutlineChunk(text: string, max: number): string {
@@ -257,10 +249,14 @@ export async function writeChapterState(
 ): Promise<void> {
   const paths = chapterStatePaths(root, chapterNumber);
   if (!paths) return;
-  await mkdir(paths.dir, { recursive: true });
   const note = body.endsWith("\n") ? body : `${body}\n`;
-  await writeFile(paths.body, note, "utf-8");
-  await writeFile(paths.ref, `${JSON.stringify({ artifactId, chapterNumber }, null, 2)}\n`, "utf-8");
+  await commitAtomicFileSet({
+    rootDir: paths.dir,
+    writes: [
+      { relativePath: `chapter-${chapterNumber}.md`, content: note },
+      { relativePath: `chapter-${chapterNumber}.ref.json`, content: `${JSON.stringify({ artifactId, chapterNumber }, null, 2)}\n` },
+    ],
+  });
 }
 
 export async function invalidateChapterState(root: AuthoringStoreRoot, chapterNumber: number): Promise<void> {
@@ -323,24 +319,25 @@ export async function assembleAuthoringContext(
   if (options?.chapterNumber && manifest.adopted.write[String(options.chapterNumber - 1)]) {
     refs.push({ kind: "chapter", id: manifest.adopted.write[String(options.chapterNumber - 1)]! });
   }
-  const needle = [
-    options?.chapterNumber ? `第${options.chapterNumber}章` : "",
-    canon.protagonist,
-    outlineForChapter(outline, options?.chapterNumber, 1200),
-  ].join(" ");
   const previous = options?.chapterNumber && options.chapterNumber > 1
     ? await loadChapterText(root, options.chapterNumber - 1)
     : "";
-  const previousState = options?.chapterNumber && options.chapterNumber > 1
+  const memory = await loadWriteMemory(root, options?.chapterNumber);
+  const previousState = !memory && options?.chapterNumber && options.chapterNumber > 1
     ? await loadChapterState(root, options.chapterNumber - 1)
     : "";
+  const outlineText = outlineForChapter(outline, options?.chapterNumber);
   const text = [
     source === "compat" ? "【兼容正典视图，尚未经问心采用】" : "【已采用正典】",
-    serializeCanonBrief(canon),
-    "",
     serializeCanon(canon),
-    settings && `【设定】\n${pickRelevantSettings(settings, needle)}`,
-    outline && `【规划】\n${outlineForChapter(outline, options?.chapterNumber)}`,
+    settings && `【设定】\n${pickRelevantSettings(settings, [
+      outlineText,
+      previous,
+      canon.protagonist,
+      options?.chapterNumber ? `第${options.chapterNumber}章` : "",
+    ])}`,
+    outline && `【规划】\n${outlineText}`,
+    memory,
     previous && `【上一章结尾】\n${previous.slice(-2000)}`,
     previousState && `【上一章状态】\n${previousState.slice(0, 3000)}`,
     options?.extra,

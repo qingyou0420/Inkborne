@@ -125,6 +125,8 @@ export {
   reviewChapterDraft,
   reviseChapterDraft,
   adoptChapterDraft,
+  withBookWriteLock,
+  readAuthoringOpenHooks,
   testAuthoringRole,
   diffLines,
   type AuthoringRoleId,

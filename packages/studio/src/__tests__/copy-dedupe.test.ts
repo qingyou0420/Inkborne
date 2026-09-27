@@ -21,7 +21,7 @@ describe("P0-6 copy", () => {
     expect(i18n).toMatch(/"chapter\.readyForReview": \{ zh: "待审稿"/);
     expect(i18n).toMatch(/"chapter\.auditFailed": \{ zh: "须处理"/);
     expect(i18n).toMatch(/"book\.statusCompleted": \{ zh: "完结"/);
-    expect(i18n).toMatch(/"daemon\.title": \{ zh: "守护进程"/);
+    expect(i18n).toMatch(/"daemon\.title": \{ zh: "自动模式"/);
     expect(i18n).toMatch(/"nav\.createNovel": \{ zh: "长篇"/);
     expect(i18n).toMatch(/"nav\.createShort": \{ zh: "短篇"/);
     expect(i18n).not.toMatch(/logs\.showingRecent/);

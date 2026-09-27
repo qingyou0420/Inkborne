@@ -60,7 +60,14 @@ export function DaemonControl({ nav: _nav, theme: _theme, t, sse }: { nav: Nav; 
   return (
     <div className="space-y-8">
       <div className="flex items-baseline justify-between">
-        <h1 className="font-serif text-[32px] font-medium leading-10">{t("daemon.title")}</h1>
+        <div>
+          <h1 className="font-serif text-[32px] font-medium leading-10">{t("daemon.title")}</h1>
+          <p className="mt-2 max-w-xl text-[15px] leading-[26px] text-muted-foreground">
+            {isZh
+              ? "自动模式会自己按顺序往下写。平时写下一章，请回书房用落笔。"
+              : "Auto mode writes the next chapters on its own. For a chapter you are writing now, go back to 落笔."}
+          </p>
+        </div>
         <div className="flex items-center gap-3">
           <span className={`text-[13px] font-medium ${isRunning ? "text-foreground" : "text-muted-foreground"}`}>
             {isRunning ? t("daemon.running") : t("daemon.stopped")}

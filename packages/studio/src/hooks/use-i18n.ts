@@ -58,7 +58,7 @@ const strings = {
   "home.toWrite": { zh: "落笔", en: "Write" },
   "home.delete": { zh: "删除", en: "Delete" },
   "cockpit.nextChapter": { zh: "下一章", en: "Next chapter" },
-  "cockpit.writeNext": { zh: "落墨 · 写下一章", en: "落墨 · Write next" },
+  "cockpit.writeNext": { zh: "落笔 · 写下一章", en: "落笔 · Write next" },
   "cockpit.outline": { zh: "大纲", en: "Outline" },
   "cockpit.weave": { zh: "织卷", en: "织卷" },
   "cockpit.manuscript": { zh: "书稿", en: "Manuscript" },
@@ -169,7 +169,7 @@ const strings = {
 
   // Sidebar
   "nav.system": { zh: "设置", en: "Settings" },
-  "nav.daemon": { zh: "守护进程", en: "Daemon" },
+  "nav.daemon": { zh: "自动模式", en: "Auto mode" },
   "nav.logs": { zh: "实时动态", en: "Live activity" },
   "nav.authorProfile": { zh: "资料设置", en: "Profile settings" },
   "nav.tools": { zh: "工具", en: "Tools" },
@@ -193,7 +193,7 @@ const strings = {
   "settings.writingLanguageHint": { zh: "决定界面与创作默认语言。可随时在这里更改。", en: "Controls the UI and default writing language. You can change it here anytime." },
   "logs.live": { zh: "最近动态", en: "Live activity" },
   "logs.idle": { zh: "引擎空闲", en: "Engine idle" },
-  "logs.noActivity": { zh: "AI 还没动笔。去书房落墨，这里会实时显示进度。", en: "The AI has not started yet. Write from the study and progress will appear here." },
+  "logs.noActivity": { zh: "AI 还没动笔。去书房落笔，这里会实时显示进度。", en: "The AI has not started yet. Write from the study and progress will appear here." },
   "logs.raw": { zh: "原始日志", en: "Raw logs" },
   "nav.style": { zh: "文风学习", en: "Style Learning" },
   "nav.genreTemplates": { zh: "题材模板", en: "Genre Templates" },
@@ -434,7 +434,7 @@ const strings = {
   "reader.endOfChapter": { zh: "本章完", en: "End of Chapter" },
 
   // Daemon Control
-  "daemon.title": { zh: "守护进程", en: "Daemon" },
+  "daemon.title": { zh: "自动模式", en: "Auto mode" },
   "daemon.running": { zh: "运行中", en: "Running" },
   "daemon.stopped": { zh: "已停止", en: "Stopped" },
   "daemon.start": { zh: "启动", en: "Start" },
@@ -442,7 +442,7 @@ const strings = {
   "daemon.starting": { zh: "启动中…", en: "Starting..." },
   "daemon.stopping": { zh: "停止中…", en: "Stopping..." },
   "daemon.waitingEvents": { zh: "等待事件…", en: "Waiting for events..." },
-  "daemon.startHint": { zh: "启动守护进程查看事件", en: "Start the daemon to see events" },
+  "daemon.startHint": { zh: "启动自动模式后，这里会显示它自己写下的章节。", en: "After auto mode starts, chapters it writes on its own show up here." },
   "daemon.eventLog": { zh: "事件日志", en: "Event Log" },
 
   // Config extras (labels)

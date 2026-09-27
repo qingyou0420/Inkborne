@@ -10,7 +10,6 @@ import { workspaceQuery } from "../lib/authoring-workspace";
 import { useEffect, useMemo, useState } from "react";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { StageDot } from "../components/StageDot";
-import { startWriteNext } from "../components/SerialCockpitStrip";
 import type { WritePreflightEvaluation } from "../components/SerialCockpitStrip";
 import { TruthProposalCard, type PendingTruthProposal } from "../components/TruthProposalCard";
 import { assembleCockpitSnapshot, type CockpitDueHook, type CockpitReviewItem } from "../lib/serial-cockpit";
@@ -116,15 +115,13 @@ export function BookStudy({
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<CockpitReviewItem>>([]);
   const [proposals, setProposals] = useState<ReadonlyArray<PendingTruthProposal>>([]);
   const [volumeMap, setVolumeMap] = useState("");
-  const [writePending, setWritePending] = useState(false);
+  const [openHooks, setOpenHooks] = useState<ReadonlyArray<{ hookId: string; label?: string; startChapter?: number }>>([]);
   const stage = useBookStage(bookId);
-  const [pageError, setPageError] = useState<string | null>(null);
   const [volumeExpanded, setVolumeExpanded] = useState(false);
   const [canonOpen, setCanonOpen] = useState(false);
   const [roleCount, setRoleCount] = useState(0);
 
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
-  const writing = writePending || activity.writing;
   const isZh = data?.book.language !== "en";
 
   const refreshAux = () => {
@@ -132,9 +129,15 @@ export function BookStudy({
     void fetchJson<WritePreflightEvaluation>(`/books/${bookId}/write-preflight${query}`)
       .then(setPreflight)
       .catch(() => setPreflight(null));
-    void fetchJson<{ hooks?: CockpitDueHook[] }>(`/books/${bookId}/hooks/due`)
-      .then((body) => setHooks(body.hooks ?? []))
-      .catch(() => setHooks([]));
+    void fetchJson<{ hooks?: CockpitDueHook[]; openHooks?: Array<{ hookId: string; label?: string; startChapter?: number }> }>(`/books/${bookId}/hooks/due`)
+      .then((body) => {
+        setHooks(body.hooks ?? []);
+        setOpenHooks(body.openHooks ?? []);
+      })
+      .catch(() => {
+        setHooks([]);
+        setOpenHooks([]);
+      });
     void fetchJson<{ items?: CockpitReviewItem[] }>(`/books/${bookId}/review-queue`)
       .then((body) => setReviewQueue(body.items ?? []))
       .catch(() => setReviewQueue([]));
@@ -161,7 +164,6 @@ export function BookStudy({
     const recent = sse.messages.at(-1);
     if (!recent) return;
     if (shouldRefetchBookView(recent, bookId)) {
-      setWritePending(false);
       refetch();
       refreshAux();
     }
@@ -182,21 +184,6 @@ export function BookStudy({
       isZh,
     });
   }, [data, preflight, volumeMap, hooks, reviewQueue, proposals, skipPreviousApproval, isZh]);
-
-  const handleWriteNext = async () => {
-    if (!snapshot?.writeNext.enabled) {
-      goStage(nav, bookId, "weave");
-      return;
-    }
-    setWritePending(true);
-    setPageError(null);
-    try {
-      await startWriteNext(bookId, skipPreviousApproval);
-    } catch (err) {
-      setWritePending(false);
-      setPageError(err instanceof Error ? err.message : "Failed");
-    }
-  };
 
   if (loading) {
     return (
@@ -244,6 +231,15 @@ export function BookStudy({
       key: `watch-${watch.id}`,
       label: watch.label,
       onClick: () => goStage(nav, bookId, watch.stage === "ground" || watch.stage === "weave" || watch.stage === "write" || watch.stage === "ask" ? watch.stage : "ground"),
+    });
+  }
+  for (const hook of openHooks) {
+    attentionItems.push({
+      key: `open-hook-${hook.hookId}`,
+      label: isZh
+        ? `待收伏笔「${stripEngineTokens(hook.label || hook.hookId)}」${hook.startChapter ? `，第 ${hook.startChapter} 章埋下` : ""}`
+        : `Open thread ${stripEngineTokens(hook.label || hook.hookId)}`,
+      onClick: () => goStage(nav, bookId, "write"),
     });
   }
   for (const hook of snapshot?.overdueHooks ?? []) {
@@ -327,19 +323,23 @@ export function BookStudy({
             <p className="text-sm text-muted-foreground">{guide.subtitle}</p>
           )}
 
-          {canWrite && snapshot?.writeNext.enabled ? (
-            <button
-              type="button"
-              onClick={() => void handleWriteNext()}
-              disabled={writing}
-              className="btn-primary disabled:opacity-40"
-              data-testid="cockpit-write-next-button"
-            >
-              {writing
-                ? <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground ink-breath" />
-                : <Feather size={16} />}
-              {writing ? t("dash.writing") : (isZh ? "落墨 · 写下一章" : "落墨 · Write next")}
-            </button>
+          {canWrite && snapshot && !snapshot.writeNext.reasons.some((reason) => reason.code !== "previous_chapter_not_approved") ? (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => goStage(nav, bookId, "write")}
+                className="btn-primary"
+                data-testid="cockpit-write-next-button"
+              >
+                <Feather size={16} />
+                {isZh ? "落笔 · 写下一章" : "落笔 · Write next"}
+              </button>
+              {showSkip ? (
+                <p className="text-xs text-muted-foreground">
+                  {isZh ? "上一章还在等你过目，仍可以先写下一章。" : "The previous chapter is still waiting, and you can still write the next one."}
+                </p>
+              ) : null}
+            </div>
           ) : canWrite && snapshot && !snapshot.writeNext.enabled ? (
             <div className="space-y-2" data-testid="cockpit-write-next">
               <ul className="space-y-1 text-sm text-muted-foreground" data-testid="cockpit-g1-reasons">
@@ -498,10 +498,9 @@ export function BookStudy({
         </ul>
       </section>
 
-      {(activity.lastError || pageError) && (
+      {activity.lastError && (
         <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {pageError
-            ?? (activity.lastError ? `${t("book.pipelineFailed")}: ${activity.lastError}` : t("book.pipelineWriting"))}
+          {`${t("book.pipelineFailed")}: ${activity.lastError}`}
         </div>
       )}
     </div>

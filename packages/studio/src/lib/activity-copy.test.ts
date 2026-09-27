@@ -19,7 +19,7 @@ describe("activity-copy", () => {
       true,
     );
     expect(write?.bookTitle).toBe("醉词");
-    expect(write?.text).toBe("落墨 · 第 3 章 起草中");
+    expect(write?.text).toBe("落笔 · 第 3 章 起草中");
     expect(write?.text).not.toMatch(/write:start/);
 
     const progress = formatActivityEvent(

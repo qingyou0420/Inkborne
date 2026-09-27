@@ -4,6 +4,9 @@ import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
+import { registerUnsavedCheck } from "../../lib/unsaved-edits";
+import { showToast } from "../../lib/toast";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
@@ -94,6 +97,46 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const pendingEdit = useRef<{
+    bookId: string;
+    isChapter: boolean;
+    artifactChapter: number | null;
+    artifactFile: string | null;
+    content: string;
+  } | null>(null);
+
+  useEffect(() => registerUnsavedCheck(() => pendingEdit.current !== null), []);
+
+  const writePending = useCallback(async (pending: NonNullable<typeof pendingEdit.current>) => {
+    if (pending.isChapter) {
+      await fetchJson(`/books/${pending.bookId}/chapters/${pending.artifactChapter}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: pending.content }),
+      });
+      return;
+    }
+    if (pending.artifactFile) {
+      await fetchJson(`/books/${pending.bookId}/truth/${pending.artifactFile}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: pending.content }),
+      });
+    }
+  }, []);
+
+  const flushPendingEdit = useCallback(async () => {
+    const pending = pendingEdit.current;
+    if (!pending) return;
+    pendingEdit.current = null;
+    try {
+      await writePending(pending);
+    } catch (error) {
+      if (!pendingEdit.current) pendingEdit.current = pending;
+      throw error;
+    }
+  }, [writePending]);
 
   const isChapter = artifactChapter !== null;
   const label = isChapter
@@ -101,7 +144,27 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
     : artifactFile ? artifactLabel(artifactFile) : "";
 
   useEffect(() => {
+    if (!editing || !pendingEdit.current) return;
+    const timer = window.setTimeout(() => {
+      void flushPendingEdit().catch((error) => {
+        showToast(error instanceof Error ? error.message : "保存失败", "error");
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [editContent, editing, flushPendingEdit]);
+
+  useEffect(() => {
+    return () => {
+      const pending = pendingEdit.current;
+      if (!pending) return;
+      pendingEdit.current = null;
+      void writePending(pending);
+    };
+  }, [bookId, artifactFile, artifactChapter, writePending]);
+
+  useEffect(() => {
     setEditing(false);
+    setDiscardOpen(false);
     setLoading(true);
     setFrontmatter(null);
     setBody(null);
@@ -145,6 +208,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           body: JSON.stringify({ content: editContent }),
         });
       }
+      pendingEdit.current = null;
       setContent(editContent);
       setEditing(false);
     } catch {
@@ -182,7 +246,13 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             </button>
             <button
-              onClick={() => setEditing(false)}
+              onClick={() => {
+                if (pendingEdit.current) {
+                  setDiscardOpen(true);
+                  return;
+                }
+                setEditing(false);
+              }}
               className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
             >
               <X size={12} />
@@ -200,7 +270,19 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
         ) : editing ? (
           <textarea
             value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setEditContent(next);
+              pendingEdit.current = next === (content ?? "")
+                ? null
+                : {
+                  bookId,
+                  isChapter,
+                  artifactChapter,
+                  artifactFile: artifactFile ?? null,
+                  content: next,
+                };
+            }}
             className="w-full h-full min-h-[300px] bg-transparent text-[15px] leading-7 px-4 py-3 resize-none outline-none border-0 font-mono"
           />
         ) : (
@@ -209,6 +291,20 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={discardOpen}
+        title="这段修改还没保存"
+        message="关掉后，刚才改的字会丢掉。"
+        confirmLabel="丢掉修改"
+        cancelLabel="继续改"
+        variant="danger"
+        onCancel={() => setDiscardOpen(false)}
+        onConfirm={() => {
+          pendingEdit.current = null;
+          setDiscardOpen(false);
+          setEditing(false);
+        }}
+      />
     </div>
   );
 }

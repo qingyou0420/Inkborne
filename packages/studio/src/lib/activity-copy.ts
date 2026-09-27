@@ -103,19 +103,19 @@ export function formatActivityEvent(
     case "write:start":
     case "draft:start":
       return withBook(isZh
-        ? `落墨 · ${chapter || "下一章"} 起草中`
+        ? `落笔 · ${chapter || "下一章"} 起草中`
         : `Writing · ${chapter || "next chapter"} drafting`);
     case "write:complete":
     case "draft:complete":
       return withBook(isZh
-        ? `落墨 · ${chapter || "一章"} 完成${chars ? ` · ${chars.toLocaleString()} 字` : ""}`
+        ? `落笔 · ${chapter || "一章"} 完成${chars ? ` · ${chars.toLocaleString()} 字` : ""}`
         : `Writing · ${chapter || "a chapter"} done${chars ? ` · ${chars.toLocaleString()} chars` : ""}`);
     case "write:error":
     case "draft:error":
-      return withBook(isZh ? "落墨未完成" : "Writing did not finish");
+      return withBook(isZh ? "落笔未完成" : "Writing did not finish");
     case "llm:progress":
       return withBook(isZh
-        ? `落墨 · ${chapter || "起草中"}${chars ? ` … ${chars.toLocaleString()} 字` : ""}`
+        ? `落笔 · ${chapter || "起草中"}${chars ? ` … ${chars.toLocaleString()} 字` : ""}`
         : `Writing · ${chapter || "drafting"}${chars ? ` … ${chars.toLocaleString()} chars` : ""}`);
     case "weave:start":
       return withBook(isZh ? "织卷进行中" : "Weaving volumes");
@@ -164,12 +164,12 @@ export function formatActivityEvent(
     case "style:complete":
       return withBook(isZh ? "文风分析完成" : "Style analysis finished");
     case "daemon:started":
-      return withBook(isZh ? "守护进程已启动" : "Daemon started");
+      return withBook(isZh ? "自动模式已启动" : "Auto mode started");
     case "daemon:stopped":
-      return withBook(isZh ? "守护进程已停止" : "Daemon stopped");
+      return withBook(isZh ? "自动模式已停止" : "Auto mode stopped");
     case "daemon:chapter":
       return withBook(isZh
-        ? `守护进程 · ${chapter || "一章"} 已写`
+        ? `自动模式 · ${chapter || "一章"} 已写`
         : `Daemon · ${chapter || "a chapter"} written`);
     case "audit:complete":
       return withBook(isZh ? "审稿完成" : "Review finished");

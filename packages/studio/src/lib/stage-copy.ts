@@ -30,8 +30,8 @@ export function studyGuideCopy(stage: BookStageId, isZh: boolean): StageGuideCop
       : { title: "How many volumes?", subtitle: "Lock the volume split, then the first ten chapters", action: "Go to Weave", target: "weave" };
   }
   return isZh
-    ? { title: "今日一笔", subtitle: "", action: "落墨 · 写下一章", target: "write" }
-    : { title: "Today's stroke", subtitle: "", action: "落墨 · Write next", target: "write" };
+    ? { title: "今日一笔", subtitle: "", action: "落笔 · 写下一章", target: "write" }
+    : { title: "Today's stroke", subtitle: "", action: "落笔 · Write next", target: "write" };
 }
 
 export function weaveGuideWhenUngrounded(isZh: boolean): StageGuideCopy {
@@ -56,8 +56,8 @@ export function writeEmptyCopy(input: {
       : { title: "No writable chapter yet", subtitle: "Weave the first ten chapters first", action: "Go to Weave", target: "weave" };
   }
   return input.isZh
-    ? { title: "还没有落笔", subtitle: "从下一章开始", action: "落墨 · 写下一章", target: "write" }
-    : { title: "Nothing on the page yet", subtitle: "Start with the next chapter", action: "落墨 · Write next", target: "write" };
+    ? { title: "还没有落笔", subtitle: "从下一章开始", action: "落笔 · 写下一章", target: "write" }
+    : { title: "Nothing on the page yet", subtitle: "Start with the next chapter", action: "落笔 · Write next", target: "write" };
 }
 
 export function shelfEmptyCopy(isZh: boolean): StageGuideCopy {
