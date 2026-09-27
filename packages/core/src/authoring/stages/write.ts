@@ -67,7 +67,7 @@ export async function generateChapterDraft(input: WriteRuntime & {
   readonly baseBody?: string;
   readonly parentArtifactId?: string;
 }): Promise<{ artifactId: string; runId: string; body: string; wordCount: number; targetWordCount?: number; lengthNote?: string }> {
-  return withBookWriteLock(input.root, "落笔", () => generateChapterDraftInner(input));
+  return withBookWriteLock(input.root, "落笔", (signal) => generateChapterDraftInner(input, signal));
 }
 
 async function generateChapterDraftInner(input: WriteRuntime & {
@@ -76,7 +76,7 @@ async function generateChapterDraftInner(input: WriteRuntime & {
   readonly requirements?: string;
   readonly baseBody?: string;
   readonly parentArtifactId?: string;
-}): Promise<{ artifactId: string; runId: string; body: string; wordCount: number; targetWordCount?: number; lengthNote?: string }> {
+}, signal?: AbortSignal): Promise<{ artifactId: string; runId: string; body: string; wordCount: number; targetWordCount?: number; lengthNote?: string }> {
   if (!input.root.bookId) throw new Error("落笔需要已建的书。");
   const resolved = await resolve(input.project, "write.main", input.root.projectRoot);
   const ctx = await assembleAuthoringContext(input.root, { stage: "write", chapterNumber: input.chapterNumber });
@@ -97,7 +97,7 @@ async function generateChapterDraftInner(input: WriteRuntime & {
     input.requirements ? `本章要求：${input.requirements}` : "",
     existing ? `当前已有正文（可在此基础上改写）：\n${existing.slice(0, 8000)}` : "",
     ctx.text,
-  ].filter(Boolean).join("\n"), input.llm);
+  ].filter(Boolean).join("\n"), input.llm, signal);
   const artifactId = newArtifactId("write", `ch${input.chapterNumber}`);
   const parent = input.parentArtifactId ? await loadArtifact(input.root, input.parentArtifactId) : undefined;
   await saveArtifact(input.root, {
@@ -156,13 +156,6 @@ export async function reviewChapterDraft(input: WriteRuntime & {
   readonly artifactId: string;
   readonly coverage?: string;
 }): Promise<AuthoringReviewReport> {
-  return withBookWriteLock(input.root, "审查本章", () => reviewChapterDraftInner(input));
-}
-
-async function reviewChapterDraftInner(input: WriteRuntime & {
-  readonly artifactId: string;
-  readonly coverage?: string;
-}): Promise<AuthoringReviewReport> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到要审查的正文。");
   const resolved = await resolve(input.project, "write.review", input.root.projectRoot);
@@ -181,7 +174,9 @@ async function reviewChapterDraftInner(input: WriteRuntime & {
     model: resolved.modelId,
     inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
   });
-  await saveReport(input.root, report);
+  await withBookWriteLock(input.root, "审查本章", async () => {
+    await saveReport(input.root, report);
+  });
   return report;
 }
 
@@ -192,7 +187,7 @@ export async function reviseChapterDraft(input: WriteRuntime & {
   readonly extraRequirement?: string;
   readonly reuseStale?: boolean;
 }): Promise<{ artifactId: string; version: number }> {
-  return withBookWriteLock(input.root, "按意见修改", () => reviseChapterDraftInner(input));
+  return withBookWriteLock(input.root, "按意见修改", (signal) => reviseChapterDraftInner(input, signal));
 }
 
 async function reviseChapterDraftInner(input: WriteRuntime & {
@@ -201,7 +196,7 @@ async function reviseChapterDraftInner(input: WriteRuntime & {
   readonly selectedIssueIds: readonly string[];
   readonly extraRequirement?: string;
   readonly reuseStale?: boolean;
-}): Promise<{ artifactId: string; version: number }> {
+}, signal?: AbortSignal): Promise<{ artifactId: string; version: number }> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   const report = await loadReport(input.root, input.reportId);
   if (!loaded || !report) throw new Error("按意见修改需要正文和报告。");
@@ -222,7 +217,7 @@ async function reviseChapterDraftInner(input: WriteRuntime & {
     input.extraRequirement ? `作者补充：${input.extraRequirement}` : "",
     ctx.text,
     loaded.body,
-  ].filter(Boolean).join("\n"), input.llm);
+  ].filter(Boolean).join("\n"), input.llm, signal);
   const nextId = newArtifactId("write", loaded.meta.scope);
   const version = loaded.meta.version + 1;
   await saveArtifact(input.root, {
@@ -262,13 +257,13 @@ export async function adoptChapterDraft(input: WriteRuntime & {
   readonly artifactId: string;
   readonly settle?: AuthoringLlmFn;
 }): Promise<{ adopted: true; settled: boolean; settleError?: string; lengthNote?: string }> {
-  return withBookWriteLock(input.root, "采用正文", () => adoptChapterDraftInner(input));
+  return withBookWriteLock(input.root, "采用正文", (signal) => adoptChapterDraftInner(input, signal));
 }
 
 async function adoptChapterDraftInner(input: WriteRuntime & {
   readonly artifactId: string;
   readonly settle?: AuthoringLlmFn;
-}): Promise<{ adopted: true; settled: boolean; settleError?: string; lengthNote?: string }> {
+}, signal?: AbortSignal): Promise<{ adopted: true; settled: boolean; settleError?: string; lengthNote?: string }> {
   if (!input.root.bookId) throw new Error("采用正文需要已建的书。");
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到可采用的正文。");
@@ -302,7 +297,7 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
       "根据刚采用的正文整理人物状态与伏笔变化。不要改正文。",
       "只输出一个 JSON 对象，包含 summary（这一章的一段话）、characters（[{name, status}]）、openHooks（[{id, label, targetChapter, note}]，新埋下还没收的线）、advanceHooks（推进了但没收回的旧线 id）、resolveHooks（已经收回的线 id）。拿不准时 summary 仍要写，其余留空数组。",
       loaded.body.slice(0, 8000),
-    ].join("\n"), input.settle ?? input.llm);
+    ].join("\n"), input.settle ?? input.llm, signal);
     settled = true;
   } catch (error) {
     settleError = error instanceof Error ? error.message : String(error);
@@ -448,7 +443,18 @@ export async function bindRestoredChapter(input: {
   readonly relativePath?: string;
   readonly body: string;
 }): Promise<{ artifactId: string }> {
-  return withBookWriteLock(input.root, "恢复正文", () => bindRestoredChapterInner(input));
+  return withBookWriteLock(input.root, "恢复正文", () => bindRestoredChapterUnlocked(input));
+}
+
+/** Caller already holds the book lock. Do not acquire it again. */
+export async function bindRestoredChapterUnlocked(input: {
+  readonly root: AuthoringStoreRoot;
+  readonly chapterNumber: number;
+  readonly title?: string;
+  readonly relativePath?: string;
+  readonly body: string;
+}): Promise<{ artifactId: string }> {
+  return bindRestoredChapterInner(input);
 }
 
 async function bindRestoredChapterInner(input: {

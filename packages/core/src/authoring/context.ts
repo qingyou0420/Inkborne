@@ -104,7 +104,10 @@ export async function loadAdoptedSettingsText(root: AuthoringStoreRoot): Promise
     try {
       const files = await readdir(dir);
       for (const file of files.filter((name) => name.endsWith(".md"))) {
-        roleBits.push(await readFile(join(dir, file), "utf-8"));
+        const body = (await readFile(join(dir, file), "utf-8")).trim();
+        if (!body) continue;
+        const name = file.replace(/\.md$/i, "").trim();
+        roleBits.push(name ? `### ${name}\n${body}` : body);
       }
     } catch {
       /* missing */

@@ -3,8 +3,8 @@ import type { Theme } from "../../hooks/use-theme";
 import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
-import { fetchJson } from "../../hooks/use-api";
-import { registerUnsavedCheck } from "../../lib/unsaved-edits";
+import { fetchJson, putChapterAutosave } from "../../hooks/use-api";
+import { registerUnsavedCheck, registerUnsavedFlush } from "../../lib/unsaved-edits";
 import { showToast } from "../../lib/toast";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
@@ -109,12 +109,8 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   useEffect(() => registerUnsavedCheck(() => pendingEdit.current !== null), []);
 
   const writePending = useCallback(async (pending: NonNullable<typeof pendingEdit.current>) => {
-    if (pending.isChapter) {
-      await fetchJson(`/books/${pending.bookId}/chapters/${pending.artifactChapter}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: pending.content }),
-      });
+    if (pending.isChapter && pending.artifactChapter !== null) {
+      await putChapterAutosave(pending.bookId, pending.artifactChapter, pending.content);
       return;
     }
     if (pending.artifactFile) {
@@ -137,6 +133,9 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
       throw error;
     }
   }, [writePending]);
+  const flushPendingRef = useRef(flushPendingEdit);
+  flushPendingRef.current = flushPendingEdit;
+  useEffect(() => registerUnsavedFlush(() => flushPendingRef.current()), []);
 
   const isChapter = artifactChapter !== null;
   const label = isChapter
@@ -195,12 +194,8 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      if (isChapter) {
-        await fetchJson(`/books/${bookId}/chapters/${artifactChapter}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: editContent }),
-        });
+      if (isChapter && artifactChapter !== null) {
+        await putChapterAutosave(bookId, artifactChapter, editContent);
       } else if (artifactFile) {
         await fetchJson(`/books/${bookId}/truth/${artifactFile}`, {
           method: "PUT",

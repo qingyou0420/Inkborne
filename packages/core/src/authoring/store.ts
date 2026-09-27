@@ -253,6 +253,9 @@ export async function saveHandEditedArtifact(
 ): Promise<AuthoringArtifactMeta> {
   const loaded = await loadArtifact(root, artifactId);
   if (!loaded) throw new Error("找不到要保存的稿件。");
+  if (loaded.meta.stage === "write" && loaded.meta.source === "hand") {
+    return saveArtifact(root, loaded.meta, body);
+  }
   const nextId = newArtifactId(loaded.meta.stage, loaded.meta.scope);
   const version = loaded.meta.version + 1;
   const meta = await saveArtifact(root, {

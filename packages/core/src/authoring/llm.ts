@@ -13,6 +13,7 @@ export function createAuthoringLlm(resolved: ResolvedAuthoringRole): AuthoringLl
     const response = await chatCompletion(client, resolved.modelId, call.messages, {
       temperature: resolved.temperature,
       extra: resolved.extra,
+      ...(call.signal ? { signal: call.signal } : {}),
     });
     return response.content;
   };
@@ -22,11 +23,13 @@ export async function completeRole(
   resolved: ResolvedAuthoringRole,
   user: string,
   llm?: AuthoringLlmFn,
+  signal?: AbortSignal,
 ): Promise<string> {
   const fn = llm ?? createAuthoringLlm(resolved);
   return fn({
     roleId: resolved.roleId,
     snapshot: resolved.snapshot,
+    ...(signal ? { signal } : {}),
     messages: [
       { role: "system", content: resolved.instructions },
       { role: "user", content: user },

@@ -7,7 +7,8 @@ export type ChapterVersionSource =
   | "agent"
   | "revision"
   | "regeneration"
-  | "restore";
+  | "restore"
+  | "autosave";
 
 export interface ChapterVersion {
   readonly id: string;
@@ -17,7 +18,7 @@ export interface ChapterVersion {
   readonly characterCount: number;
 }
 
-const VERSION_ID_PATTERN = /^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$/;
+const VERSION_ID_PATTERN = /^(\d{13})_(manual|agent|revision|regeneration|restore|autosave)_([0-9a-f-]{36})$/;
 
 export async function readChapterUserBrief(
   bookDir: string,
@@ -77,6 +78,22 @@ export async function archiveChapterVersion(
     createdAt: now.toISOString(),
     characterCount: content.length,
   };
+}
+
+/** Consecutive autosaves share one version file. A later manual archive starts a new one. */
+export async function storeAutosaveVersion(
+  bookDir: string,
+  chapterNumber: number,
+  content: string,
+  now = new Date(),
+): Promise<ChapterVersion> {
+  const versions = await listChapterVersions(bookDir, chapterNumber);
+  const latest = versions[0];
+  if (latest?.source === "autosave") {
+    await writeFile(join(versionsDir(bookDir, chapterNumber), `${latest.id}.md`), content, "utf-8");
+    return { ...latest, characterCount: content.length };
+  }
+  return archiveChapterVersion(bookDir, chapterNumber, content, "autosave", now);
 }
 
 export async function listChapterVersions(

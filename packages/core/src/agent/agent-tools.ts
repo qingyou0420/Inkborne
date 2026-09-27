@@ -1050,6 +1050,7 @@ export function createSubAgentTool(
     readonly language?: "zh" | "en";
     readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
     readonly workerSkills?: (agent: string) => ReadonlyArray<ActivatedSkillGuidance>;
+    readonly redirectNewChapters?: boolean;
   } = {},
 ): AgentTool<any> {
   const sessionIsZh = (options.language ?? "zh") !== "en";
@@ -1161,6 +1162,14 @@ export function createSubAgentTool(
 
           case "writer": {
             const targetBookId = resolveToolBookId("writer", bookId, activeBookId);
+            if (options.redirectNewChapters) {
+              return textResult(
+                sessionIsZh
+                  ? "下一章不在对话里写。请打开落笔。"
+                  : "New chapters are written in 落笔, not in this chat.",
+                { kind: "open_write", bookId: targetBookId },
+              );
+            }
             const requestedCount = chapterCount ?? 1;
             if (requestedCount > 1) {
               progress(`Writing ${requestedCount} consecutive chapters for "${targetBookId}"...`);

@@ -244,7 +244,7 @@ export function foldSerialLedger(
   return {
     characters: [...characters.values()],
     hooks: [...hooks.values()],
-    summaries: summaries.slice(-SUMMARY_KEEP),
+    summaries,
   };
 }
 
@@ -268,6 +268,7 @@ export function formatFoldedMemory(memory: FoldedMemory): string {
     })
     .join("\n");
   const summaries = memory.summaries
+    .slice(-SUMMARY_KEEP)
     .map((item) => `第 ${item.chapter} 章${item.title ? ` ${item.title}` : ""}：${clip(item.summary, SUMMARY_CLIP)}`)
     .join("\n");
   return [
@@ -277,45 +278,112 @@ export function formatFoldedMemory(memory: FoldedMemory): string {
   ].filter(Boolean).join("\n\n");
 }
 
-async function readLegacyMemory(bookDir: string, beforeChapter?: number): Promise<string> {
-  const sections: string[] = [];
+interface LegacySlices {
+  readonly state: string;
+  readonly hooks: ReadonlyArray<{ readonly startChapter: number; readonly line: string }>;
+  readonly summaries: ReadonlyArray<{ readonly chapter: number; readonly title: string; readonly summary: string }>;
+}
+
+async function readLegacySlices(bookDir: string, beforeChapter?: number): Promise<LegacySlices> {
+  let state = "";
   try {
-    const state = await readFile(join(bookDir, "story", "current_state.md"), "utf-8");
-    const clipped = clip(state, 3000);
-    if (clipped) sections.push(`【人物现状】\n${clipped}`);
+    state = clip(await readFile(join(bookDir, "story", "current_state.md"), "utf-8"), 3000);
   } catch {
     /* old books may not have this file */
   }
+  const hooks: Array<{ startChapter: number; line: string }> = [];
   try {
     const raw = JSON.parse(await readFile(join(bookDir, "story", "state", "hooks.json"), "utf-8")) as unknown;
     const parsed = HooksStateSchema.safeParse(raw);
     if (parsed.success) {
-      const lines = parsed.data.hooks
-        .filter((hook) => hook.status !== "resolved")
-        .map((hook) => {
-          const label = hook.expectedPayoff || hook.notes || hook.hookId;
-          const when = hook.targetChapter ? `，打算第 ${hook.targetChapter} 章收回` : "";
-          return `${label}（第 ${hook.startChapter} 章埋下${when}）`;
+      for (const hook of parsed.data.hooks) {
+        if (hook.status === "resolved") continue;
+        if (beforeChapter !== undefined && hook.startChapter >= beforeChapter) continue;
+        const label = hook.expectedPayoff || hook.notes || hook.hookId;
+        const when = hook.targetChapter ? `，打算第 ${hook.targetChapter} 章收回` : "";
+        hooks.push({
+          startChapter: hook.startChapter,
+          line: `${label}（第 ${hook.startChapter} 章埋下${when}）`,
         });
-      if (lines.length > 0) sections.push(`【待收伏笔】\n${lines.join("\n")}`);
+      }
     }
   } catch {
     /* ignore unreadable legacy hooks */
   }
+  const summaries: Array<{ chapter: number; title: string; summary: string }> = [];
   try {
     const raw = JSON.parse(await readFile(join(bookDir, "story", "state", "chapter_summaries.json"), "utf-8")) as unknown;
     const parsed = ChapterSummariesStateSchema.safeParse(raw);
     if (parsed.success) {
-      const rows = parsed.data.rows
-        .filter((row) => beforeChapter === undefined || row.chapter < beforeChapter)
-        .slice(-SUMMARY_KEEP);
-      const lines = rows.map((row) => `第 ${row.chapter} 章 ${row.title}：${clip(row.events || row.stateChanges || row.hookActivity, SUMMARY_CLIP)}`);
-      if (lines.length > 0) sections.push(`【近章摘要】\n${lines.join("\n")}`);
+      for (const row of parsed.data.rows) {
+        if (beforeChapter !== undefined && row.chapter >= beforeChapter) continue;
+        const summary = row.events || row.stateChanges || row.hookActivity;
+        if (!summary.trim()) continue;
+        summaries.push({ chapter: row.chapter, title: row.title, summary });
+      }
     }
   } catch {
     /* ignore unreadable legacy summaries */
   }
-  return sections.join("\n\n");
+  return { state, hooks, summaries };
+}
+
+export function coveredLedgerChapters(
+  ledger: SerialLedger | undefined,
+  adoptedWrite: Readonly<Record<string, string>> | undefined,
+  beforeChapter?: number,
+): Set<number> {
+  const covered = new Set<number>();
+  for (const entry of ledger?.chapters ?? []) {
+    if (beforeChapter !== undefined && entry.chapter >= beforeChapter) continue;
+    const adoptedId = adoptedWrite?.[String(entry.chapter)];
+    if (adoptedId && adoptedId !== entry.artifactId) continue;
+    covered.add(entry.chapter);
+  }
+  return covered;
+}
+
+function ledgerCoversEarlierChapters(covered: ReadonlySet<number>, beforeChapter?: number): boolean {
+  if (beforeChapter === undefined || beforeChapter <= 1) return false;
+  for (let chapter = 1; chapter < beforeChapter; chapter += 1) {
+    if (!covered.has(chapter)) return false;
+  }
+  return true;
+}
+
+function formatMergedMemory(
+  folded: FoldedMemory,
+  legacy: LegacySlices,
+  covered: ReadonlySet<number>,
+  beforeChapter?: number,
+): string {
+  const includeLegacyState = Boolean(legacy.state) && !ledgerCoversEarlierChapters(covered, beforeChapter);
+  const characters = folded.characters
+    .filter((item) => item.name.trim())
+    .map((item) => `${item.name}：${item.status || "情况未变"}`);
+  if (includeLegacyState) characters.push(legacy.state);
+  const hooks = [
+    ...folded.hooks
+      .filter((hook) => hook.status !== "resolved")
+      .map((hook) => {
+        const when = hook.targetChapter ? `，打算第 ${hook.targetChapter} 章收回` : "";
+        const note = hook.note ? `：${hook.note}` : "";
+        return `${hook.label}（第 ${hook.originChapter} 章埋下${when}）${note}`;
+      }),
+    ...legacy.hooks.filter((hook) => !covered.has(hook.startChapter)).map((hook) => hook.line),
+  ];
+  const summaries = [
+    ...folded.summaries,
+    ...legacy.summaries.filter((row) => !covered.has(row.chapter)),
+  ]
+    .sort((a, b) => a.chapter - b.chapter)
+    .slice(-SUMMARY_KEEP)
+    .map((item) => `第 ${item.chapter} 章${item.title ? ` ${item.title}` : ""}：${clip(item.summary, SUMMARY_CLIP)}`);
+  return [
+    characters.length ? `【人物现状】\n${characters.join("\n")}` : "",
+    hooks.length ? `【待收伏笔】\n${hooks.join("\n")}` : "",
+    summaries.length ? `【近章摘要】\n${summaries.join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 export async function loadWriteMemory(root: AuthoringStoreRoot, chapterNumber?: number): Promise<string> {
@@ -323,18 +391,23 @@ export async function loadWriteMemory(root: AuthoringStoreRoot, chapterNumber?: 
   const bookDir = join(root.projectRoot, "books", root.bookId);
   const manifest = await loadManifest(root).catch(() => undefined);
   const ledger = await loadSerialLedger(bookDir);
-  const folded = formatFoldedMemory(foldSerialLedger(ledger, manifest?.adopted.write, chapterNumber));
-  if (folded.trim()) return folded;
-  if (ledger?.chapters.length) return "";
-  return readLegacyMemory(bookDir, chapterNumber);
+  const covered = coveredLedgerChapters(ledger, manifest?.adopted.write, chapterNumber);
+  const folded = foldSerialLedger(ledger, manifest?.adopted.write, chapterNumber);
+  const legacy = await readLegacySlices(bookDir, chapterNumber);
+  if (covered.size === 0 && !legacy.state && legacy.hooks.length === 0 && legacy.summaries.length === 0) {
+    return "";
+  }
+  return formatMergedMemory(folded, legacy, covered, chapterNumber);
 }
 
 export async function readAuthoringOpenHooks(projectRoot: string, bookId: string): Promise<AuthoringOpenHook[]> {
   const bookDir = join(projectRoot, "books", bookId);
   const manifest = await loadManifest({ projectRoot, bookId }).catch(() => undefined);
   const ledger = await loadSerialLedger(bookDir);
+  const covered = coveredLedgerChapters(ledger, manifest?.adopted.write);
   const folded = foldSerialLedger(ledger, manifest?.adopted.write);
-  return folded.hooks
+  const legacy = await readLegacySlices(bookDir);
+  const fromLedger = folded.hooks
     .filter((hook) => hook.status !== "resolved")
     .map((hook) => ({
       hookId: hook.id,
@@ -347,6 +420,40 @@ export async function readAuthoringOpenHooks(projectRoot: string, bookId: string
       notes: hook.note,
       ...(hook.targetChapter ? { targetChapter: hook.targetChapter } : {}),
     }));
+  const seen = new Set(fromLedger.map((hook) => hook.label));
+  const fromLegacy = legacy.hooks
+    .filter((hook) => !covered.has(hook.startChapter) && !seen.has(hook.line))
+    .map((hook) => ({
+      hookId: `legacy-${hook.startChapter}-${hook.line.slice(0, 24)}`,
+      label: hook.line,
+      startChapter: hook.startChapter,
+      type: "伏笔",
+      status: "open",
+      lastAdvancedChapter: hook.startChapter,
+      expectedPayoff: hook.line,
+      notes: "",
+    }));
+  return [...fromLegacy, ...fromLedger];
+}
+
+function settingNameKeys(title: string): string[] {
+  const keys = new Set<string>();
+  const trimmed = title.trim();
+  if (trimmed.length >= 2) keys.add(trimmed);
+  const stripped = trimmed.replace(/[（(][^）)]*[）)]/g, "").replace(/\s+/g, " ").trim();
+  if (stripped.length >= 2) keys.add(stripped);
+  for (const match of trimmed.matchAll(/[（(]([^）)]+)[）)]/g)) {
+    const inner = match[1]?.trim() ?? "";
+    if (inner.length >= 2) keys.add(inner);
+  }
+  return [...keys];
+}
+
+function splitSettingChunks(settings: string): string[] {
+  const titled = settings.split(/\n(?=### )/).map((chunk) => chunk.trim()).filter(Boolean);
+  if (titled.some((chunk) => chunk.startsWith("### "))) return titled;
+  const headed = settings.split(/\n(?=#{1,3} )/).map((chunk) => chunk.trim()).filter(Boolean);
+  return headed.length > 1 ? headed : titled;
 }
 
 export function pickSettingsByMention(
@@ -357,10 +464,10 @@ export function pickSettingsByMention(
   if (!settings.trim()) return "";
   if (settings.length <= budget) return settings;
   const haystack = hints.texts.filter(Boolean).join("\n");
-  const chunks = settings.split(/\n(?=### )/).map((chunk) => chunk.trim()).filter(Boolean);
+  const chunks = splitSettingChunks(settings);
   const titled = chunks.map((chunk) => {
-    const title = /^###\s+(.+)$/m.exec(chunk)?.[1]?.trim() ?? "";
-    const hit = title.length >= 2 && haystack.includes(title);
+    const title = /^(?:###|##|#)\s+(.+)$/m.exec(chunk)?.[1]?.trim() ?? "";
+    const hit = settingNameKeys(title).some((key) => haystack.includes(key));
     return { chunk, hit };
   });
   const ordered = [
@@ -378,5 +485,6 @@ export function pickSettingsByMention(
     const room = budget - acc.length - sep.length;
     if (room > 24) acc += sep + item.chunk.slice(0, room);
   }
-  return acc || settings.slice(0, budget);
+  if (acc) return acc;
+  return (ordered[0]?.chunk ?? settings).slice(0, budget);
 }

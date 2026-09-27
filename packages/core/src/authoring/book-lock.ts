@@ -11,16 +11,17 @@ import type { AuthoringStoreRoot } from "./store.js";
 export async function withBookWriteLock<T>(
   root: AuthoringStoreRoot,
   stage: string,
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  if (!root.bookId) return fn();
+  if (!root.bookId) return fn(new AbortController().signal);
+  const abort = new AbortController();
   const release = await new StateManager(root.projectRoot).acquireBookLock(
     root.bookId,
-    { stage, taskId: `${stage}-${randomUUID().slice(0, 8)}` },
+    { stage, taskId: `${stage}-${randomUUID().slice(0, 8)}`, abort },
     { waitMs: 0 },
   );
   try {
-    return await fn();
+    return await fn(abort.signal);
   } finally {
     await release();
   }

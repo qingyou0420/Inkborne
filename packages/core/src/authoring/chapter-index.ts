@@ -7,8 +7,9 @@
 import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { ChapterMetaSchema, type ChapterMeta, type ChapterStatus } from "../models/chapter.js";
-import { archiveChapterVersion } from "../state/chapter-workspace.js";
+import { archiveChapterVersion, storeAutosaveVersion } from "../state/chapter-workspace.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 
 function chapterFileName(chapterNumber: number, title: string): string {
   const safe = title.replace(/[^\w\u4e00-\u9fff]+/g, "-").slice(0, 20) || "chapter";
@@ -58,20 +59,76 @@ async function rebuildIndexFromFiles(bookDir: string): Promise<ChapterMeta[]> {
   return [...byNumber.values()].sort((a, b) => a.number - b.number);
 }
 
+function indexFailure(message: string): Error {
+  return new Error(message);
+}
+
 async function readIndex(bookDir: string): Promise<ChapterMeta[]> {
+  const indexPath = join(bookDir, "chapters", "index.json");
+  let rawText: string;
   try {
-    const raw = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as unknown;
-    if (Array.isArray(raw) && raw.length > 0) {
-      const parsed = raw.flatMap((item) => {
-        const result = ChapterMetaSchema.safeParse(item);
-        return result.success ? [result.data] : [];
-      });
-      if (parsed.length > 0) return parsed;
-    }
-  } catch {
-    /* missing or invalid index */
+    rawText = await readFile(indexPath, "utf-8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") return rebuildIndexFromFiles(bookDir);
+    throw indexFailure(`章节目录读不出来，已停止，没有改写 index.json。`);
   }
-  return rebuildIndexFromFiles(bookDir);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawText) as unknown;
+  } catch {
+    throw indexFailure("章节目录 index.json 不是合法的 JSON，已停止，没有改写这份目录。");
+  }
+  if (!Array.isArray(raw)) {
+    throw indexFailure("章节目录 index.json 格式不对，已停止，没有改写这份目录。");
+  }
+  if (raw.length === 0) return [];
+  const parsed: ChapterMeta[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const item = raw[index];
+    const result = ChapterMetaSchema.safeParse(item);
+    if (!result.success) {
+      const number = item && typeof item === "object" && "number" in item
+        ? (item as { number?: unknown }).number
+        : undefined;
+      const where = typeof number === "number" ? `第 ${number} 章` : `第 ${index + 1} 条`;
+      throw indexFailure(`章节目录里${where}读不出来，已停止，没有改写 index.json。`);
+    }
+    parsed.push(result.data);
+  }
+  return parsed;
+}
+
+export async function autosaveChapterBody(input: {
+  readonly bookDir: string;
+  readonly chapterNumber: number;
+  readonly content: string;
+}): Promise<{ wordCount: number }> {
+  if (!Number.isInteger(input.chapterNumber) || input.chapterNumber < 1) {
+    throw indexFailure("章号不对，自动保存已停止。");
+  }
+  if (typeof input.content !== "string") {
+    throw indexFailure("正文没有送到，自动保存已停止。");
+  }
+  const padded = String(input.chapterNumber).padStart(4, "0");
+  const chaptersDir = join(input.bookDir, "chapters");
+  const files = await readdir(chaptersDir).catch(() => [] as string[]);
+  const fileName = files.find((file) => file.startsWith(`${padded}_`) && file.endsWith(".md"));
+  if (!fileName) throw indexFailure(`找不到第 ${input.chapterNumber} 章的正文，自动保存已停止。`);
+  const index = await readIndex(input.bookDir);
+  if (!index.some((item) => item.number === input.chapterNumber)) {
+    throw indexFailure(`章节目录里没有第 ${input.chapterNumber} 章，自动保存已停止，没有改写目录。`);
+  }
+  const body = input.content.endsWith("\n") ? input.content : `${input.content}\n`;
+  const counted = wordCount(body);
+  await storeAutosaveVersion(input.bookDir, input.chapterNumber, body);
+  await writeFileAtomic(join(chaptersDir, fileName), body);
+  const now = new Date().toISOString();
+  const next = index.map((item) => item.number === input.chapterNumber
+    ? { ...item, wordCount: counted, updatedAt: now }
+    : item);
+  await writeFileAtomic(join(chaptersDir, "index.json"), `${JSON.stringify(next, null, 2)}\n`);
+  return { wordCount: counted };
 }
 
 export async function persistAdoptedChapter(input: {
@@ -88,6 +145,7 @@ export async function persistAdoptedChapter(input: {
 }): Promise<{ relativePath: string; index: ReadonlyArray<ChapterMeta> }> {
   const chaptersDir = join(input.bookDir, "chapters");
   await mkdir(chaptersDir, { recursive: true });
+  const existing = await readIndex(input.bookDir);
   const relativePath = input.relativePath?.startsWith("chapters/")
     ? input.relativePath
     : `chapters/${chapterFileName(input.chapterNumber, input.title)}`;
@@ -113,7 +171,6 @@ export async function persistAdoptedChapter(input: {
   }
   const body = input.body.endsWith("\n") ? input.body : `${input.body}\n`;
   const now = new Date().toISOString();
-  const existing = await readIndex(input.bookDir);
   const entry: ChapterMeta = {
     number: input.chapterNumber,
     title: input.title || `第${input.chapterNumber}章`,

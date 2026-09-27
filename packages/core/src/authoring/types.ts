@@ -281,6 +281,7 @@ export interface AuthoringLlmCall {
   readonly roleId: AuthoringRoleId;
   readonly messages: ReadonlyArray<{ role: "system" | "user" | "assistant"; content: string }>;
   readonly snapshot: Record<string, unknown>;
+  readonly signal?: AbortSignal;
 }
 
 export type AuthoringLlmFn = (call: AuthoringLlmCall) => Promise<string>;

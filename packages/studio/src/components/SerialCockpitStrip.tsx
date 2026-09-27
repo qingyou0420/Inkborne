@@ -1,4 +1,4 @@
-import { fetchJson, postApi } from "../hooks/use-api";
+import { fetchJson } from "../hooks/use-api";
 import { useEffect, useState } from "react";
 import { stripEngineTokens } from "../lib/copy-map";
 import { findChapterNode, parseVolumeMapTree } from "../lib/volume-map-tree";
@@ -136,10 +136,3 @@ export function SerialCockpitStrip({
   );
 }
 
-export async function startWriteNext(bookId: string, skipPreviousApproval: boolean): Promise<void> {
-  await postApi(`/books/${bookId}/write-next`, { skipPreviousApproval });
-}
-
-export async function startDraft(bookId: string, skipPreviousApproval: boolean): Promise<void> {
-  await postApi(`/books/${bookId}/draft`, { skipPreviousApproval });
-}

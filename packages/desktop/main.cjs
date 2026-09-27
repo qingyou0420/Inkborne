@@ -56,17 +56,51 @@ let quitting = false;
 let allowClose = false;
 let quitDeciding = false;
 
+const UNSAVED_CHECK_TIMEOUT_MS = 1500;
+
+function withTimeout(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 async function pageHasUnsavedEdits() {
   const win = mainWindow;
   if (!win || win.isDestroyed()) return false;
+  const script = `(async () => {
+    try {
+      if (window.__inkborneFlushUnsavedEdits) await window.__inkborneFlushUnsavedEdits();
+    } catch (error) {}
+    return Boolean(window.__inkborneHasUnsavedEdits && window.__inkborneHasUnsavedEdits());
+  })()`;
   try {
-    const value = await win.webContents.executeJavaScript(
-      "Boolean(window.__inkborneHasUnsavedEdits && window.__inkborneHasUnsavedEdits())",
+    const value = await withTimeout(
+      win.webContents.executeJavaScript(script, true),
+      UNSAVED_CHECK_TIMEOUT_MS,
       true,
     );
     return value === true;
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -80,7 +114,7 @@ function askLeaveWithUnsaved() {
     noLink: true,
     title: "还有没保存的修改",
     message: "编辑框里还有没存好的文字。",
-    detail: "留下可以继续写。仍要离开的话，这些修改会丢掉。",
+    detail: "关窗前会先试着存下来。留下可以继续写。仍要离开的话，没存上的修改会丢掉。",
   });
   return choice === 1;
 }

@@ -104,6 +104,8 @@ export {
   saveWriteBody,
   selectWriteCandidate,
   bindRestoredChapter,
+  bindRestoredChapterUnlocked,
+  autosaveChapterBody,
   parseCanon,
   serializeCanon,
   ensureAuthoringDraft,

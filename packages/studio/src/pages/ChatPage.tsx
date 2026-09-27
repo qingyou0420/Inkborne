@@ -71,6 +71,7 @@ import {
   toggleSelectedSkillIds,
   type StudioSkill,
 } from "./skill-ui-state";
+import { isWriteNextRequest } from "../lib/write-next-request";
 
 // -- Types --
 
@@ -682,6 +683,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     const hasPendingMessage = Boolean(text.trim()) || attachedFiles.length > 0;
     if (!hasPendingMessage) {
       if (chatStreaming || loading) await abortSession(activeSessionId);
+      return;
+    }
+    if (activeBookId && nav.toWrite && isWriteNextRequest(text) && attachedFiles.length === 0) {
+      nav.toWrite(activeBookId);
+      showToast(isZh ? "下一章请到落笔里写。" : "The next chapter opens in 落笔.", "info");
       return;
     }
     const requestedSkills = selectedSkillIdsForSend(selectedSkillIds);

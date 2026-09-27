@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { showToast } from "../lib/toast";
-import { registerUnsavedCheck } from "../lib/unsaved-edits";
-import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { trackChapterEdit } from "../lib/pending-chapter-edit";
+import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
+import { fetchJson, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -80,16 +81,15 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     if (!pending) return;
     pendingSave.current = null;
     try {
-      await fetchJson(`/books/${pending.bookId}/chapters/${pending.chapterNumber}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: pending.content }),
-      });
+      await putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content);
     } catch (error) {
       if (!pendingSave.current) pendingSave.current = pending;
       throw error;
     }
   }, []);
+  const flushPendingRef = useRef(flushPendingChapter);
+  flushPendingRef.current = flushPendingChapter;
+  useEffect(() => registerUnsavedFlush(() => flushPendingRef.current()), []);
 
   useEffect(() => {
     if (!editing || !pendingSave.current) return;
@@ -108,11 +108,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
       const pending = pendingSave.current;
       if (!pending) return;
       pendingSave.current = null;
-      void fetchJson(`/books/${pending.bookId}/chapters/${pending.chapterNumber}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: pending.content }),
-      });
+      void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content);
     };
   }, [bookId, chapterNumber]);
 
@@ -126,11 +122,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
       void refetch();
       return;
     }
-    void fetchJson(`/books/${pending.bookId}/chapters/${pending.chapterNumber}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: pending.content }),
-    }).finally(() => {
+    void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content).finally(() => {
       void refetch();
     });
   }, [refetch]);
@@ -163,11 +155,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     setSaving(true);
     try {
       pendingSave.current = null;
-      await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editContent }),
-      });
+      await putChapterAutosave(bookId, chapterNumber, editContent);
       setEditing(false);
       refetch();
       setWorkspaceRevision((revision) => revision + 1);
@@ -332,9 +320,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
             onChange={(e) => {
               const next = e.target.value;
               setEditContent(next);
-              pendingSave.current = next === data.content
-                ? null
-                : { bookId, chapterNumber, content: next };
+              pendingSave.current = trackChapterEdit(bookId, chapterNumber, next, data.content);
             }}
             className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[32px] text-foreground/90 focus:outline-none resize-none border border-border-strong rounded-[10px] p-6 focus:ring-1 focus:ring-ring"
             autoFocus

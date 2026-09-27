@@ -7,6 +7,7 @@
 import { getDesktopBridge } from "./desktop-bridge";
 
 const holders = new Set<() => boolean>();
+const flushers = new Set<() => Promise<void>>();
 let installed = false;
 
 function installUnsavedGuard(): void {
@@ -18,7 +19,12 @@ function installUnsavedGuard(): void {
     event.preventDefault();
     event.returnValue = "";
   });
-  (window as Window & { __inkborneHasUnsavedEdits?: () => boolean }).__inkborneHasUnsavedEdits = hasUnsavedEdits;
+  const bridge = window as Window & {
+    __inkborneHasUnsavedEdits?: () => boolean;
+    __inkborneFlushUnsavedEdits?: () => Promise<void>;
+  };
+  bridge.__inkborneHasUnsavedEdits = hasUnsavedEdits;
+  bridge.__inkborneFlushUnsavedEdits = flushUnsavedEdits;
 }
 
 export function hasUnsavedEdits(): boolean {
@@ -33,5 +39,18 @@ export function registerUnsavedCheck(check: () => boolean): () => void {
   holders.add(check);
   return () => {
     holders.delete(check);
+  };
+}
+
+export async function flushUnsavedEdits(): Promise<void> {
+  const pending = [...flushers];
+  await Promise.all(pending.map((flush) => flush()));
+}
+
+export function registerUnsavedFlush(flush: () => Promise<void>): () => void {
+  installUnsavedGuard();
+  flushers.add(flush);
+  return () => {
+    flushers.delete(flush);
   };
 }

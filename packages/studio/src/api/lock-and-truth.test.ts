@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateManager } from "@actalk/inkos-core";
@@ -187,5 +188,107 @@ describe("P0 lock + truth PUT", () => {
     } finally {
       await release();
     }
+  });
+
+  it("restores a chapter version under the real book lock and binds the candidate", async () => {
+    const app = createStudioServer(projectConfig, root);
+    const bookDir = join(root, "books", "demo-book");
+    await mkdir(join(bookDir, "chapters", ".versions", "0003"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "demo-book",
+      title: "试",
+      language: "zh",
+      genre: "general",
+      platform: "other",
+      status: "writing",
+      targetChapters: 10,
+      chapterWordCount: 3000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }), "utf-8");
+    await writeFile(join(bookDir, "chapters", "0003_雨.md"), "现在的正文\n", "utf-8");
+    await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify([{
+      number: 3,
+      title: "雨",
+      status: "approved",
+      wordCount: 5,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }]), "utf-8");
+    const versionId = `${Date.now()}_restore_${randomUUID()}`;
+    await writeFile(join(bookDir, "chapters", ".versions", "0003", `${versionId}.md`), "恢复的正文\n", "utf-8");
+
+    const restored = await app.request(
+      `/api/v1/books/demo-book/chapters/3/versions/${versionId}/restore`,
+      { method: "POST" },
+    );
+    const restoredBody = await restored.json() as { error?: unknown; ok?: boolean };
+    expect(restored.status, JSON.stringify(restoredBody)).toBe(200);
+    expect(await readFile(join(bookDir, "chapters", "0003_雨.md"), "utf-8")).toContain("恢复的正文");
+    const workflow = await readdir(join(bookDir, "story", "workflow", "artifacts"));
+    expect(workflow.length).toBeGreaterThan(0);
+
+    const state = new StateManager(root);
+    const release = await state.acquireBookLock("demo-book", {
+      taskId: "held-during-restore",
+      stage: "落笔",
+      abort: new AbortController(),
+    });
+    try {
+      const busy = await app.request(
+        `/api/v1/books/demo-book/chapters/3/versions/${versionId}/restore`,
+        { method: "POST" },
+      );
+      const busyBody = await busy.json() as { error?: { message?: string; code?: string } | string };
+      expect(busy.status).toBe(409);
+      const message = typeof busyBody.error === "string" ? busyBody.error : busyBody.error?.message ?? "";
+      expect(message).toContain("写入被占用");
+      expect(message).not.toMatch(/BookWriteLockError|locked by an active/);
+    } finally {
+      await release();
+    }
+  });
+
+  it("autosaves chapter text without marking it audit-failed or stacking versions", async () => {
+    const app = createStudioServer(projectConfig, root);
+    const bookDir = join(root, "books", "demo-book");
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    await mkdir(join(bookDir, "story", "runtime"), { recursive: true });
+    await writeFile(join(bookDir, "story", "runtime", "chapter-0004.plan.md"), "不要清掉\n", "utf-8");
+    await writeFile(join(bookDir, "chapters", "0004_雪.md"), "旧雪\n", "utf-8");
+    await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify([{
+      number: 4,
+      title: "雪",
+      status: "approved",
+      wordCount: 2,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }]), "utf-8");
+    const first = await app.request("/api/v1/books/demo-book/chapters/4", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "第一次停笔", autosave: true }),
+    });
+    expect(first.status).toBe(200);
+    const second = await app.request("/api/v1/books/demo-book/chapters/4", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "第二次停笔", autosave: true }),
+    });
+    expect(second.status).toBe(200);
+    const index = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as Array<{
+      status: string;
+      auditIssues: string[];
+    }>;
+    expect(index[0]?.status).toBe("approved");
+    expect(JSON.stringify(index)).not.toContain("Manual chapter replacement");
+    expect(await readFile(join(bookDir, "chapters", "0004_雪.md"), "utf-8")).toContain("第二次停笔");
+    expect(await readFile(join(bookDir, "story", "runtime", "chapter-0004.plan.md"), "utf-8")).toContain("不要清掉");
+    const versions = await readdir(join(bookDir, "chapters", ".versions", "0004"));
+    expect(versions.filter((file) => file.endsWith(".md"))).toHaveLength(1);
   });
 });
