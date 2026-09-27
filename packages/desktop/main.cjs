@@ -56,7 +56,8 @@ let quitting = false;
 let allowClose = false;
 let quitDeciding = false;
 
-const UNSAVED_CHECK_TIMEOUT_MS = 1500;
+// Covers the autosave busy-retry budget (350+700+1050ms) plus the requests themselves.
+const UNSAVED_CHECK_TIMEOUT_MS = 3000;
 
 function withTimeout(promise, ms, fallback) {
   return new Promise((resolve) => {

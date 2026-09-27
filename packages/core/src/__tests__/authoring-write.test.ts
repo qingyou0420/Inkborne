@@ -13,7 +13,8 @@ import {
 import { assembleAuthoringContext } from "../authoring/context.js";
 import { persistAdoptedChapter } from "../authoring/chapter-index.js";
 import { pickSettingsByMention } from "../authoring/serial-ledger.js";
-import { loadArtifact, loadManifest, loadReport, saveHandEditedArtifact, saveManifest } from "../authoring/store.js";
+import { loadArtifact, loadManifest, loadReport, saveHandEditedArtifact, saveManifest, saveReport } from "../authoring/store.js";
+import { listChapterVersions, readChapterVersion } from "../state/chapter-workspace.js";
 import { withBookWriteLock } from "../authoring/book-lock.js";
 import { autosaveChapterBody } from "../authoring/chapter-index.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
@@ -639,10 +640,12 @@ describe("write stage", () => {
     expect(picked.includes("乙乙乙")).toBe(false);
   });
 
-  it("collapses consecutive chapter autosaves into one version and keeps the status", async () => {
+  it("keeps the original chapter recoverable after autosave and rolls later pauses into one file", async () => {
     root = await mkdtemp(join(tmpdir(), "authoring-write-autosave-"));
     const bookDir = join(root, "books", "old");
     await mkdir(join(bookDir, "chapters"), { recursive: true });
+    await mkdir(join(bookDir, "story", "runtime"), { recursive: true });
+    await writeFile(join(bookDir, "story", "runtime", "chapter-0008.plan.md"), "不要清掉\n", "utf-8");
     await writeFile(join(bookDir, "chapters", "0008_雨.md"), "旧正文\n", "utf-8");
     await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify([{
       number: 8,
@@ -654,15 +657,139 @@ describe("write stage", () => {
       auditIssues: [],
       lengthWarnings: [],
     }], null, 2), "utf-8");
-    await autosaveChapterBody({ bookDir, chapterNumber: 8, content: "第一次停笔" });
-    await autosaveChapterBody({ bookDir, chapterNumber: 8, content: "第二次停笔" });
+    const started = new Date("2026-03-01T00:00:00.000Z");
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "第一次停笔",
+      fresh: true,
+      now: started,
+    });
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "第二次停笔",
+      now: new Date(started.getTime() + 5 * 60 * 1000),
+    });
     const index = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as Array<{ status: string; auditIssues: string[] }>;
     expect(index[0]?.status).toBe("approved");
     expect(index[0]?.auditIssues ?? []).toEqual([]);
     expect(await readFile(join(bookDir, "chapters", "0008_雨.md"), "utf-8")).toContain("第二次停笔");
-    const versions = await readdir(join(bookDir, "chapters", ".versions", "0008"));
-    expect(versions.filter((file) => file.endsWith(".md"))).toHaveLength(1);
-    expect(await readFile(join(bookDir, "story", "runtime", "chapter-0008.plan.md"), "utf-8").catch(() => "")).toBe("");
+    expect(await readFile(join(bookDir, "story", "runtime", "chapter-0008.plan.md"), "utf-8")).toContain("不要清掉");
+    const versions = await listChapterVersions(bookDir, 8);
+    expect(versions.map((version) => version.source)).toEqual(["autosave", "manual"]);
+    const baseline = versions.find((version) => version.source === "manual");
+    expect(baseline).toBeTruthy();
+    expect(await readChapterVersion(bookDir, 8, baseline!.id)).toBe("旧正文\n");
+    const autosave = versions.find((version) => version.source === "autosave");
+    expect(await readChapterVersion(bookDir, 8, autosave!.id)).toContain("第二次停笔");
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "隔了一阵再改",
+      now: new Date(started.getTime() + 11 * 60 * 1000),
+    });
+    const later = await listChapterVersions(bookDir, 8);
+    expect(later.filter((version) => version.source === "autosave")).toHaveLength(2);
+    expect(await readChapterVersion(bookDir, 8, baseline!.id)).toBe("旧正文\n");
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "重新打开后再改",
+      fresh: true,
+      now: new Date(started.getTime() + 12 * 60 * 1000),
+    });
+    const reopened = await listChapterVersions(bookDir, 8);
+    expect(reopened.filter((version) => version.source === "autosave").length).toBeGreaterThan(2);
+    expect(await readChapterVersion(bookDir, 8, baseline!.id)).toBe("旧正文\n");
+  });
+
+  it("does not write the chapter when adopt is aborted", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-abort-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "中止",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    const draft = await generateChapterDraft({
+      root: store,
+      project: project(),
+      chapterNumber: 1,
+      title: "夜",
+      llm: async () => "不该落盘的正文",
+    });
+    await expect(adoptChapterDraft({
+      root: store,
+      project: project(),
+      artifactId: draft.artifactId,
+      llm: async () => {
+        await new StateManager(root).forceReleaseBookLock(created.bookId, { graceMs: 0 });
+        throw new Error("aborted");
+      },
+    })).rejects.toThrow("采用已中止，正文没有写入");
+    const files = await readdir(join(created.bookDir, "chapters")).catch(() => [] as string[]);
+    expect(files.some((file) => file.startsWith("0001") && file.endsWith(".md"))).toBe(false);
+  });
+
+  it("starts a new hand version after adopt and stale-marks the overwritten candidate report", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-hand-stale-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "手改过期",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    const draft = await generateChapterDraft({
+      root: store,
+      project: project(),
+      chapterNumber: 4,
+      title: "夜",
+      llm: async () => "原稿",
+    });
+    const hand = await saveHandEditedArtifact(store, draft.artifactId, "手改一");
+    await saveReport(store, {
+      reportId: "rep-hand",
+      stage: "write",
+      targetRefs: [hand.artifactId],
+      coverage: "chapter:4",
+      inputRefs: [],
+      actualReviewModel: "review-model",
+      createdAt: new Date().toISOString(),
+      summary: "先这样",
+      issues: [],
+      stale: false,
+    });
+    const again = await saveHandEditedArtifact(store, hand.artifactId, "手改二");
+    expect(again.artifactId).toBe(hand.artifactId);
+    expect((await loadReport(store, "rep-hand"))?.stale).toBe(true);
+    await adoptChapterDraft({
+      root: store,
+      project: project(),
+      artifactId: hand.artifactId,
+      llm: async () => JSON.stringify({ summary: "采用了", characters: [], openHooks: [], advanceHooks: [], resolveHooks: [] }),
+    });
+    const afterAdopt = await saveHandEditedArtifact(store, hand.artifactId, "采用后再改");
+    expect(afterAdopt.artifactId).not.toBe(hand.artifactId);
+    expect(afterAdopt.status).toBe("candidate");
   });
 
   it("picks a role file by its name when there is no settings catalog", async () => {

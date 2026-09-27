@@ -347,10 +347,19 @@ export async function retryingBookBusy<T>(fn: () => Promise<T>): Promise<T> {
   throw last;
 }
 
-export async function putChapterAutosave(bookId: string, chapterNumber: number, content: string): Promise<void> {
+export async function putChapterAutosave(
+  bookId: string,
+  chapterNumber: number,
+  content: string,
+  options?: { readonly fresh?: boolean },
+): Promise<void> {
   await retryingBookBusy(() => fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, autosave: true }),
+    body: JSON.stringify({
+      content,
+      autosave: true,
+      ...(options?.fresh ? { fresh: true } : {}),
+    }),
   }, { silentBookBusy: true }));
 }

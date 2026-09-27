@@ -136,10 +136,22 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     if (!pending) return candidateRef.current?.artifactId;
     pendingEditRef.current = null;
     dirtyRef.current = false;
+    const sourceArtifactId = pending.artifactId;
     const holder: { current?: Promise<string | undefined> } = {};
     holder.current = (async () => {
       try {
-        return await persistSnapshot(pending);
+        const savedId = await persistSnapshot(pending);
+        const newer = pendingEditRef.current;
+        if (
+          savedId
+          && newer
+          && newer.bookId === pending.bookId
+          && newer.chapterNumber === pending.chapterNumber
+          && newer.artifactId === sourceArtifactId
+        ) {
+          pendingEditRef.current = { ...newer, artifactId: savedId };
+        }
+        return savedId;
       } catch (error) {
         if (!pendingEditRef.current) {
           pendingEditRef.current = pending;

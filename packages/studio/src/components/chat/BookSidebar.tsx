@@ -3,7 +3,7 @@ import type { Theme } from "../../hooks/use-theme";
 import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
-import { fetchJson, putChapterAutosave } from "../../hooks/use-api";
+import { fetchJson, putApi, putChapterAutosave } from "../../hooks/use-api";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../../lib/unsaved-edits";
 import { showToast } from "../../lib/toast";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -105,12 +105,17 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
     artifactFile: string | null;
     content: string;
   } | null>(null);
+  const editGeneration = useRef(0);
+  const flushedGeneration = useRef(0);
 
   useEffect(() => registerUnsavedCheck(() => pendingEdit.current !== null), []);
 
   const writePending = useCallback(async (pending: NonNullable<typeof pendingEdit.current>) => {
     if (pending.isChapter && pending.artifactChapter !== null) {
-      await putChapterAutosave(pending.bookId, pending.artifactChapter, pending.content);
+      const generation = editGeneration.current;
+      const fresh = flushedGeneration.current !== generation;
+      await putChapterAutosave(pending.bookId, pending.artifactChapter, pending.content, { fresh });
+      if (editGeneration.current === generation) flushedGeneration.current = generation;
       return;
     }
     if (pending.artifactFile) {
@@ -187,6 +192,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   }, [bookId, artifactFile, artifactChapter, bookDataVersion, isChapter]);
 
   const handleEdit = useCallback(() => {
+    editGeneration.current += 1;
     setEditContent(content ?? "");
     setEditing(true);
   }, [content]);
@@ -195,7 +201,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
     setSaving(true);
     try {
       if (isChapter && artifactChapter !== null) {
-        await putChapterAutosave(bookId, artifactChapter, editContent);
+        await putApi(`/books/${bookId}/chapters/${artifactChapter}`, { content: editContent });
       } else if (artifactFile) {
         await fetchJson(`/books/${bookId}/truth/${artifactFile}`, {
           method: "PUT",

@@ -404,10 +404,10 @@ export async function readAuthoringOpenHooks(projectRoot: string, bookId: string
   const bookDir = join(projectRoot, "books", bookId);
   const manifest = await loadManifest({ projectRoot, bookId }).catch(() => undefined);
   const ledger = await loadSerialLedger(bookDir);
-  const covered = coveredLedgerChapters(ledger, manifest?.adopted.write);
   const folded = foldSerialLedger(ledger, manifest?.adopted.write);
-  const legacy = await readLegacySlices(bookDir);
-  const fromLedger = folded.hooks
+  // 书房「待收伏笔」只看账本。旧书 hooks.json 仍由 hooks/due 自己读，
+  // 落笔提示词的跨章记忆继续走 loadWriteMemory，那里会合并旧伏笔。
+  return folded.hooks
     .filter((hook) => hook.status !== "resolved")
     .map((hook) => ({
       hookId: hook.id,
@@ -420,20 +420,6 @@ export async function readAuthoringOpenHooks(projectRoot: string, bookId: string
       notes: hook.note,
       ...(hook.targetChapter ? { targetChapter: hook.targetChapter } : {}),
     }));
-  const seen = new Set(fromLedger.map((hook) => hook.label));
-  const fromLegacy = legacy.hooks
-    .filter((hook) => !covered.has(hook.startChapter) && !seen.has(hook.line))
-    .map((hook) => ({
-      hookId: `legacy-${hook.startChapter}-${hook.line.slice(0, 24)}`,
-      label: hook.line,
-      startChapter: hook.startChapter,
-      type: "伏笔",
-      status: "open",
-      lastAdvancedChapter: hook.startChapter,
-      expectedPayoff: hook.line,
-      notes: "",
-    }));
-  return [...fromLegacy, ...fromLedger];
 }
 
 function settingNameKeys(title: string): string[] {

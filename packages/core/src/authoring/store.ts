@@ -222,6 +222,19 @@ export function reportAppliesTo(report: AuthoringReviewReport, artifactId: strin
   return report.targetRefs.includes(artifactId);
 }
 
+async function markBoundReportsStale(
+  root: AuthoringStoreRoot,
+  artifactId: string,
+  reason: string,
+): Promise<void> {
+  const reports = await listReports(root);
+  for (const report of reports) {
+    if (report.stale) continue;
+    if (!report.targetRefs.includes(artifactId)) continue;
+    await saveReport(root, { ...report, stale: true, staleReason: reason });
+  }
+}
+
 export async function markReportsStale(
   root: AuthoringStoreRoot,
   targetRef: string,
@@ -253,7 +266,12 @@ export async function saveHandEditedArtifact(
 ): Promise<AuthoringArtifactMeta> {
   const loaded = await loadArtifact(root, artifactId);
   if (!loaded) throw new Error("找不到要保存的稿件。");
-  if (loaded.meta.stage === "write" && loaded.meta.source === "hand") {
+  if (
+    loaded.meta.stage === "write"
+    && loaded.meta.source === "hand"
+    && loaded.meta.status === "candidate"
+  ) {
+    await markBoundReportsStale(root, loaded.meta.artifactId, "手改覆盖了这份候选，原审查报告已过期。");
     return saveArtifact(root, loaded.meta, body);
   }
   const nextId = newArtifactId(loaded.meta.stage, loaded.meta.scope);

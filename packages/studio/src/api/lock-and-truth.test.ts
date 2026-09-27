@@ -251,7 +251,7 @@ describe("P0 lock + truth PUT", () => {
     }
   });
 
-  it("autosaves chapter text without marking it audit-failed or stacking versions", async () => {
+  it("autosaves chapter text without marking it audit-failed and keeps the original version", async () => {
     const app = createStudioServer(projectConfig, root);
     const bookDir = join(root, "books", "demo-book");
     await mkdir(join(bookDir, "chapters"), { recursive: true });
@@ -289,6 +289,23 @@ describe("P0 lock + truth PUT", () => {
     expect(await readFile(join(bookDir, "chapters", "0004_雪.md"), "utf-8")).toContain("第二次停笔");
     expect(await readFile(join(bookDir, "story", "runtime", "chapter-0004.plan.md"), "utf-8")).toContain("不要清掉");
     const versions = await readdir(join(bookDir, "chapters", ".versions", "0004"));
-    expect(versions.filter((file) => file.endsWith(".md"))).toHaveLength(1);
+    const files = versions.filter((file) => file.endsWith(".md"));
+    expect(files).toHaveLength(2);
+    const baseline = files.find((file) => file.includes("_manual_"));
+    expect(baseline).toBeTruthy();
+    expect(await readFile(join(bookDir, "chapters", ".versions", "0004", baseline!), "utf-8")).toBe("旧雪\n");
+    const saved = await app.request("/api/v1/books/demo-book/chapters/4", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "显式保存" }),
+    });
+    expect(saved.status).toBe(200);
+    const reviewed = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as Array<{
+      status: string;
+      auditIssues: string[];
+    }>;
+    expect(reviewed[0]?.status).toBe("audit-failed");
+    expect(reviewed[0]?.auditIssues.join("\n")).toContain("Manual chapter replacement");
+    await expect(readFile(join(bookDir, "story", "runtime", "chapter-0004.plan.md"), "utf-8")).rejects.toThrow();
   });
 });

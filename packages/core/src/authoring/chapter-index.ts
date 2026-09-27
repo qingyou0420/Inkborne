@@ -82,7 +82,7 @@ async function readIndex(bookDir: string): Promise<ChapterMeta[]> {
   if (!Array.isArray(raw)) {
     throw indexFailure("章节目录 index.json 格式不对，已停止，没有改写这份目录。");
   }
-  if (raw.length === 0) return [];
+  if (raw.length === 0) return rebuildIndexFromFiles(bookDir);
   const parsed: ChapterMeta[] = [];
   for (let index = 0; index < raw.length; index += 1) {
     const item = raw[index];
@@ -103,6 +103,8 @@ export async function autosaveChapterBody(input: {
   readonly bookDir: string;
   readonly chapterNumber: number;
   readonly content: string;
+  readonly fresh?: boolean;
+  readonly now?: Date;
 }): Promise<{ wordCount: number }> {
   if (!Number.isInteger(input.chapterNumber) || input.chapterNumber < 1) {
     throw indexFailure("章号不对，自动保存已停止。");
@@ -119,11 +121,17 @@ export async function autosaveChapterBody(input: {
   if (!index.some((item) => item.number === input.chapterNumber)) {
     throw indexFailure(`章节目录里没有第 ${input.chapterNumber} 章，自动保存已停止，没有改写目录。`);
   }
+  const chapterPath = join(chaptersDir, fileName);
+  const disk = await readFile(chapterPath, "utf-8");
   const body = input.content.endsWith("\n") ? input.content : `${input.content}\n`;
   const counted = wordCount(body);
-  await storeAutosaveVersion(input.bookDir, input.chapterNumber, body);
-  await writeFileAtomic(join(chaptersDir, fileName), body);
-  const now = new Date().toISOString();
+  const savedAt = input.now ?? new Date();
+  await storeAutosaveVersion(input.bookDir, input.chapterNumber, body, savedAt, {
+    fresh: input.fresh === true,
+    diskContent: disk,
+  });
+  await writeFileAtomic(chapterPath, body);
+  const now = savedAt.toISOString();
   const next = index.map((item) => item.number === input.chapterNumber
     ? { ...item, wordCount: counted, updatedAt: now }
     : item);

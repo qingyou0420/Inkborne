@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { showToast } from "../lib/toast";
 import { trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
-import { fetchJson, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
+import { fetchJson, putApi, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -71,6 +71,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const pendingSave = useRef<{ bookId: string; chapterNumber: number; content: string } | null>(null);
+  const editGeneration = useRef(0);
+  const flushedGeneration = useRef(0);
   const { lang } = useI18n();
   const isZh = lang !== "en";
 
@@ -80,8 +82,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     const pending = pendingSave.current;
     if (!pending) return;
     pendingSave.current = null;
+    const generation = editGeneration.current;
+    const fresh = flushedGeneration.current !== generation;
     try {
-      await putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content);
+      await putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh });
+      if (editGeneration.current === generation) flushedGeneration.current = generation;
     } catch (error) {
       if (!pendingSave.current) pendingSave.current = pending;
       throw error;
@@ -108,7 +113,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
       const pending = pendingSave.current;
       if (!pending) return;
       pendingSave.current = null;
-      void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content);
+      const generation = editGeneration.current;
+      const fresh = flushedGeneration.current !== generation;
+      void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh }).then(() => {
+        if (editGeneration.current === generation) flushedGeneration.current = generation;
+      });
     };
   }, [bookId, chapterNumber]);
 
@@ -122,7 +131,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
       void refetch();
       return;
     }
-    void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content).finally(() => {
+    const generation = editGeneration.current;
+    const fresh = flushedGeneration.current !== generation;
+    void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh }).then(() => {
+      if (editGeneration.current === generation) flushedGeneration.current = generation;
+    }).finally(() => {
       void refetch();
     });
   }, [refetch]);
@@ -138,6 +151,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   const handleStartEdit = () => {
     if (!data) return;
     pendingSave.current = null;
+    editGeneration.current += 1;
     setEditContent(data.content);
     setEditing(true);
   };
@@ -155,7 +169,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     setSaving(true);
     try {
       pendingSave.current = null;
-      await putChapterAutosave(bookId, chapterNumber, editContent);
+      await putApi(`/books/${bookId}/chapters/${chapterNumber}`, { content: editContent });
       setEditing(false);
       refetch();
       setWorkspaceRevision((revision) => revision + 1);

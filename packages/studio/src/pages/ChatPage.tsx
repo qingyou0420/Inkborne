@@ -745,6 +745,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const handleProposedAction = async (details: ProposedActionDetails) => {
     // Lock the proposal card so the production action can't be re-fired.
     markProposalResolved(details.execId, "confirmed");
+    if (details.action === "write_next" && activeBookId && nav.toWrite) {
+      nav.toWrite(activeBookId);
+      return;
+    }
     const targetPlayMode = details.targetSessionKind === "play"
       ? details.actionPayload?.playStart?.mode ?? activeSession?.playMode ?? (details.action === "play_start" ? "open" : undefined)
       : undefined;

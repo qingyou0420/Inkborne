@@ -1406,6 +1406,7 @@ async function executeConfirmedProductionAction(args: {
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
     tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
       language: lang,
+      redirectNewChapters: true,
       workerSkills: (worker) => worker === "writer" ? productionSkills("longWriting") : [],
     });
     agent = "writer";
@@ -3683,7 +3684,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.put("/api/v1/books/:id/chapters/:num", async (c) => {
     const id = c.req.param("id");
     const num = parseInt(c.req.param("num"), 10);
-    const payload = await c.req.json<{ content?: string; autosave?: boolean }>();
+    const payload = await c.req.json<{ content?: string; autosave?: boolean; fresh?: boolean }>();
     const content = payload.content ?? "";
 
     if (payload.autosave) {
@@ -3693,6 +3694,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           bookDir: state.bookDir(id),
           chapterNumber: num,
           content,
+          fresh: payload.fresh === true,
         });
         return c.json({ ok: true, chapterNumber: num, autosave: true, wordCount: saved.wordCount });
       } catch (e) {
@@ -5676,8 +5678,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       if (
         agentBookId
         && sessionKind === "book"
-        && isWriteNextRequest(instruction)
-        && !isConfirmedProductionAction(actionSource, requestedIntent)
+        && (
+          requestedIntent === "write_next"
+          || (isWriteNextRequest(instruction) && !isConfirmedProductionAction(actionSource, requestedIntent))
+        )
       ) {
         return c.json({
           response: surfaceLanguage === "en"

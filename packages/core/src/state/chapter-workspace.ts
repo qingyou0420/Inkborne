@@ -80,18 +80,50 @@ export async function archiveChapterVersion(
   };
 }
 
-/** Consecutive autosaves share one version file. A later manual archive starts a new one. */
+/** Rolling autosaves share one file until this window closes or a new edit session starts. */
+export const AUTOSAVE_MERGE_MS = 10 * 60 * 1000;
+
+/**
+ * Keep the on-disk chapter recoverable, then store the new text as a rolling autosave.
+ * The first save (or any save whose disk text differs from the newest version) archives
+ * the disk bytes as a manual baseline before touching the autosave file.
+ */
 export async function storeAutosaveVersion(
   bookDir: string,
   chapterNumber: number,
   content: string,
   now = new Date(),
+  options?: { readonly fresh?: boolean; readonly diskContent?: string },
 ): Promise<ChapterVersion> {
+  assertChapterNumber(chapterNumber);
   const versions = await listChapterVersions(bookDir, chapterNumber);
   const latest = versions[0];
-  if (latest?.source === "autosave") {
-    await writeFile(join(versionsDir(bookDir, chapterNumber), `${latest.id}.md`), content, "utf-8");
-    return { ...latest, characterCount: content.length };
+  let archivedBaseline = false;
+  if (options?.diskContent !== undefined) {
+    const latestBody = latest
+      ? await readChapterVersion(bookDir, chapterNumber, latest.id).catch(() => undefined)
+      : undefined;
+    if (latestBody !== options.diskContent) {
+      await archiveChapterVersion(
+        bookDir,
+        chapterNumber,
+        options.diskContent,
+        "manual",
+        new Date(now.getTime() - 1),
+      );
+      archivedBaseline = true;
+    }
+  }
+  const current = (await listChapterVersions(bookDir, chapterNumber))[0];
+  const age = current ? now.getTime() - Date.parse(current.createdAt) : Number.POSITIVE_INFINITY;
+  const canMerge = !archivedBaseline
+    && options?.fresh !== true
+    && current?.source === "autosave"
+    && age >= 0
+    && age <= AUTOSAVE_MERGE_MS;
+  if (canMerge && current) {
+    await writeFile(join(versionsDir(bookDir, chapterNumber), `${current.id}.md`), content, "utf-8");
+    return { ...current, characterCount: content.length };
   }
   return archiveChapterVersion(bookDir, chapterNumber, content, "autosave", now);
 }

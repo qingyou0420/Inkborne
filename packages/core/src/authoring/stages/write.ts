@@ -300,7 +300,13 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
     ].join("\n"), input.settle ?? input.llm, signal);
     settled = true;
   } catch (error) {
+    if (signal?.aborted) {
+      throw new Error("采用已中止，正文没有写入");
+    }
     settleError = error instanceof Error ? error.message : String(error);
+  }
+  if (signal?.aborted) {
+    throw new Error("采用已中止，正文没有写入");
   }
   const note = settled ? parseSettleNote(settleText) : undefined;
   const manifest = await loadManifest(input.root);
@@ -436,6 +442,11 @@ async function selectWriteCandidateInner(input: WriteRuntime & {
   return { artifactId: loaded.meta.artifactId };
 }
 
+/**
+ * Locks, then binds. The Studio restore route already holds the book lock and must
+ * call bindRestoredChapterUnlocked. This wrapper stays for callers that do not
+ * hold the lock (direct core use and tests).
+ */
 export async function bindRestoredChapter(input: {
   readonly root: AuthoringStoreRoot;
   readonly chapterNumber: number;
