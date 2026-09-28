@@ -6,8 +6,15 @@ const fs = require("fs");
 
 const warned = new Set();
 
-function copyThenTruncate(filePath) {
-  fs.copyFileSync(filePath, `${filePath}.1`);
+function warnOnce(filePath, error) {
+  if (warned.has(filePath)) return;
+  warned.add(filePath);
+  const detail = error instanceof Error ? error.message : String(error);
+  console.warn(`[inkos] 日志轮转失败，已停止往超大日志追加：${filePath}（${detail}）`);
+}
+
+function copyThenTruncate(filePath, dest) {
+  fs.copyFileSync(filePath, dest);
   fs.truncateSync(filePath, 0);
 }
 
@@ -24,25 +31,46 @@ function rotateLogIfNeeded(filePath, maxBytes, keep = 2) {
   if (size < limit) return false;
   const oldest = `${filePath}.${copies}`;
   try { fs.rmSync(oldest, { force: true }); } catch { /* ignore */ }
+  let shiftFailed = false;
   for (let index = copies - 1; index >= 1; index -= 1) {
     const src = `${filePath}.${index}`;
     const dest = `${filePath}.${index + 1}`;
     if (!fs.existsSync(src)) continue;
-    try { fs.renameSync(src, dest); } catch { /* ignore */ }
+    try {
+      fs.renameSync(src, dest);
+    } catch {
+      shiftFailed = true;
+      break;
+    }
+  }
+  const primaryBackup = `${filePath}.1`;
+  if (shiftFailed && fs.existsSync(primaryBackup)) {
+    try {
+      copyThenTruncate(filePath, `${filePath}.overflow`);
+      return true;
+    } catch (error) {
+      warnOnce(filePath, error);
+      return false;
+    }
   }
   try {
-    fs.renameSync(filePath, `${filePath}.1`);
+    fs.renameSync(filePath, primaryBackup);
     return true;
   } catch (error) {
+    if (fs.existsSync(primaryBackup)) {
+      try {
+        copyThenTruncate(filePath, `${filePath}.overflow`);
+        return true;
+      } catch (copyError) {
+        warnOnce(filePath, copyError);
+        return false;
+      }
+    }
     try {
-      copyThenTruncate(filePath);
+      copyThenTruncate(filePath, primaryBackup);
       return true;
     } catch {
-      if (!warned.has(filePath)) {
-        warned.add(filePath);
-        const detail = error instanceof Error ? error.message : String(error);
-        console.warn(`[inkos] 日志轮转失败，已停止往超大日志追加：${filePath}（${detail}）`);
-      }
+      warnOnce(filePath, error);
       return false;
     }
   }

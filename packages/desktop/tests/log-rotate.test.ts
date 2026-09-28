@@ -80,6 +80,31 @@ describe("rotateLogIfNeeded", () => {
       warn.mockRestore();
     }
   });
+
+  it("does not overwrite .1 when renaming it to .2 fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-log-shift-"));
+    temps.push(dir);
+    const file = join(dir, "server.log");
+    const current = "c".repeat(30);
+    const backup = "BACKUP-ONE-original";
+    writeFileSync(file, current);
+    writeFileSync(`${file}.1`, backup);
+    writeFileSync(`${file}.2`, "BACKUP-TWO");
+    const fs = require("node:fs") as typeof import("node:fs");
+    const rename = fs.renameSync;
+    fs.renameSync = ((src, dest) => {
+      if (String(src).endsWith(".1") && String(dest).endsWith(".2")) throw new Error("EPERM");
+      return rename(src, dest);
+    }) as typeof fs.renameSync;
+    try {
+      expect(rotateLogIfNeeded(file, 20, 2)).toBe(true);
+      expect(readFileSync(`${file}.1`, "utf8")).toBe(backup);
+      expect(readFileSync(`${file}.overflow`, "utf8")).toBe(current);
+      expect(readFileSync(file, "utf8")).toBe("");
+    } finally {
+      fs.renameSync = rename;
+    }
+  });
 });
 
 describe("writingStatusMessage", () => {
