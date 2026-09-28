@@ -22,7 +22,7 @@ import { assembleAuthoringContext, loadCanonDocument, loadOutlineText, serialize
 import { asNumber, asString, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
+import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   authoringRootDir,
   loadArtifact,
@@ -718,17 +718,18 @@ export async function reviewWeave(input: WeaveRuntime & {
   if (!loaded) throw new Error("找不到规划成果。");
   const resolved = await resolve(input.project, "weave.review", input.root.projectRoot);
   const ctx = await assembleAuthoringContext(input.root, { stage: "weave" });
-  const text = await completeRole(
+  const reviewed = await requestReviewModelText({
     resolved,
-    reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+    prompt: reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
+    llm: input.llm,
+  });
+  const report = parseReviewPayload(reviewed.text, {
     stage: "weave",
     targetRefs: [loaded.meta.artifactId],
     coverage: input.coverage,
     model: resolved.modelId,
     inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
+    rawExcerpt: reviewed.rawExcerpt,
   });
   await saveReport(input.root, report);
   return report;

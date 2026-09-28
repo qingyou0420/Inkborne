@@ -7,15 +7,46 @@
 import { chatCompletion, createLLMClient } from "../llm/provider.js";
 import type { AuthoringLlmFn, ResolvedAuthoringRole } from "./types.js";
 
+export function shouldAttemptJsonResponseFormat(resolved: ResolvedAuthoringRole): boolean {
+  if (resolved.llm.provider === "anthropic") return false;
+  if (resolved.apiFormat === "responses") return false;
+  const blob = [
+    resolved.modelId,
+    resolved.llm.model,
+    resolved.llm.baseUrl,
+    resolved.serviceRef,
+    resolved.llm.service,
+  ].join("\n").toLowerCase();
+  if (blob.includes("anthropic") || blob.includes("claude")) return false;
+  return true;
+}
+
+export function isJsonResponseFormatUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /response_format|json_object|json mode|response format/i.test(message);
+}
+
 export function createAuthoringLlm(resolved: ResolvedAuthoringRole): AuthoringLlmFn {
   const client = createLLMClient(resolved.llm);
-  return async (call) => {
+  const run = async (call: Parameters<AuthoringLlmFn>[0], format: boolean) => {
+    const extra: Record<string, unknown> = { ...(resolved.extra ?? {}) };
+    if (format) extra.response_format = { type: "json_object" };
+    else delete extra.response_format;
     const response = await chatCompletion(client, resolved.modelId, call.messages, {
       temperature: resolved.temperature,
-      extra: resolved.extra,
+      extra,
       ...(call.signal ? { signal: call.signal } : {}),
     });
     return response.content;
+  };
+  return async (call) => {
+    if (call.responseFormat !== "json_object") return run(call, false);
+    try {
+      return await run(call, true);
+    } catch (error) {
+      if (!isJsonResponseFormatUnsupported(error)) throw error;
+      return run(call, false);
+    }
   };
 }
 
@@ -24,12 +55,14 @@ export async function completeRole(
   user: string,
   llm?: AuthoringLlmFn,
   signal?: AbortSignal,
+  options?: { readonly responseFormat?: "json_object" },
 ): Promise<string> {
   const fn = llm ?? createAuthoringLlm(resolved);
   return fn({
     roleId: resolved.roleId,
     snapshot: resolved.snapshot,
     ...(signal ? { signal } : {}),
+    ...(options?.responseFormat ? { responseFormat: options.responseFormat } : {}),
     messages: [
       { role: "system", content: resolved.instructions },
       { role: "user", content: user },

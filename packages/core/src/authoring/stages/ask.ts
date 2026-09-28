@@ -11,7 +11,7 @@ import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { asNumber, asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
+import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   loadArtifact,
   loadManifest,
@@ -181,12 +181,12 @@ export async function reviewAskCanon(input: AskRuntime & {
   const extras = [
     input.conversation ? `【作者对话】\n${input.conversation.slice(0, 8000)}` : "",
   ].filter(Boolean).join("\n");
-  const text = await completeRole(
+  const reviewed = await requestReviewModelText({
     resolved,
-    reviewPrompt("ask", "故事正典全文", loaded.body, extras),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+    prompt: reviewPrompt("ask", "故事正典全文", loaded.body, extras),
+    llm: input.llm,
+  });
+  const report = parseReviewPayload(reviewed.text, {
     stage: "ask",
     targetRefs: [loaded.meta.artifactId],
     coverage: "故事正典全文",
@@ -196,6 +196,7 @@ export async function reviewAskCanon(input: AskRuntime & {
       { kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version },
       ...(input.conversation ? [{ kind: "conversation", id: "ask-chat" }] : []),
     ],
+    rawExcerpt: reviewed.rawExcerpt,
   });
   await saveReport(input.root, report);
   await saveRun(input.root, {

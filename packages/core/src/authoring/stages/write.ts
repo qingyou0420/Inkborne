@@ -16,7 +16,8 @@ import {
 } from "../context.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
+import { collectWriteReviewChecks, formatChecksForPrompt } from "../review-checks.js";
+import { assertReportReusable, mergeDeterministicIssues, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   applyChapterMemory,
   chapterLengthNote,
@@ -162,18 +163,29 @@ export async function reviewChapterDraft(input: WriteRuntime & {
   const coverage = input.coverage ?? loaded.meta.scope;
   const chapterNumber = Number(loaded.meta.scope.replace("chapter:", "")) || undefined;
   const ctx = await assembleAuthoringContext(input.root, { stage: "write", chapterNumber });
-  const text = await completeRole(
+  const checks = await collectWriteReviewChecks({
+    root: input.root,
+    body: loaded.body,
+    chapterNumber,
+  });
+  const { text, rawExcerpt } = await requestReviewModelText({
     resolved,
-    reviewPrompt("write", coverage, loaded.body, ctx.text),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+    llm: input.llm,
+    prompt: reviewPrompt(
+      "write",
+      coverage,
+      loaded.body,
+      [formatChecksForPrompt(checks), ctx.text].filter(Boolean).join("\n\n"),
+    ),
+  });
+  const report = mergeDeterministicIssues(parseReviewPayload(text, {
     stage: "write",
     targetRefs: [loaded.meta.artifactId],
     coverage,
     model: resolved.modelId,
+    rawExcerpt,
     inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
-  });
+  }), checks);
   await withBookWriteLock(input.root, "审查本章", async () => {
     await saveReport(input.root, report);
   });
@@ -519,18 +531,4 @@ async function bindRestoredChapterInner(input: {
   return { artifactId };
 }
 
-export function diffLines(before: string, after: string): Array<{ kind: "add" | "del" | "same"; text: string }> {
-  const a = before.replace(/\r\n/g, "\n").split("\n");
-  const b = after.replace(/\r\n/g, "\n").split("\n");
-  const rows: Array<{ kind: "add" | "del" | "same"; text: string }> = [];
-  const max = Math.max(a.length, b.length);
-  for (let i = 0; i < max; i += 1) {
-    if (a[i] === b[i]) {
-      if (a[i] !== undefined) rows.push({ kind: "same", text: a[i]! });
-    } else {
-      if (a[i] !== undefined) rows.push({ kind: "del", text: a[i]! });
-      if (b[i] !== undefined) rows.push({ kind: "add", text: b[i]! });
-    }
-  }
-  return rows;
-}
+export { diffLines } from "../line-diff.js";

@@ -27,7 +27,7 @@ patterns:
     name: 空气凝固
     severity: error
     language: zh
-    regex: "空气[仿佛好像似乎]?(?:瞬间)?(?:凝固|静止|冻结)"
+    regex: "空气(?:仿佛|好像|似乎)?(?:瞬间)?(?:凝固|静止|冻结)"
     description: 出现了「空气仿佛凝固」式套话
     suggestion: 用具体的声响、动作或温度写现场
   - id: gasp

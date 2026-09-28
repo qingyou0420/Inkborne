@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
+import { groupReviewIssues } from "../lib/review-dimensions";
 import { isWriteNextRequest } from "../lib/write-next-request";
 
 const studioRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -101,5 +102,26 @@ describe("authoring four-agent IA", () => {
     expect(read("src/pages/DaemonControl.tsx")).toMatch(/审稿方式/);
     expect(read("src/components/SerialCockpitStrip.tsx")).not.toMatch(/startWriteNext/);
     expect(read("src/components/SerialCockpitStrip.tsx")).not.toMatch(/startDraft/);
+  });
+
+  it("groups review notes by aspect and marks added and removed lines", () => {
+    const grouped = groupReviewIssues([
+      { issueId: "a", dimension: "文笔" },
+      { issueId: "b", dimension: "伏笔" },
+      { issueId: "c" },
+    ]);
+    expect(grouped.map((group) => group.dimension)).toEqual(["伏笔", "文笔", "其他"]);
+    const plain = groupReviewIssues([{ issueId: "old" }]);
+    expect(plain).toHaveLength(1);
+    expect(plain[0]?.dimension).toBe("");
+    expect(plain[0]?.issues.map((issue) => issue.issueId)).toEqual(["old"]);
+    const drawer = read("src/components/AuthoringReviewDrawer.tsx");
+    const diff = read("src/components/AuthoringDiffDrawer.tsx");
+    expect(drawer).toContain("groupReviewIssues");
+    expect(drawer).toContain("自动检查");
+    expect(drawer).toContain("rawExcerpt");
+    expect(diff).toContain("data-diff-kind");
+    expect(diff).toContain("新增");
+    expect(diff).toContain("删除");
   });
 });
