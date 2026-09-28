@@ -36,9 +36,14 @@ export interface InteractionRuntimeTools {
     readonly currentFocus?: string;
   }) => Promise<unknown>;
   readonly exportBook?: (bookId: string, options: {
-    readonly format?: "txt" | "md" | "epub";
+    readonly format?: "txt" | "md" | "epub" | "fanqie";
     readonly approvedOnly?: boolean;
     readonly outputPath?: string;
+    readonly fromChapter?: number;
+    readonly toChapter?: number;
+    readonly layout?: "combined" | "per-chapter";
+    readonly blankLine?: boolean;
+    readonly indent?: boolean;
   }) => Promise<unknown>;
   readonly chat?: (
     input: string,
@@ -1025,6 +1030,11 @@ export async function runInteractionRequest(params: {
         format: request.format,
         approvedOnly: request.approvedOnly,
         outputPath: request.outputPath,
+        ...(request.fromChapter !== undefined ? { fromChapter: request.fromChapter } : {}),
+        ...(request.toChapter !== undefined ? { toChapter: request.toChapter } : {}),
+        ...(request.layout ? { layout: request.layout } : {}),
+        ...(request.blankLine !== undefined ? { blankLine: request.blankLine } : {}),
+        ...(request.indent !== undefined ? { indent: request.indent } : {}),
       });
       const metadata = extractToolMetadata(toolResult);
       session = bindActiveBook(session, bookId, metadata.activeChapterNumber);

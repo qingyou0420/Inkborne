@@ -55,6 +55,7 @@ import {
   chatCompletion,
   runWorkerAgent,
   buildExportArtifact,
+  fanqieOptionsFromQuery,
   evaluateBookQuality,
   ConsolidatorAgent,
   DetectionConfigSchema,
@@ -6456,9 +6457,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
+      const fanqie = format === "fanqie" ? fanqieOptionsFromQuery({
+        from: c.req.query("from"),
+        to: c.req.query("to"),
+        layout: c.req.query("layout"),
+        blankLine: c.req.query("blankLine"),
+        indent: c.req.query("indent"),
+      }) : {};
       const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub",
+        format: format as "txt" | "md" | "epub" | "fanqie",
         approvedOnly,
+        ...fanqie,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -6466,11 +6475,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(responseBody, {
         headers: {
           "Content-Type": artifact.contentType,
-          "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
+          "Content-Disposition": attachmentDisposition(artifact.fileName),
         },
       });
-    } catch {
-      return c.json({ error: "Export failed" }, 500);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed";
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -6478,22 +6488,41 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format, approvedOnly } = await c.req.json<{ format?: string; approvedOnly?: boolean }>().catch(() => ({ format: "txt", approvedOnly: false }));
-    const fmt = format ?? "txt";
+    const body: {
+      format?: string;
+      approvedOnly?: boolean;
+      fromChapter?: number;
+      toChapter?: number;
+      layout?: "combined" | "per-chapter";
+      blankLine?: boolean;
+      indent?: boolean;
+    } = await c.req.json().catch(() => ({ format: "txt", approvedOnly: false }));
+    const fmt = body.format ?? "txt";
+    const approvedOnly = body.approvedOnly;
 
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
-      const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
+      const perChapter = fmt === "fanqie" && body.layout === "per-chapter";
+      const outputPath = fmt === "fanqie"
+        ? join(bookDir, "exports", perChapter ? "番茄" : "番茄.txt")
+        : join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
       const result = await processProjectInteractionRequest({
         projectRoot: root,
         request: {
           intent: "export_book",
           bookId: id,
-          format: fmt as "txt" | "md" | "epub",
+          format: fmt as "txt" | "md" | "epub" | "fanqie",
           approvedOnly,
           outputPath,
+          ...(fmt === "fanqie" ? {
+            fromChapter: body.fromChapter,
+            toChapter: body.toChapter,
+            layout: body.layout,
+            blankLine: body.blankLine,
+            indent: body.indent,
+          } : {}),
         },
         tools,
         activeBookId: id,
@@ -6505,7 +6534,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
       });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      const message = e instanceof Error ? e.message : String(e);
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -7423,15 +7453,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: { code: "INVALID_ID", message: `Invalid short id: "${id}"` } }, 400);
     }
     const format = (c.req.query("format") ?? "txt") as string;
-    if (format !== "txt" && format !== "md") {
-      return c.json({ error: { code: "INVALID_FORMAT", message: "Short export format must be txt or md" } }, 400);
+    if (format !== "txt" && format !== "md" && format !== "fanqie") {
+      return c.json({ error: { code: "INVALID_FORMAT", message: "导出格式只能是 txt、md 或番茄纯文本" } }, 400);
     }
     try {
-      const artifact = await exportStudioShortManuscript(root, id, format);
+      const fanqie = format === "fanqie" ? fanqieOptionsFromQuery({
+        from: c.req.query("from"),
+        to: c.req.query("to"),
+        layout: c.req.query("layout"),
+        blankLine: c.req.query("blankLine"),
+        indent: c.req.query("indent"),
+      }) : undefined;
+      const artifact = await exportStudioShortManuscript(root, id, format, fanqie);
       if (!artifact) {
         return c.json({ error: { code: "NOT_FOUND", message: `Short "${id}" not found` } }, 404);
       }
-      return new Response(artifact.payload, {
+      const payload = typeof artifact.payload === "string" ? artifact.payload : new Uint8Array(artifact.payload);
+      return new Response(payload, {
         headers: {
           "Content-Type": artifact.contentType,
           "Content-Disposition": attachmentDisposition(artifact.fileName),

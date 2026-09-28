@@ -419,6 +419,18 @@ function HomeBookCard({
             <Download size={14} />
             <span>{t("book.export")}</span>
           </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid={`book-export-fanqie-${book.id}`}
+            onClick={() => {
+              const link = document.createElement("a");
+              link.href = bookManuscriptExportPath(book.id, "fanqie");
+              link.download = "";
+              link.click();
+            }}
+          >
+            <Download size={14} />
+            <span>{isZh ? "番茄纯文本" : "Tomato plain text"}</span>
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => nav.toBookSettings(book.id)}>
             <Feather size={14} />
             <span>{t("home.toWrite")}</span>
@@ -499,6 +511,18 @@ function HomeShortCard({
           >
             <Download size={14} />
             <span>{t("book.export")}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid={`short-export-fanqie-${short.id}`}
+            onClick={() => {
+              const link = document.createElement("a");
+              link.href = shortManuscriptExportPath(short.id, "fanqie");
+              link.download = "";
+              link.click();
+            }}
+          >
+            <Download size={14} />
+            <span>{isZh ? "番茄纯文本" : "Tomato plain text"}</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" data-testid={`short-delete-${short.id}`} onClick={onDelete}>

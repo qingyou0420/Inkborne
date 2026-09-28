@@ -9,6 +9,7 @@ import { postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { showToast } from "../lib/toast";
+import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { currentWriteArtifact, reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
 import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
@@ -309,14 +310,35 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           </div>
         </div>
       ) : null}
-      <button
-        type="button"
-        className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
-        disabled={Boolean(busy) || body === savedBody || !body.trim()}
-        onClick={() => void run("save", () => persistIfDirty())}
-      >
-        {isZh ? "保存手改" : "Save edits"}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
+          disabled={Boolean(busy) || body === savedBody || !body.trim()}
+          onClick={() => void run("save", () => persistIfDirty())}
+        >
+          {isZh ? "保存手改" : "Save edits"}
+        </button>
+        <button
+          type="button"
+          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
+          disabled={!body.trim()}
+          data-testid="write-copy-chapter"
+          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
+          onClick={() => {
+            const text = renderFanqieChapter({
+              chapterNumber,
+              title: chapterTitle,
+              markdown: body,
+            });
+            void copyToClipboard(text)
+              .then(() => showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success"))
+              .catch((error) => showToast(error instanceof Error ? error.message : "复制失败", "error"));
+          }}
+        >
+          {isZh ? "复制本章" : "Copy chapter"}
+        </button>
+      </div>
       <textarea
         className="min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
         placeholder={isZh ? "本章要求、重点场景、保持的文风（可选）" : "Optional chapter notes"}
