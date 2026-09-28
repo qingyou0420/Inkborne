@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   bookManuscriptExportPath,
@@ -22,6 +25,33 @@ describe("manuscript export helpers", () => {
       `/api/v1/shorts/${encodeURIComponent("明日来信")}/export?format=txt`,
     );
     expect(shortManuscriptExportPath("elevator", "md")).toBe("/api/v1/shorts/elevator/export?format=md");
+    expect(bookManuscriptExportPath("harbor", "fanqie", true, {
+      fromChapter: 2,
+      toChapter: 8,
+      layout: "per-chapter",
+      blankLine: false,
+      indent: true,
+    })).toBe("/api/v1/books/harbor/export?format=fanqie&approvedOnly=true&from=2&to=8&layout=per-chapter&blankLine=0&indent=1");
+    expect(shortManuscriptExportPath("明日来信", "fanqie")).toBe(
+      `/api/v1/shorts/${encodeURIComponent("明日来信")}/export?format=fanqie`,
+    );
+  });
+
+  it("puts 番茄纯文本 and 复制本章 on the long and short flows", () => {
+    const src = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const read = (rel: string) => readFileSync(join(src, rel), "utf8");
+    expect(read("pages/BookDetail.tsx")).toContain("番茄纯文本");
+    expect(read("pages/BookDetail.tsx")).toContain("FanqieExportFields");
+    expect(read("components/FanqieExportFields.tsx")).toContain("段间空一行");
+    expect(read("components/FanqieExportFields.tsx")).toContain("段首空两格");
+    expect(read("pages/ChapterReader.tsx")).toContain("复制本章");
+    expect(read("pages/ChapterReader.tsx")).toContain("chapter-copy-plain");
+    expect(read("components/AuthoringWritePanel.tsx")).toContain("write-copy-chapter");
+    expect(read("components/AuthoringWritePanel.tsx")).toContain("复制本章");
+    expect(read("pages/ShortReader.tsx")).toContain("short-copy-plain");
+    expect(read("pages/ShortReader.tsx")).toContain("番茄纯文本");
+    expect(read("pages/Dashboard.tsx")).toContain("book-export-fanqie-");
+    expect(read("pages/ShortSettings.tsx")).toContain("short-settings-fanqie");
   });
 
   it("strips markdown chrome for 导出原文 txt", () => {

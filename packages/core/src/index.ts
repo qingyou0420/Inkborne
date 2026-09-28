@@ -512,7 +512,18 @@ export {
   processProjectInteractionRequest,
 } from "./interaction/project-control.js";
 export { createInteractionToolsFromDeps } from "./interaction/project-tools.js";
-export { buildExportArtifact, writeExportArtifact } from "./interaction/export-artifact.js";
+export { buildExportArtifact, writeExportArtifact, fanqieOptionsFromQuery, zipFanqieFiles } from "./interaction/export-artifact.js";
+export type { BookExportFormat, BookExportOptions, ExportArtifact } from "./interaction/export-artifact.js";
+export {
+  fanqieChapterFileName,
+  fanqieChapterHeading,
+  fanqieDownloadName,
+  describeFanqieManuscript,
+  renderFanqieChapter,
+  renderFanqieManuscript,
+  resolveFanqieTitle,
+} from "./interaction/fanqie-text.js";
+export type { FanqieExportOptions, FanqieManuscript, FanqieStyle } from "./interaction/fanqie-text.js";
 export {
   normalizeTruthFileName,
   classifyTruthAuthority,

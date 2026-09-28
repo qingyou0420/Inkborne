@@ -123,6 +123,14 @@ export function ShortSettings({ storyId, nav, t }: {
           >
             {t("book.export")}
           </a>
+          <a
+            href={shortManuscriptExportPath(storyId, "fanqie")}
+            download
+            data-testid="short-settings-fanqie"
+            className="btn-secondary"
+          >
+            {isZh ? "番茄纯文本" : "Tomato plain text"}
+          </a>
         </div>
         {message && <p className="text-sm text-muted-foreground">{message}</p>}
       </div>

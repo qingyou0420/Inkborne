@@ -1,20 +1,42 @@
-export type ManuscriptExportFormat = "txt" | "md";
+export type ManuscriptExportFormat = "txt" | "md" | "fanqie";
+
+export interface FanqieExportQuery {
+  readonly fromChapter?: number;
+  readonly toChapter?: number;
+  readonly layout?: "combined" | "per-chapter";
+  readonly blankLine?: boolean;
+  readonly indent?: boolean;
+}
 
 export function bookManuscriptExportPath(
   bookId: string,
   format: ManuscriptExportFormat | "epub" = "txt",
   approvedOnly = false,
+  fanqie?: FanqieExportQuery,
 ): string {
   const params = new URLSearchParams({ format });
   if (approvedOnly) params.set("approvedOnly", "true");
+  appendFanqieQuery(params, format === "fanqie" ? fanqie : undefined);
   return `/api/v1/books/${encodeURIComponent(bookId)}/export?${params.toString()}`;
 }
 
 export function shortManuscriptExportPath(
   shortId: string,
   format: ManuscriptExportFormat = "txt",
+  fanqie?: FanqieExportQuery,
 ): string {
-  return `/api/v1/shorts/${encodeURIComponent(shortId)}/export?format=${format}`;
+  const params = new URLSearchParams({ format });
+  appendFanqieQuery(params, format === "fanqie" ? fanqie : undefined);
+  return `/api/v1/shorts/${encodeURIComponent(shortId)}/export?${params.toString()}`;
+}
+
+function appendFanqieQuery(params: URLSearchParams, fanqie: FanqieExportQuery | undefined): void {
+  if (!fanqie) return;
+  if (fanqie.fromChapter) params.set("from", String(fanqie.fromChapter));
+  if (fanqie.toChapter) params.set("to", String(fanqie.toChapter));
+  if (fanqie.layout === "per-chapter") params.set("layout", "per-chapter");
+  if (fanqie.blankLine === false) params.set("blankLine", "0");
+  if (fanqie.indent) params.set("indent", "1");
 }
 
 export function manuscriptToPlainText(markdown: string): string {

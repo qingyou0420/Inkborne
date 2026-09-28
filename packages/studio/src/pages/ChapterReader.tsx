@@ -25,7 +25,9 @@ import {
   Pencil,
   Save,
   MoreHorizontal,
+  Copy,
 } from "lucide-react";
+import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
 
 interface ChapterData {
   readonly chapterNumber: number;
@@ -262,6 +264,20 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   };
 
   const paragraphs = body.split(/\n\n+/).filter(Boolean);
+  const copySource = editing ? editContent : data.content;
+  const copyChapter = async () => {
+    try {
+      const text = renderFanqieChapter({
+        chapterNumber,
+        title,
+        markdown: copySource,
+      });
+      await copyToClipboard(text);
+      showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "复制失败", "error");
+    }
+  };
 
   return (
     <div className="w-full space-y-10 fade-in">
@@ -287,6 +303,16 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
             {t("reader.edit")}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => void copyChapter()}
+          className="btn-secondary"
+          data-testid="chapter-copy-plain"
+          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
+        >
+          <Copy size={14} />
+          {isZh ? "复制本章" : "Copy chapter"}
+        </button>
         <button
           type="button"
           onClick={() => void handleApprove()}

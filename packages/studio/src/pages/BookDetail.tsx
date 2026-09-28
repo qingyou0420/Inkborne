@@ -1,5 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
+import { showToast } from "../lib/toast";
+import { FanqieExportFields } from "../components/FanqieExportFields";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChapterManuscriptTable } from "../components/ChapterManuscriptTable";
 import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
@@ -12,7 +14,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
-import { bookManuscriptExportPath } from "../lib/work-export";
+import { bookManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
 import { formatReviewIssueCopy, hasPreviousChapterUnapprovedReason, isMustFixSeverity } from "../lib/copy-map";
 import { formatStudyWords, writeEmptyCopy } from "../lib/stage-copy";
 import type { BookStepState } from "../lib/book-stage";
@@ -56,7 +58,13 @@ interface BookData {
 }
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
-type ExportFormat = "txt" | "md" | "epub";
+type ExportFormat = "txt" | "md" | "epub" | "fanqie";
+
+function positiveChapter(value: string): number | undefined {
+  if (!/^\d+$/.test(value.trim())) return undefined;
+  const number = Number(value);
+  return number >= 1 ? number : undefined;
+}
 
 interface Nav extends BookWorkspaceNavTarget {
   toDashboard: () => void;
@@ -117,6 +125,11 @@ export function BookDetail({
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
+  const [fanqieFrom, setFanqieFrom] = useState("");
+  const [fanqieTo, setFanqieTo] = useState("");
+  const [fanqieLayout, setFanqieLayout] = useState<"combined" | "per-chapter">("combined");
+  const [fanqieBlankLine, setFanqieBlankLine] = useState(true);
+  const [fanqieIndent, setFanqieIndent] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   const [generateNonce, setGenerateNonce] = useState(0);
   const [panelBusy, setPanelBusy] = useState(false);
@@ -374,7 +387,14 @@ export function BookDetail({
     isZh,
   });
 
-  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly);
+  const fanqieQuery: FanqieExportQuery | undefined = exportFormat === "fanqie" ? {
+    ...(positiveChapter(fanqieFrom) ? { fromChapter: positiveChapter(fanqieFrom) } : {}),
+    ...(positiveChapter(fanqieTo) ? { toChapter: positiveChapter(fanqieTo) } : {}),
+    layout: fanqieLayout,
+    blankLine: fanqieBlankLine,
+    indent: fanqieIndent,
+  } : undefined;
+  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly, fanqieQuery);
   const briefDialog = briefPrompt ? briefCopy(briefPrompt.kind) : null;
 
   return (
@@ -395,18 +415,37 @@ export function BookDetail({
               {t("book.exportMenu")}
               <ChevronDown size={14} />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 p-3 space-y-3">
-              {(["txt", "md", "epub"] as const).map((format) => (
+            <DropdownMenuContent align="end" className="w-80 p-3 space-y-3">
+              {(["txt", "md", "epub", "fanqie"] as const).map((format) => (
                 <label key={format} className="flex items-center gap-2 text-sm">
                   <input
                     type="radio"
                     name="export-format"
                     checked={exportFormat === format}
                     onChange={() => setExportFormat(format)}
+                    data-testid={format === "fanqie" ? "export-format-fanqie" : undefined}
                   />
-                  {format.toUpperCase()}
+                  {format === "fanqie" ? (isZh ? "番茄纯文本" : "Tomato plain text") : format.toUpperCase()}
                 </label>
               ))}
+              {exportFormat === "fanqie" ? (
+                <FanqieExportFields
+                  isZh={isZh}
+                  showRange
+                  from={fanqieFrom}
+                  to={fanqieTo}
+                  layout={fanqieLayout}
+                  blankLine={fanqieBlankLine}
+                  indent={fanqieIndent}
+                  onChange={(patch) => {
+                    if (patch.from !== undefined) setFanqieFrom(patch.from);
+                    if (patch.to !== undefined) setFanqieTo(patch.to);
+                    if (patch.layout !== undefined) setFanqieLayout(patch.layout);
+                    if (patch.blankLine !== undefined) setFanqieBlankLine(patch.blankLine);
+                    if (patch.indent !== undefined) setFanqieIndent(patch.indent);
+                  }}
+                />
+              ) : null}
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
                 {t("book.approvedOnly")}
@@ -422,11 +461,18 @@ export function BookDetail({
                       const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
+                        body: JSON.stringify({
+                          format: exportFormat,
+                          approvedOnly: exportApprovedOnly,
+                          ...(fanqieQuery ?? {}),
+                        }),
                       });
                       setBookActionPending(`saved:${exported.path ?? ""}`);
+                      showToast(isZh ? "已保存到这本书的导出文件夹。" : "Saved in the book export folder.", "success");
                     } catch (e) {
-                      setBookActionPending(e instanceof Error ? e.message : "Export failed");
+                      const message = e instanceof Error ? e.message : "导出失败";
+                      setBookActionPending(message);
+                      showToast(message, "error");
                     }
                   }}
                   className="btn-ghost w-full"

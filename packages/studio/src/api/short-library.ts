@@ -1,6 +1,7 @@
 import { access, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { StudioShortContentKind, StudioShortDetail, StudioShortStatus, StudioShortSummary } from "../shared/short-works.js";
+import { fanqieDownloadName, fanqieOptionsFromQuery, renderFanqieManuscript, zipFanqieFiles, type FanqieExportOptions } from "@actalk/inkos-core";
 import { manuscriptToPlainText } from "../lib/work-export.js";
 import { isSafeBookId } from "./safety.js";
 
@@ -224,19 +225,45 @@ export async function updateStudioShort(
 export interface StudioShortExportArtifact {
   readonly fileName: string;
   readonly contentType: string;
-  readonly payload: string;
+  readonly payload: string | Buffer;
   readonly contentKind: StudioShortContentKind;
 }
 
 export async function exportStudioShortManuscript(
   root: string,
   storyId: string,
-  format: "txt" | "md",
+  format: "txt" | "md" | "fanqie",
+  fanqie?: FanqieExportOptions,
 ): Promise<StudioShortExportArtifact | undefined> {
   const detail = await loadStudioShort(root, storyId);
   if (!detail) return undefined;
   if (!detail.content.trim()) {
     throw new Error("No manuscript to export");
+  }
+  if (format === "fanqie") {
+    const options = fanqie ?? fanqieOptionsFromQuery({});
+    const manuscript = renderFanqieManuscript({
+      title: detail.title,
+      markdown: detail.content,
+      style: options,
+      fromChapter: options.fromChapter,
+      toChapter: options.toChapter,
+    });
+    if (options.layout === "per-chapter" && manuscript.numbered && manuscript.files.length > 1) {
+      return {
+        fileName: fanqieDownloadName(detail.title, "per-chapter"),
+        contentType: "application/zip",
+        payload: await zipFanqieFiles(manuscript.files),
+        contentKind: detail.contentKind,
+      };
+    }
+    const only = manuscript.files.length === 1 ? manuscript.files[0] : undefined;
+    return {
+      fileName: options.layout === "per-chapter" && only ? only.fileName : fanqieDownloadName(detail.title, "combined"),
+      contentType: "text/plain; charset=utf-8",
+      payload: options.layout === "per-chapter" && only ? only.text : manuscript.combined,
+      contentKind: detail.contentKind,
+    };
   }
   const payload = format === "md" ? detail.content : manuscriptToPlainText(detail.content);
   return {
