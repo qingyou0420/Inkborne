@@ -114,3 +114,59 @@ c73d789 feat(authoring): 审查本章先做自动检查，并改用真实行级 
 ```
 
 上面后半是各分支自带的提交，经 `--no-ff` 带进本分支。本分支自己的合并提交是 `ef49912` 到 `1059fe9`，跟进修复是 `0a2d6c4`、`f5b47ee`、`96b3e5d`。
+
+## 第一轮返工
+
+对照 `a6b8edf` 上的云端审阅。下面每条都写了落地的短哈希。`94c3852` 是 core，`e2272bf` 是书房界面和接口，`8b1b611` 是桌面壳。
+
+### 必须先改
+
+1. **坏的或空的 book.json 不能拖垮书架。** `94c3852`、`e2272bf`。空文件和截断 JSON 一样改名隔离（`packages/core/src/state/book-json.ts`）。`GET /api/v1/books` 对每本书单独接住 `CorruptBookJsonError`，坏书返回 `corrupt`、说明和快照路径，其它书照常。`GET /api/v1/books/:id` 返回 409，正文就是同一句说明，并带 `snapshotPath`。首页和书房用 `CorruptBookCard` 画出这张卡片（`Dashboard.tsx`、`BookStudy.tsx`、`BookDetail.tsx`）。测试：`state-manager.test.ts` 的空文件，`packages/studio/src/api/corrupt-book-shelf.test.ts` 的截断加好书、以及空文件。
+2. **超过 100 章的章节表行高。** `e2272bf`。卷头和章节行都按 48px 固定，标题截断；表头移出滚动区（`ChapterManuscriptTable.tsx`，`BookDetail.tsx` 的行样式）。测试：120 章、两卷都展开，滚到中部可见章号落在 40 到 90 之间，滚到底能看到第 120 章（`ChapterManuscriptTable.test.ts`）。
+3. **流式中途上游失败留下已写出的字。** `94c3852`、`e2272bf`。已有半截正文时走和停止一样的候选稿，run 标失败并记下原因；SSE 失败事件带 `artifactId` 和 `saved`。前端只有在服务端明确 `saved: false` 时才恢复生成前的快照，否则保留编辑框文字并重新拉工作区（`write.ts`、`authoring-routes.ts`、`authoring-stream.ts`、`AuthoringWritePanel.tsx`）。测试：`authoring-write.test.ts`、`authoring-stream.test.ts`。
+4. **空的 manifest.json。** `94c3852`。空白和截断走同一条隔离再从 `artifacts/*/meta.json` 重建的路（`authoring/store.ts`）。测试：`authoring-store.test.ts`。
+
+### 应该改
+
+- **问心 / 研墨 / 织卷的 usage，以及落笔审查的 run。** `94c3852`。各阶段在 `completeRoleObserved` 之后把 usage 写入已有 run（`ask.ts`、`ground.ts`、`weave.ts`）。`reviewChapterDraft` 记一条 `operation: "review"` 的 run，含 usage（`write.ts`、`review.ts`）。问心原来的审查 run 也带上 usage。研墨拟定目录、织卷按意见改，这两条路径本来就没有 run，这次没有为它们新开记录。
+- **停止发生在 start 之前。** `94c3852`。`activeWriteRuns` 注册之后立刻 `onRunStart`，再写 run 文件（`write.ts`）。测试断言此时磁盘上还没有 run 文件，取消已经生效。
+- **totalTokens 为 0 时仍显示用量。** `e2272bf`。显示值用 `usageTotal`：有 total 用 total，否则用 prompt + completion（`token-usage.ts`、`AuthoringWritePanel.tsx` 两处、书房累计）。
+- **中止且已有半截稿时写入 usage。** `94c3852`。错误对象上带得走 `usage` 时写入 run；完成之后才发现已中止的那条路本来就有。
+- **桌面壳写密钥失败不改项目根文件。** `8b1b611`。用户目录写入或校验失败直接抛出，不把合并结果写回 `.inkos/secrets.json`。用户目录密钥文件写入带 `mode: 0o600`（`packages/desktop/lib/project.cjs`）。Windows 上这个权限位经常不生效，代码仍按 core 的写法传了。
+- **模型列表不再接受查询串里的 apiKey。** `e2272bf`。`GET /api/v1/services/:service/models` 只用已保存的密钥。未保存的 key 改走 `POST`，body 里带 `apiKey`。书房里拉列表本来就是不带 key 的 GET；设置页用未保存 key 探测走的是已有的 `POST /services/:id/test`。缓存测试改成 POST（`server.test.ts`）。
+- **检索密钥迁出 inkos.json。** `94c3852`、`e2272bf`。和模型密钥一样放进用户数据目录的 `research-search.json`（没有用户数据目录时落在项目 `.inkos/research-search.json`，打包排除这个文件名）。一次性迁移，写入校验失败则原 `inkos.json` 字节不动。GET 只回已配置和末四位；PUT 不传 key 时保留原 key（`research-search-secret.ts`、`server.ts`、`ProjectSettings.tsx`）。
+- **上游错误里的密钥片段。** `94c3852`、`e2272bf`。写入 run 和推送 SSE 之前，把 `sk-`、Bearer token 和又长又像密钥的串换成「已隐藏」（`redact-secrets.ts`）。单测在 `redact-secrets.test.ts`。
+- **日志轮转改名失败。** `8b1b611`。改名失败就复制后截断；复制也失败则只警告一次，并且不再往超大文件上追加（`log-rotate.cjs`、`main.cjs`）。
+- **番茄章范围不合法。** `e2272bf`。非正整数、起大于止、超出章数时禁用下载并给出中文提示，不再静默导出全书（`fanqie-range.ts`、`BookDetail.tsx`、`ShortReader.tsx`）。两边都空着仍导出全书。
+- **番茄导出剥围栏和删除线。** `94c3852`。` ``` ` 行删掉，围栏里面的字留下，避免把作者放进围栏的句子弄丢。`~~` 标记删掉，中间的字留下，和加粗同一套。测试在 `fanqie-text.test.ts`。
+- **旧通路「真相文件」。** `e2272bf`。阶段识别仍用原句（`server.ts` 的 `PIPELINE_STAGES` 和管线日志都没改，管线测试断言也没改）。屏幕上通过 `displayProgressLabel` 显示成「设定档案」（`ProgressSection.tsx`、`ToolExecutionSteps.tsx`）。
+- **估算金额用这次调用的连接。** `e2272bf`。按 run 的 `modelSnapshot.serviceRef` 找单价。找不到就不估这一笔；书房合计里如果有没标价的连接，金额后面注明「没标价的连接没算进去」。不再用列表里第一个标了价的连接。
+- **写作提示词按小节标题判断重复。** `94c3852`。`composeWriteSystemPrompt` 只看整行是不是「本书文风」「网文通用写法」「禁语」开头，不再用任意子串（`write-system-prompt.ts`）。
+- **返回前端的 run 去掉密钥字段。** `94c3852`、`e2272bf`。摘要和按章工作区都走同一个接口，返回前删掉 `modelSnapshot.extra.headers` 以及 apiKey / key / token / authorization 一类字段（`public-run.ts`、`authoring-routes.ts`）。
+
+### 测试缺口
+
+- `loadWriteChapterBasis`：`94c3852`，`write-chapter-basis.test.ts`。第 1 章没有上一章，上一章尾按约 300 字截断，卷进度写「第 N 章 / 一共 M 章」。
+- `apiFormat: "responses"` 不传 `response_format`：`94c3852`，`authoring-review-upgrade.test.ts`。走审查调用，断言每一次上游 extra 都没有 `response_format`。
+- 问心 / 织卷 run 带 usage，刷新后面板仍能显示「这次用了」：问心和织卷的 run 断言在 `94c3852`（`authoring-ask.test.ts`、`authoring-weave.test.ts`）。面板文案抽成 `formatPassUsage`，刷新后没有当场的 usage、只剩 run 上的 prompt/completion 时，仍得到「这次用了 …」（`e2272bf`，`authoring-stream.test.ts`）。没有另开浏览器把面板点一遍。
+- **退出对话框端到端没做。** 仓库里只有 `quit-writing.cjs` 的文案函数测试，没有能拉起 Electron 退出框的端到端装置。这次没有补那条。
+
+### 验证
+
+四条都在本机通过。符号链接跳过仍是 core 两条、desktop 一条。
+
+| 命令 | 结果 |
+|---|---|
+| `pnpm typecheck` | 通过 |
+| `pnpm lint` | 通过 |
+| `pnpm test` | 通过。core 2125 过、2 跳过；studio 818 过；cli 235 过；desktop 59 过、1 跳过 |
+| `pnpm build` | 通过 |
+
+`git log --oneline a6b8edf..HEAD`（写这一节时报告提交还没进去，提交后会多一行 `docs: P1 rework round 1 report`）：
+
+```
+8b1b611 fix: leave project secrets alone when user-data writes fail
+e2272bf fix: show corrupt books, aligned chapters, and safer studio APIs
+94c3852 fix: keep partial drafts, usage, and quarantined book files
+```
+
