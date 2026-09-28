@@ -37,17 +37,24 @@ function banLine(): string {
   return `禁语：不要写出这些词或腔调：${words.join("、")}。出现了就算没写好。`;
 }
 
+function hasSectionHeading(text: string, heading: string): boolean {
+  return text.split(/\r?\n/).some((line) => {
+    const trimmed = line.trim();
+    return trimmed === heading || trimmed.startsWith(`${heading}：`) || trimmed.startsWith(`${heading}:`);
+  });
+}
+
 /** Four blocks the writing role always sees, even when the author added their own instructions. */
 export function composeWriteSystemPrompt(instructions: string, voice?: string): string {
   const role = instructions.trim();
   const parts = [role];
-  if (!role.includes("本书文风")) {
+  if (!hasSectionHeading(role, "本书文风")) {
     const style = voice?.trim();
     parts.push(style
       ? `本书文风：${style}`
       : "本书文风：按已采用正典里的视角和文风写。正典没写文风时，保持这一章已经有的口气。");
   }
-  if (!role.includes("网文通用写法")) parts.push(WEB_NOVEL_CRAFT);
-  if (!role.includes("禁语")) parts.push(banLine());
+  if (!hasSectionHeading(role, "网文通用写法")) parts.push(WEB_NOVEL_CRAFT);
+  if (!hasSectionHeading(role, "禁语")) parts.push(banLine());
   return parts.filter(Boolean).join("\n\n");
 }

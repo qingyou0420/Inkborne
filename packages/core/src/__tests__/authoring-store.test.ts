@@ -184,4 +184,28 @@ describe("authoring store", () => {
     const other = await loadAuthoringWorkspaceLists(store, { chapter: 1 });
     expect(other.runs).toEqual([]);
   });
+
+  it("rebuilds an empty manifest from artifact meta", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-store-empty-"));
+    const store: AuthoringStoreRoot = { projectRoot: root, bookId: "demo" };
+    const stamp = new Date().toISOString();
+    await saveArtifact(store, {
+      artifactId: "write-ch4",
+      stage: "write",
+      scope: "chapter:4",
+      version: 1,
+      source: "generate",
+      status: "candidate",
+      bodyPath: "body.md",
+      inputRefs: [],
+      createdAt: stamp,
+    }, "第四章");
+    const manifestPath = join(root, "books", "demo", "story", "workflow", "manifest.json");
+    await writeFile(manifestPath, "\n  ", "utf-8");
+    const restored = await loadManifest(store);
+    expect(restored.candidates.write["4"]).toBe("write-ch4");
+    const names = await readdir(join(root, "books", "demo", "story", "workflow"));
+    expect(names.some((name) => name.startsWith("manifest.json.corrupt-"))).toBe(true);
+    expect(names.includes("manifest.json")).toBe(true);
+  });
 });

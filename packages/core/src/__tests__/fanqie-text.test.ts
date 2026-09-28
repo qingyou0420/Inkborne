@@ -121,6 +121,28 @@ describe("番茄纯文本", () => {
     expect(duplicated.combined.match(/第1章 信/g)).toHaveLength(1);
   });
 
+  it("drops fence markers and strikethrough marks", () => {
+    const text = renderFanqieChapter({
+      chapterNumber: 4,
+      title: "信",
+      markdown: [
+        "# 第4章 信",
+        "",
+        "正文还在。",
+        "",
+        "```",
+        "围栏里的一句",
+        "```",
+        "",
+        "他~~不该留下的口气~~说完了。",
+      ].join("\n"),
+    });
+    expect(text).not.toContain("```");
+    expect(text).toContain("围栏里的一句");
+    expect(text).toContain("他不该留下的口气说完了。");
+    expect(text).not.toContain("~~");
+  });
+
   it("拒绝颠倒的章节范围", () => {
     expect(() => fanqieOptionsFromQuery({ from: "5", to: "2" })).toThrow(/起始章不能大于结束章/);
     expect(fanqieOptionsFromQuery({ layout: "per-chapter", blankLine: "0", indent: "1" })).toMatchObject({

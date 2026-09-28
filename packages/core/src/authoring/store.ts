@@ -171,7 +171,7 @@ export async function loadManifest(root: AuthoringStoreRoot): Promise<WorkflowMa
   if (!(await exists(path))) return emptyManifest(root);
   try {
     const raw = await readFile(path, "utf-8");
-    if (!raw.trim()) return emptyManifest(root);
+    if (!raw.trim()) throw new Error("manifest.json is empty");
     return WorkflowManifestSchema.parse(JSON.parse(raw) as unknown);
   } catch {
     await quarantineCorruptFile(path).catch(() => undefined);

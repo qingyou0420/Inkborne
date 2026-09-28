@@ -73,7 +73,8 @@ export async function readBookJsonFile(bookDir: string): Promise<Record<string, 
     throw error;
   }
   if (!raw.trim()) {
-    throw new Error(`book.json is empty for book "${basename(bookDir)}"`);
+    const quarantined = await quarantineCorruptFile(configPath);
+    throw await corruptBookMessage(bookDir, quarantined);
   }
   try {
     const parsed = JSON.parse(raw) as unknown;

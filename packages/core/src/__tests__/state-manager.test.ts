@@ -66,6 +66,17 @@ describe("StateManager", () => {
       await expect(manager.loadBookConfig("broken-book")).rejects.toThrow(/book\.json 坏了/);
       expect(await manager.listBooks()).toContain("broken-book");
     });
+
+    it("quarantines an empty book.json the same way as truncated JSON", async () => {
+      const bookDir = manager.bookDir("empty-book");
+      await mkdir(join(bookDir, "story", "snapshots", "4"), { recursive: true });
+      await writeFile(join(bookDir, "book.json"), " \n\t", "utf-8");
+      await expect(manager.loadBookConfig("empty-book")).rejects.toThrow(/book\.json 坏了/);
+      await expect(manager.loadBookConfig("empty-book")).rejects.toThrow(/snapshots[/\\]4/);
+      const names = await readdir(bookDir);
+      expect(names.includes("book.json")).toBe(false);
+      expect(names.some((name) => name.startsWith("book.json.corrupt-"))).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------

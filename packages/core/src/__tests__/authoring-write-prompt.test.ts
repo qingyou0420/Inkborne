@@ -63,6 +63,14 @@ describe("write system prompt", () => {
       roles: filled,
     });
     const system = composeWriteSystemPrompt(resolved.instructions, "冷一点，短句");
+    const mentioned = composeWriteSystemPrompt("作者补充：不要把禁语、本书文风、网文通用写法这些词写进正文。", "冷一点");
+    expect(mentioned).toContain("本书文风：");
+    expect(mentioned).toContain("网文通用写法：");
+    expect(mentioned).toContain("禁语：");
+    const already = composeWriteSystemPrompt("本书文风：保持短句\n网文通用写法：少旁白\n禁语：不要震惊", "");
+    expect(already.match(/本书文风：/g)).toHaveLength(1);
+    expect(already.match(/网文通用写法：/g)).toHaveLength(1);
+    expect(already.match(/禁语：/g)).toHaveLength(1);
     expect(system).toContain("本书文风：冷一点，短句");
     expect(system).toContain("网文通用写法");
     expect(system).toContain("禁语");

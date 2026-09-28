@@ -9,10 +9,11 @@ import { asString, asStringArray, extractJsonObject } from "./json.js";
 import {
   isJsonResponseFormatUnsupported,
   shouldAttemptJsonResponseFormat,
-  completeRole,
+  completeRoleObserved,
 } from "./llm.js";
+import { combineAuthoringUsage } from "./token-usage.js";
 import { normalizeReviewDimension, WRITE_REVIEW_DIMENSIONS } from "./review-checks.js";
-import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringStage, ResolvedAuthoringRole, ReviewIssue, ReviewIssueSeverity } from "./types.js";
+import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringStage, AuthoringTokenUsage, ResolvedAuthoringRole, ReviewIssue, ReviewIssueSeverity } from "./types.js";
 
 const SEVERITY_MAP: Record<string, ReviewIssueSeverity> = {
   priority: "priority",
@@ -127,18 +128,23 @@ export async function requestReviewModelText(input: {
   readonly llm?: AuthoringLlmFn;
   readonly signal?: AbortSignal;
   readonly system?: string;
-}): Promise<{ text: string; rawExcerpt?: string }> {
+}): Promise<{ text: string; rawExcerpt?: string; usage?: AuthoringTokenUsage }> {
   const allowFormat = shouldAttemptJsonResponseFormat(input.resolved);
-  const once = (format: boolean) => completeRole(
-    input.resolved,
-    input.prompt,
-    input.llm,
-    input.signal,
-    {
-      ...(format ? { responseFormat: "json_object" as const } : {}),
-      ...(input.system ? { system: input.system } : {}),
-    },
-  );
+  let usage: AuthoringTokenUsage | undefined;
+  const once = async (format: boolean) => {
+    const observed = await completeRoleObserved(
+      input.resolved,
+      input.prompt,
+      {
+        llm: input.llm,
+        signal: input.signal,
+        ...(format ? { responseFormat: "json_object" as const } : {}),
+        ...(input.system ? { system: input.system } : {}),
+      },
+    );
+    usage = combineAuthoringUsage(usage, observed.usage);
+    return observed.content;
+  };
   let text: string;
   try {
     text = await once(allowFormat);
@@ -146,16 +152,16 @@ export async function requestReviewModelText(input: {
     if (!(allowFormat && isJsonResponseFormatUnsupported(error))) throw error;
     text = await once(false);
   }
-  if (!reviewPayloadIncomplete(text)) return { text };
+  if (!reviewPayloadIncomplete(text)) return { text, ...(usage ? { usage } : {}) };
   let second = text;
   try {
     second = await once(false);
   } catch {
-    return { text, rawExcerpt: clipRaw(text) };
+    return { text, rawExcerpt: clipRaw(text), ...(usage ? { usage } : {}) };
   }
-  if (!reviewPayloadIncomplete(second)) return { text: second };
+  if (!reviewPayloadIncomplete(second)) return { text: second, ...(usage ? { usage } : {}) };
   const kept = second.trim() ? second : text;
-  return { text: kept, rawExcerpt: clipRaw(kept) };
+  return { text: kept, rawExcerpt: clipRaw(kept), ...(usage ? { usage } : {}) };
 }
 
 export function reviewPrompt(stage: AuthoringStage, coverage: string, body: string, extras?: string): string {

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
 import { adoptAskCanon, generateAskCanon, reviewAskCanon, reviseAskCanon } from "../authoring/stages/ask.js";
-import { loadArtifact, saveHandEditedArtifact } from "../authoring/store.js";
+import { loadArtifact, loadRun, saveHandEditedArtifact } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 function project() {
@@ -196,5 +196,27 @@ describe("ask stage", () => {
     expect(book.chapterWordCount).toBe(3000);
     const canon = await readFile(join(created.bookDir, "story", "canon.md"), "utf-8");
     expect(canon).toContain("新名");
+  });
+
+  it("stores token usage on the ask run", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ask-usage-"));
+    const llm: AuthoringLlmFn = async () => ({
+      content: JSON.stringify({
+        title: "夜港账本",
+        oneLine: "会计找回账本",
+        proposition: "记忆有代价",
+        protagonist: "沈砚",
+        conflict: "救人还是自保",
+        voice: "限制视角",
+        boundaries: "开放结局",
+        direction: "港口",
+        openQuestions: [],
+      }),
+      usage: { promptTokens: 11, completionTokens: 7, totalTokens: 0 },
+    });
+    const ctx = { root: { projectRoot: root, draftId: "usage" }, project: project(), llm };
+    const generated = await generateAskCanon({ ...ctx, conversation: "港口会计" });
+    const run = await loadRun(ctx.root, generated.runId);
+    expect(run?.usage).toEqual({ promptTokens: 11, completionTokens: 7, totalTokens: 18 });
   });
 });

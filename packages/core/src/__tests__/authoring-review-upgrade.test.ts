@@ -8,7 +8,7 @@ import { diffLines } from "../authoring/line-diff.js";
 import { completeRole, shouldAttemptJsonResponseFormat } from "../authoring/llm.js";
 import { fillMissingAuthoringRoles, resolveAuthoringRole } from "../authoring/model-config.js";
 import { normalizeReviewDimension } from "../authoring/review-checks.js";
-import { parseReviewPayload, reviewPrompt } from "../authoring/review.js";
+import { parseReviewPayload, requestReviewModelText, reviewPrompt } from "../authoring/review.js";
 import { generateChapterDraft, reviewChapterDraft } from "../authoring/stages/write.js";
 import { loadReport } from "../authoring/store.js";
 import { payloadWithJsonObjectFormat } from "../llm/provider.js";
@@ -42,6 +42,10 @@ function project(model = "deepseek-chat", provider: "custom" | "anthropic" | "op
       "write.review": { modelId: model, serviceRef: "custom" },
     },
   });
+}
+
+function asResponses(resolved: ResolvedAuthoringRole): ResolvedAuthoringRole {
+  return { ...resolved, apiFormat: "responses", llm: { ...resolved.llm, apiFormat: "responses" } };
 }
 
 function role(model = "deepseek-chat", provider: "custom" | "anthropic" | "openai" = "custom"): ResolvedAuthoringRole {
@@ -81,10 +85,20 @@ describe("review upgrade", () => {
     expect(shouldAttemptJsonResponseFormat(role("deepseek-chat"))).toBe(true);
     expect(shouldAttemptJsonResponseFormat(role("claude-3-5-sonnet"))).toBe(false);
     expect(shouldAttemptJsonResponseFormat(role("claude-relay", "anthropic"))).toBe(false);
+    expect(shouldAttemptJsonResponseFormat(asResponses(role("gpt-5", "openai")))).toBe(false);
     expect(payloadWithJsonObjectFormat({ model: "x" }, { type: "json_object" })).toMatchObject({
       response_format: { type: "json_object" },
     });
     expect(payloadWithJsonObjectFormat({ model: "x" }, { type: "text" })).toBeUndefined();
+  });
+
+  it("does not send response_format for apiFormat responses", async () => {
+    chatCompletionMock.mockResolvedValue({ content: "{\"summary\":\"ok\",\"issues\":[]}" });
+    await requestReviewModelText({ resolved: asResponses(role("gpt-5", "openai")), prompt: "请审查" });
+    expect(chatCompletionMock).toHaveBeenCalled();
+    for (const call of chatCompletionMock.mock.calls) {
+      expect(call[3]?.extra?.response_format).toBeUndefined();
+    }
   });
 
   it("sends response_format and retries without it when the relay rejects it", async () => {

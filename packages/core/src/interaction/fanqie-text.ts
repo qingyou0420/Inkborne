@@ -195,7 +195,7 @@ function extractParagraphs(
   markdown: string,
   identity: { readonly chapterNumber?: number; readonly title: string },
 ): string[] {
-  const prepared = stripFrontmatter(markdown).replace(/<!--[\s\S]*?-->/g, "");
+  const prepared = stripFencedCode(stripFrontmatter(markdown).replace(/<!--[\s\S]*?-->/g, ""));
   const kept = stripNotes(prepared.split(/\r?\n/));
   const body = stripLeadingTitles(kept, identity);
   const paragraphs: string[] = [];
@@ -445,9 +445,18 @@ function stripInlineMarkdown(line: string): string {
   text = text.replace(/(\*\*|__)([\s\S]*?)\1/g, "$2");
   text = text.replace(/(^|[^\w])[*_]([^*\n_]+?)[*_](?=[^\w]|$)/g, "$1$2");
   text = text.replace(/`([^`]+)`/g, "$1");
+  text = text.replace(/~~([^~\n]+?)~~/g, "$1");
   text = text.replace(/<\/?[a-zA-Z][^>]*>/g, "");
-  text = text.replace(/\*\*|__/g, "");
+  text = text.replace(/\*\*|__|~~/g, "");
   return text;
+}
+
+/** Drop fence marker lines and keep the text inside. Tomato paste has no code blocks. */
+function stripFencedCode(markdown: string): string {
+  return markdown
+    .split(/\r?\n/)
+    .filter((line) => !/^[ \t]*```/.test(line))
+    .join("\n");
 }
 
 function stripFrontmatter(markdown: string): string {

@@ -9,7 +9,8 @@ import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { withBookWriteLock } from "../book-lock.js";
 import { assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from "../context.js";
 import { asString, asStringArray, extractJsonObject } from "../json.js";
-import { completeRole } from "../llm.js";
+import { completeRoleObserved } from "../llm.js";
+import { combineAuthoringUsage } from "../token-usage.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
 import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
@@ -26,7 +27,7 @@ import {
   saveSettingsCatalog,
   type AuthoringStoreRoot,
 } from "../store.js";
-import type { AuthoringLlmFn, AuthoringReviewReport, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
+import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringTokenUsage, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
 
 const DEFAULT_CATEGORIES = ["世界与时代", "人物", "关系与势力", "地点", "规则与物品", "历史与其他"];
@@ -128,11 +129,12 @@ export async function proposeSettingsCatalog(input: GroundRuntime): Promise<Sett
   const existing = await loadSettingsCatalog(input.root);
   const { canon } = await loadCanonDocument(input.root);
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
-  const text = await completeRole(resolved, [
+  const catalogObserved = await completeRoleObserved(resolved, [
     "根据正典拟定本书设定目录。只输出 JSON：{ categories: string[], entries: [{ id, category, name }] }。",
     "现实题材不要出现修炼体系。目录按小说需要增减。",
     serializeCanonBrief(canon),
-  ].join("\n"), input.llm);
+  ].join("\n"), { llm: input.llm });
+  const text = catalogObserved.content;
   const json = extractJsonObject(text);
   const categories = asStringArray(json.categories);
   const entriesRaw = Array.isArray(json.entries) ? json.entries : [];
@@ -174,6 +176,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
   const runId = newRunId();
   const generated: string[] = [];
   const failed: string[] = [];
+  let usage: AuthoringTokenUsage | undefined;
   await saveRun(input.root, {
     runId,
     stage: "ground",
@@ -190,11 +193,13 @@ export async function generateGroundEntries(input: GroundRuntime & {
   });
   for (const entry of targets) {
     try {
-      const text = await completeRole(resolved, [
+      const observed = await completeRoleObserved(resolved, [
         `撰写设定条目「${entry.name}」（分类：${entry.category}）。输出 Markdown 正文，不要 JSON。`,
         serializeCanonBrief(canon),
         "只写这一条，不要改其他条目。",
-      ].join("\n"), input.llm);
+      ].join("\n"), { llm: input.llm });
+      usage = combineAuthoringUsage(usage, observed.usage);
+      const text = observed.content;
       const artifactId = newArtifactId("ground", entry.id);
       await saveArtifact(input.root, {
         artifactId,
@@ -228,6 +233,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
       progressTotal: targets.length,
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: generated,
+      ...(usage ? { usage } : {}),
       error: failed.length ? `失败条目：${failed.join("、")}` : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -356,11 +362,12 @@ export async function reviseGroundEntry(input: GroundRuntime & {
     const loaded = await loadArtifact(input.root, artifactId);
     if (!loaded) continue;
     assertReportReusable(report, loaded.meta.artifactId, input.reuseStale || report.targetRefs.includes(loaded.meta.artifactId));
-    const text = await completeRole(resolved, [
+    const observed = await completeRoleObserved(resolved, [
       `按意见修改设定「${entry.name}」（id:${entry.id}）。只输出该条目 Markdown。不要改其他条目。`,
       ...issues.map((issue) => `- ${issue.title}: ${issue.suggestion ?? ""}`),
       loaded.body,
-    ].join("\n"), input.llm);
+    ].join("\n"), { llm: input.llm });
+    const text = observed.content;
     const nextId = newArtifactId("ground", entry.id);
     await saveArtifact(input.root, {
       artifactId: nextId,

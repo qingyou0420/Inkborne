@@ -8,6 +8,7 @@ import {
   adoptChapterDraft,
   generateChapterDraft,
   requestWriteRunCancel,
+  SavedPartialDraftError,
   reviewChapterDraft,
   reviseChapterDraft,
 } from "../authoring/stages/write.js";
@@ -993,7 +994,7 @@ describe("write stage", () => {
     await release();
   });
 
-  it("does not keep a partial chapter when the model fails", async () => {
+  it("keeps a partial chapter when the upstream call fails after text", async () => {
     root = await mkdtemp(join(tmpdir(), "authoring-write-fail-"));
     const created = await createLightweightBook({
       projectRoot: root,
@@ -1010,19 +1011,103 @@ describe("write stage", () => {
       },
     });
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
-    await expect(generateChapterDraft({
+    const error = await generateChapterDraft({
       ...ctx,
       chapterNumber: 1,
       title: "断",
       llm: async (call) => {
-        await call.onTextDelta?.("半截不该留下");
-        throw new Error("模型断了");
+        await call.onTextDelta?.("半截要留下");
+        throw new Error("模型断了 sk-supersecretkey123456");
       },
-    })).rejects.toThrow(/模型断了/);
-    const names = await readdir(join(created.bookDir, "story", "workflow", "artifacts")).catch(() => [] as string[]);
-    expect(names.filter((name) => name.startsWith("write-"))).toEqual([]);
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SavedPartialDraftError);
+    expect((error as Error).message).toMatch(/模型断了/);
+    expect((error as Error).message).toMatch(/已隐藏/);
+    expect((error as SavedPartialDraftError).artifactId).toBeTruthy();
+    const manifest = await loadManifest(ctx.root);
+    const artifactId = manifest.candidates.write["1"];
+    expect(artifactId).toBeTruthy();
+    const stored = await loadArtifact(ctx.root, artifactId!);
+    expect(stored?.body).toContain("半截要留下");
+    const runs = await loadRun(ctx.root, stored?.meta.runId ?? "");
+    expect(runs?.status).toBe("failed");
+    expect(runs?.producedArtifactIds).toEqual([artifactId]);
+    expect(runs?.error).toContain("已隐藏");
+    expect(runs?.error).not.toContain("sk-supersecretkey123456");
     const release = await new StateManager(root).acquireBookLock(created.bookId, { stage: "测试", taskId: "after-fail" }, { waitMs: 0 });
     await release();
+  });
+
+  it("records usage when a stop arrives with token counts", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-stop-usage-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "停",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 2,
+      title: "停",
+      llm: async (call) => {
+        await call.onTextDelta?.("留下这句");
+        const error = abortError() as Error & { usage?: { promptTokens: number; completionTokens: number; totalTokens: number } };
+        error.usage = { promptTokens: 4, completionTokens: 6, totalTokens: 0 };
+        throw error;
+      },
+    });
+    expect(draft.status).toBe("cancelled");
+    expect(draft.body).toContain("留下这句");
+    const run = await loadRun(ctx.root, draft.runId);
+    expect(run?.usage).toEqual({ promptTokens: 4, completionTokens: 6, totalTokens: 10 });
+  });
+
+  it("can cancel a write before the run file exists", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-early-cancel-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "早",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    let sawFile = true;
+    let calledModel = false;
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "早",
+      onRunStart: async (id) => {
+        sawFile = Boolean(await loadRun(ctx.root, id));
+        expect(requestWriteRunCancel(id)).toBe(true);
+      },
+      llm: async () => {
+        calledModel = true;
+        return "不该写";
+      },
+    });
+    expect(sawFile).toBe(false);
+    expect(calledModel).toBe(false);
+    expect(draft.status).toBe("cancelled");
+    expect(draft.artifactId).toBe("");
   });
 });
 

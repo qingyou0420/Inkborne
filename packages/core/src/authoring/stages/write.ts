@@ -47,7 +47,21 @@ import {
   type AuthoringStoreRoot,
 } from "../store.js";
 import { AuthoringArtifactMetaSchema, type AuthoringArtifactMeta, type AuthoringLlmFn, type AuthoringReviewReport, type AuthoringTokenUsage, type ReviewIssue } from "../types.js";
+import { usageFromUnknown } from "../token-usage.js";
+import { redactSecrets } from "../../utils/redact-secrets.js";
 import type { ProjectConfig } from "../../models/project.js";
+
+/** Upstream failed after some chapter text was already saved as a candidate. */
+export class SavedPartialDraftError extends Error {
+  readonly artifactId: string;
+  readonly saved = true;
+
+  constructor(message: string, artifactId: string) {
+    super(message);
+    this.name = "SavedPartialDraftError";
+    this.artifactId = artifactId;
+  }
+}
 
 export interface WriteRuntime {
   readonly root: AuthoringStoreRoot;
@@ -180,8 +194,8 @@ async function streamChapterText(input: {
     updatedAt: createdAt,
   };
   try {
-    await saveRun(input.root, { ...baseRun, status: "running", producedArtifactIds: [] });
     await input.onRunStart?.(runId);
+    await saveRun(input.root, { ...baseRun, status: "running", producedArtifactIds: [] });
     if (signal.aborted) {
       await saveRun(input.root, { ...baseRun, status: "cancelled", producedArtifactIds: [], progressLabel: "还没写出字就停下了" });
       return draftResult({ body: "", runId, artifactId: "", status: "cancelled", targetWordCount: input.targetWordCount });
@@ -198,19 +212,50 @@ async function streamChapterText(input: {
         },
       });
     } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error));
+      const carried = usageFromUnknown(error);
+      const partial = streamed.trim();
       if (!isStop(error, signal)) {
+        if (!partial) {
+          await saveRun(input.root, {
+            ...baseRun,
+            status: "failed",
+            producedArtifactIds: [],
+            error: message,
+            ...(carried ? { usage: carried } : {}),
+          });
+          const bare = new Error(message);
+          (bare as Error & { saved?: boolean }).saved = false;
+          throw bare;
+        }
+        const body = ensureSingleChapterHeading(streamed, { chapterNumber: input.chapterNumber, title: input.title });
+        const artifactId = newArtifactId("write", `ch${input.chapterNumber}`);
+        const meta = input.meta(runId);
+        await saveArtifact(input.root, {
+          ...meta,
+          artifactId,
+          label: meta.label ? `${meta.label}（写到一半断了）` : "写到一半断了",
+        }, body);
         await saveRun(input.root, {
           ...baseRun,
           status: "failed",
-          producedArtifactIds: [],
-          error: error instanceof Error ? error.message : String(error),
+          producedArtifactIds: [artifactId],
+          error: message,
+          ...(carried ? { usage: carried } : {}),
+          progressLabel: "写到一半上游断了，已留下的字在候选稿里",
         });
-        throw error;
+        await rememberCandidate(input.root, input.chapterNumber, artifactId, runId);
+        throw new SavedPartialDraftError(message, artifactId);
       }
-      const partial = streamed.trim();
       if (!partial) {
-        await saveRun(input.root, { ...baseRun, status: "cancelled", producedArtifactIds: [], progressLabel: "还没写出字就停下了" });
-        return draftResult({ body: "", runId, artifactId: "", status: "cancelled", targetWordCount: input.targetWordCount });
+        await saveRun(input.root, {
+          ...baseRun,
+          status: "cancelled",
+          producedArtifactIds: [],
+          ...(carried ? { usage: carried } : {}),
+          progressLabel: "还没写出字就停下了",
+        });
+        return draftResult({ body: "", runId, artifactId: "", status: "cancelled", targetWordCount: input.targetWordCount, usage: carried });
       }
       const body = ensureSingleChapterHeading(streamed, { chapterNumber: input.chapterNumber, title: input.title });
       const artifactId = newArtifactId("write", `ch${input.chapterNumber}`);
@@ -224,10 +269,11 @@ async function streamChapterText(input: {
         ...baseRun,
         status: "cancelled",
         producedArtifactIds: [artifactId],
+        ...(carried ? { usage: carried } : {}),
         progressLabel: "写到一半停下，已留下的字在候选稿里",
       });
       await rememberCandidate(input.root, input.chapterNumber, artifactId, runId);
-      return draftResult({ body, runId, artifactId, status: "cancelled", targetWordCount: input.targetWordCount });
+      return draftResult({ body, runId, artifactId, status: "cancelled", targetWordCount: input.targetWordCount, usage: carried });
     }
     if (signal.aborted) {
       const source = observed.content.trim() ? observed.content : streamed;
@@ -362,7 +408,9 @@ export async function reviewChapterDraft(input: WriteRuntime & {
     chapterNumber,
   });
   const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
-  const { text, rawExcerpt } = await requestReviewModelText({
+  const runId = newRunId();
+  const createdAt = new Date().toISOString();
+  const reviewed = await requestReviewModelText({
     resolved,
     llm: input.llm,
     system: composeWriteSystemPrompt(resolved.instructions, voice),
@@ -373,16 +421,32 @@ export async function reviewChapterDraft(input: WriteRuntime & {
       [formatChecksForPrompt(checks), ctx.text].filter(Boolean).join("\n\n"),
     ),
   });
-  const report = mergeDeterministicIssues(parseReviewPayload(text, {
+  const report = mergeDeterministicIssues(parseReviewPayload(reviewed.text, {
     stage: "write",
     targetRefs: [loaded.meta.artifactId],
     coverage,
     model: resolved.modelId,
-    rawExcerpt,
+    runId,
+    rawExcerpt: reviewed.rawExcerpt,
     inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
   }), checks);
   await withBookWriteLock(input.root, "审查本章", async () => {
     await saveReport(input.root, report);
+    await saveRun(input.root, {
+      runId,
+      stage: "write",
+      operation: "review",
+      roleId: "write.review",
+      status: "completed",
+      scope: loaded.meta.scope,
+      reportId: report.reportId,
+      bookId: input.root.bookId,
+      modelSnapshot: resolved.snapshot,
+      producedArtifactIds: [],
+      ...(reviewed.usage ? { usage: reviewed.usage } : {}),
+      createdAt,
+      updatedAt: createdAt,
+    });
   });
   return report;
 }

@@ -817,6 +817,16 @@ export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, c
 export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAgent, renderScriptSpec, renderStoryboardSpec, renderInteractiveFilmSpec, type ScriptCreationInput, type ScriptTargetFormat, type StoryboardCreationInput, type InteractiveFilmCreationInput } from "./agents/script-storyboard.js";
 
 // State
+export { CorruptBookJsonError } from "./state/book-json.js";
+export { redactSecrets } from "./utils/redact-secrets.js";
+export {
+  loadResearchSearchRuntime,
+  migrateResearchSearchKey,
+  readResearchSearchPublic,
+  saveResearchSearchSettings,
+  type ResearchSearchPublic,
+} from "./llm/research-search-secret.js";
+export { sanitizeAuthoringRun, sanitizeAuthoringRuns } from "./authoring/public-run.js";
 export {
   BookWriteLockError,
   BOOK_LOCK_INTERACTIVE_POLL_MS,
