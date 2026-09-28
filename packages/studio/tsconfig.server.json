@@ -1,4 +1,8 @@
 {
+  // Resolves @actalk/inkos-core through Node16 package exports (packages/core/dist).
+  // `pnpm typecheck` builds core first, and this package's pretypecheck does the same
+  // when you run `pnpm --filter @actalk/inkos-studio typecheck` on a clean tree.
+  // Mapping paths at core sources would pull files outside rootDir; leave that alone.
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "dist",

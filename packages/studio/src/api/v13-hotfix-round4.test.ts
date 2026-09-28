@@ -34,6 +34,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     async loadChapterIndex(): Promise<[]> { return []; }
     async getNextChapterNumber(): Promise<number> { return 1; }
     bookDir(id: string): string { return join(this.root, "books", id); }
+    async acquireBookLock(): Promise<() => Promise<void>> {
+      return async () => undefined;
+    }
   }
   class MockPipelineRunner {
     constructor(_config: unknown) {}
@@ -60,6 +63,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   }
 
   return {
+    ...actual,
     StateManager: MockStateManager,
     PipelineRunner: MockPipelineRunner,
     Scheduler: MockScheduler,

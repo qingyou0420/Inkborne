@@ -28,8 +28,10 @@ git clone https://github.com/qingyou0420/Inkborne.git
 cd Inkborne
 pnpm install
 pnpm build          # 编译 @actalk/inkos-core + Studio dist/
-pnpm test           # CI 会跑的子集
-pnpm start          # Electron；首次打开走首启向导
+pnpm test           # 默认跑 core / studio / cli / desktop 全部测试；少数依赖 FTS5 的文件被排除，见 packages/core/vitest.config.ts
+pnpm typecheck      # core 构建 + Studio 前端与服务端 tsc --noEmit
+pnpm lint
+pnpm start          # Electron
 # 或
 pnpm dev            # 缺 dist 时先 build，再开 Electron
 ```
@@ -54,7 +56,7 @@ pnpm dist:win
 INKOS_PROJECT_ROOT=/abs/path/to/project pnpm --filter @actalk/inkos exec inkos status
 ```
 
-完整上游 `packages/core` 测试套件依赖 SQLite **FTS5**。系统 Node 的 `node:sqlite` 可能没有 FTS5；**Electron 37 的 `ELECTRON_RUN_AS_NODE` 有 FTS5**（蓝图 H1）。CI 因此跑锁/桌面/引擎绑定子集；发版机再探测 Electron FTS5。有 FTS5 的 Node 上可再跑 `pnpm test:core:full`。
+默认 `pnpm test` 跑 core / studio / cli / desktop 的全部测试文件，只排除确需 SQLite **FTS5** 的少数 core 文件（系统 Node 的 `node:sqlite` 常常没有 FTS5，会报 `no such module: fts5`）。同一个文件里只有部分用例要 FTS5 的，那些用例会跳过，其余照跑。**Electron 37 的 `ELECTRON_RUN_AS_NODE` 有 FTS5**（蓝图 H1）。有 FTS5 的 Node 上可再跑 `pnpm test:core:full` 把排除的文件加回来。Playwright 不进每次 CI，每周日由 `.github/workflows/e2e.yml` 跑，也可以手动触发。
 
 ## 上游
 
