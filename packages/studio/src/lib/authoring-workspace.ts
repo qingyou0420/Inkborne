@@ -13,6 +13,7 @@ export interface AuthoringArtifact {
   readonly label?: string;
   readonly parentVersion?: number;
   readonly parentArtifactId?: string;
+  readonly source?: string;
 }
 
 export interface AuthoringIssue {

@@ -5,9 +5,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 import { z } from "zod";
 import {
   AuthoringArtifactMetaSchema,
@@ -50,8 +51,11 @@ async function readJson<T>(path: string, parse: (raw: unknown) => T): Promise<T 
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  await writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function renderManifest(manifest: z.input<typeof WorkflowManifestSchema> | WorkflowManifest): string {
+  return `${JSON.stringify(WorkflowManifestSchema.parse({ ...manifest, updatedAt: nowIso() }), null, 2)}\n`;
 }
 
 export function authoringRootDir(root: AuthoringStoreRoot): string {
@@ -86,20 +90,15 @@ export async function loadManifest(root: AuthoringStoreRoot): Promise<WorkflowMa
 }
 
 export async function saveManifest(root: AuthoringStoreRoot, manifest: z.input<typeof WorkflowManifestSchema> | WorkflowManifest): Promise<void> {
-  const dir = authoringRootDir(root);
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    join(dir, "manifest.json"),
-    `${JSON.stringify(WorkflowManifestSchema.parse({ ...manifest, updatedAt: nowIso() }), null, 2)}\n`,
-    "utf-8",
-  );
+  await writeFileAtomic(join(authoringRootDir(root), "manifest.json"), renderManifest(manifest));
 }
 
 export async function saveRun(root: AuthoringStoreRoot, run: z.input<typeof AuthoringRunRecordSchema> | AuthoringRunRecord): Promise<void> {
-  const dir = join(authoringRootDir(root), "runs");
-  await mkdir(dir, { recursive: true });
   const parsed = AuthoringRunRecordSchema.parse({ ...run, updatedAt: nowIso() });
-  await writeFile(join(dir, `${parsed.runId}.json`), `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+  await writeFileAtomic(
+    join(authoringRootDir(root), "runs", `${parsed.runId}.json`),
+    `${JSON.stringify(parsed, null, 2)}\n`,
+  );
 }
 
 export async function loadRun(root: AuthoringStoreRoot, runId: string): Promise<AuthoringRunRecord | undefined> {
@@ -126,9 +125,10 @@ export async function saveRunControl(
   runId: string,
   action: AuthoringRunControl,
 ): Promise<void> {
-  const path = join(authoringRootDir(root), "runs", `${runId}.control.json`);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify({ action, updatedAt: nowIso() }, null, 2)}\n`, "utf-8");
+  await writeFileAtomic(
+    join(authoringRootDir(root), "runs", `${runId}.control.json`),
+    `${JSON.stringify({ action, updatedAt: nowIso() }, null, 2)}\n`,
+  );
 }
 
 export async function loadRunControl(root: AuthoringStoreRoot, runId: string): Promise<AuthoringRunControl> {
@@ -156,9 +156,13 @@ export async function saveArtifact(
 ): Promise<AuthoringArtifactMeta> {
   const parsed = AuthoringArtifactMetaSchema.parse(meta);
   const dir = join(authoringRootDir(root), "artifacts", parsed.artifactId);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "body.md"), body.endsWith("\n") ? body : `${body}\n`, "utf-8");
-  await writeFile(join(dir, "meta.json"), `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+  await commitAtomicFileSet({
+    rootDir: dir,
+    writes: [
+      { relativePath: "body.md", content: body.endsWith("\n") ? body : `${body}\n` },
+      { relativePath: "meta.json", content: `${JSON.stringify(parsed, null, 2)}\n` },
+    ],
+  });
   return parsed;
 }
 
@@ -188,10 +192,11 @@ export async function listArtifacts(root: AuthoringStoreRoot, stage?: AuthoringS
 }
 
 export async function saveReport(root: AuthoringStoreRoot, report: z.input<typeof AuthoringReviewReportSchema> | AuthoringReviewReport): Promise<void> {
-  const dir = join(authoringRootDir(root), "reviews");
-  await mkdir(dir, { recursive: true });
   const parsed = AuthoringReviewReportSchema.parse(report);
-  await writeFile(join(dir, `${parsed.reportId}.json`), `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+  await writeFileAtomic(
+    join(authoringRootDir(root), "reviews", `${parsed.reportId}.json`),
+    `${JSON.stringify(parsed, null, 2)}\n`,
+  );
 }
 
 export async function loadReport(root: AuthoringStoreRoot, reportId: string): Promise<AuthoringReviewReport | undefined> {
@@ -215,6 +220,19 @@ export async function listReports(root: AuthoringStoreRoot, stage?: AuthoringSta
 
 export function reportAppliesTo(report: AuthoringReviewReport, artifactId: string): boolean {
   return report.targetRefs.includes(artifactId);
+}
+
+async function markBoundReportsStale(
+  root: AuthoringStoreRoot,
+  artifactId: string,
+  reason: string,
+): Promise<void> {
+  const reports = await listReports(root);
+  for (const report of reports) {
+    if (report.stale) continue;
+    if (!report.targetRefs.includes(artifactId)) continue;
+    await saveReport(root, { ...report, stale: true, staleReason: reason });
+  }
 }
 
 export async function markReportsStale(
@@ -248,6 +266,14 @@ export async function saveHandEditedArtifact(
 ): Promise<AuthoringArtifactMeta> {
   const loaded = await loadArtifact(root, artifactId);
   if (!loaded) throw new Error("找不到要保存的稿件。");
+  if (
+    loaded.meta.stage === "write"
+    && loaded.meta.source === "hand"
+    && loaded.meta.status === "candidate"
+  ) {
+    await markBoundReportsStale(root, loaded.meta.artifactId, "手改覆盖了这份候选，原审查报告已过期。");
+    return saveArtifact(root, loaded.meta, body);
+  }
   const nextId = newArtifactId(loaded.meta.stage, loaded.meta.scope);
   const version = loaded.meta.version + 1;
   const meta = await saveArtifact(root, {
@@ -295,9 +321,10 @@ export async function loadSettingsCatalog(root: AuthoringStoreRoot): Promise<Set
 export async function saveSettingsCatalog(root: AuthoringStoreRoot, catalog: SettingsCatalog): Promise<void> {
   const story = bookStoryDir(root);
   if (!story) throw new Error("设定目录只能写在已建书的项目里。");
-  const dir = join(story, "settings");
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "index.json"), `${JSON.stringify(SettingsCatalogSchema.parse(catalog), null, 2)}\n`, "utf-8");
+  await writeFileAtomic(
+    join(story, "settings", "index.json"),
+    `${JSON.stringify(SettingsCatalogSchema.parse(catalog), null, 2)}\n`,
+  );
 }
 
 export async function adoptFiles(input: {

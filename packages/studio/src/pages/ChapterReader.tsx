@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { showToast } from "../lib/toast";
-import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { trackChapterEdit } from "../lib/pending-chapter-edit";
+import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
+import { fetchJson, putApi, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -67,14 +69,75 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [overrideWhy, setOverrideWhy] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const pendingSave = useRef<{ bookId: string; chapterNumber: number; content: string } | null>(null);
+  const editGeneration = useRef(0);
+  const flushedGeneration = useRef(0);
   const { lang } = useI18n();
   const isZh = lang !== "en";
 
+  useEffect(() => registerUnsavedCheck(() => pendingSave.current !== null), []);
+
+  const flushPendingChapter = useCallback(async () => {
+    const pending = pendingSave.current;
+    if (!pending) return;
+    pendingSave.current = null;
+    const generation = editGeneration.current;
+    const fresh = flushedGeneration.current !== generation;
+    try {
+      await putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh });
+      if (editGeneration.current === generation) flushedGeneration.current = generation;
+    } catch (error) {
+      if (!pendingSave.current) pendingSave.current = pending;
+      throw error;
+    }
+  }, []);
+  const flushPendingRef = useRef(flushPendingChapter);
+  flushPendingRef.current = flushPendingChapter;
+  useEffect(() => registerUnsavedFlush(() => flushPendingRef.current()), []);
+
+  useEffect(() => {
+    if (!editing || !pendingSave.current) return;
+    const timer = window.setTimeout(() => {
+      void flushPendingChapter().then(() => {
+        void refetch();
+      }).catch((error) => {
+        showToast(error instanceof Error ? error.message : "Save failed", "error");
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [editContent, editing, flushPendingChapter, refetch]);
+
+  useEffect(() => {
+    return () => {
+      const pending = pendingSave.current;
+      if (!pending) return;
+      pendingSave.current = null;
+      const generation = editGeneration.current;
+      const fresh = flushedGeneration.current !== generation;
+      void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh }).then(() => {
+        if (editGeneration.current === generation) flushedGeneration.current = generation;
+      });
+    };
+  }, [bookId, chapterNumber]);
+
   const handleChapterChanged = useCallback(() => {
+    const pending = pendingSave.current;
+    pendingSave.current = null;
     setEditing(false);
     setEditContent("");
     setWorkspaceRevision((revision) => revision + 1);
-    void refetch();
+    if (!pending) {
+      void refetch();
+      return;
+    }
+    const generation = editGeneration.current;
+    const fresh = flushedGeneration.current !== generation;
+    void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh }).then(() => {
+      if (editGeneration.current === generation) flushedGeneration.current = generation;
+    }).finally(() => {
+      void refetch();
+    });
   }, [refetch]);
 
   useEffect(() => {
@@ -87,11 +150,17 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
 
   const handleStartEdit = () => {
     if (!data) return;
+    pendingSave.current = null;
+    editGeneration.current += 1;
     setEditContent(data.content);
     setEditing(true);
   };
 
   const handleCancelEdit = () => {
+    if (pendingSave.current) {
+      setDiscardOpen(true);
+      return;
+    }
     setEditing(false);
     setEditContent("");
   };
@@ -99,11 +168,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editContent }),
-      });
+      pendingSave.current = null;
+      await putApi(`/books/${bookId}/chapters/${chapterNumber}`, { content: editContent });
       setEditing(false);
       refetch();
       setWorkspaceRevision((revision) => revision + 1);
@@ -265,7 +331,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
         {editing ? (
           <textarea
             value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setEditContent(next);
+              pendingSave.current = trackChapterEdit(bookId, chapterNumber, next, data.content);
+            }}
             className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[32px] text-foreground/90 focus:outline-none resize-none border border-border-strong rounded-[10px] p-6 focus:ring-1 focus:ring-ring"
             autoFocus
           />
@@ -316,6 +386,22 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
           className="w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
+
+      <ConfirmDialog
+        open={discardOpen}
+        title={isZh ? "这段修改还没保存" : "Edits are not saved"}
+        message={isZh ? "取消后，刚才改的字会丢掉。" : "Canceling drops the words you just changed."}
+        confirmLabel={isZh ? "丢掉修改" : "Discard"}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onCancel={() => setDiscardOpen(false)}
+        onConfirm={() => {
+          pendingSave.current = null;
+          setDiscardOpen(false);
+          setEditing(false);
+          setEditContent("");
+        }}
+      />
 
       <ConfirmDialog
         open={deleteOpen}

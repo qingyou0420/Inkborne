@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,8 +10,21 @@ import {
   reviewChapterDraft,
   reviseChapterDraft,
 } from "../authoring/stages/write.js";
-import { loadManifest, loadReport } from "../authoring/store.js";
+import { assembleAuthoringContext } from "../authoring/context.js";
+import { persistAdoptedChapter } from "../authoring/chapter-index.js";
+import { pickSettingsByMention } from "../authoring/serial-ledger.js";
+import { loadArtifact, loadManifest, loadReport, saveHandEditedArtifact, saveManifest, saveReport } from "../authoring/store.js";
+import { listChapterVersions, readChapterVersion } from "../state/chapter-workspace.js";
+import { withBookWriteLock } from "../authoring/book-lock.js";
+import { autosaveChapterBody } from "../authoring/chapter-index.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
+import {
+  ageInProcessBookLockForTest,
+  BookWriteLockError,
+  resetProcessBookLocksForTest,
+  setBookLockLivenessCheck,
+  StateManager,
+} from "../state/manager.js";
 
 function project() {
   return ProjectConfigSchema.parse({
@@ -165,5 +178,652 @@ describe("write stage", () => {
     expect(revisePrompt).toContain("MARK-OUTLINE-R7");
     expect(seen.filter((text) => text.includes("按选中意见"))).toHaveLength(1);
     expect(roles.filter((id) => id === "write.review")).toHaveLength(1);
+  });
+
+  it("keeps the book locked, writes the chapter set together, and records review status", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-lock-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "锁",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const ctx = {
+      root: { projectRoot: root, bookId: created.bookId },
+      project: project(),
+      llm: (async () => "# 第1章\n短。") as AuthoringLlmFn,
+    };
+    const draft = await generateChapterDraft({ ...ctx, chapterNumber: 1, title: "锁" });
+    expect(draft.lengthNote).toContain("3000");
+    const release = await new StateManager(root).acquireBookLock(created.bookId, { stage: "测试", taskId: "hold" }, { waitMs: 0 });
+    await expect(adoptChapterDraft({ ...ctx, artifactId: draft.artifactId })).rejects.toBeInstanceOf(BookWriteLockError);
+    await expect(adoptChapterDraft({ ...ctx, artifactId: draft.artifactId })).rejects.toMatchObject({ code: "BOOK_BUSY" });
+    await release();
+    const blocked = await reviewChapterDraft({
+      ...ctx,
+      artifactId: draft.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "必须改",
+        coverage: "chapter:1",
+        issues: [{ issueId: "p1", title: "人设崩了", severity: "priority", suggestion: "改回原来的脾气" }],
+      }),
+    });
+    const adopted = await adoptChapterDraft({
+      ...ctx,
+      artifactId: draft.artifactId,
+      llm: async (call) => {
+        const text = call.messages.map((message) => message.content).join("\n");
+        if (text.includes("整理人物状态")) {
+          return JSON.stringify({
+            summary: "他仍拿着残页。",
+            characters: [{ name: "沈砚", status: "拿着残页" }],
+            openHooks: [],
+            advanceHooks: [],
+            resolveHooks: [],
+          });
+        }
+        return "# 第1章\n短。";
+      },
+    });
+    expect(adopted.settled).toBe(true);
+    expect(adopted.lengthNote).toContain("3000");
+    const index = JSON.parse(await readFile(join(created.bookDir, "chapters", "index.json"), "utf-8")) as Array<{
+      status: string;
+      auditIssues: string[];
+    }>;
+    expect(index[0]?.status).toBe("ready-for-review");
+    expect(index[0]?.auditIssues.some((line) => line.startsWith("[critical] 审稿:"))).toBe(true);
+    expect(blocked.reportId).toBeTruthy();
+    const ledger = await readFile(join(created.bookDir, "story", "state", "serial-ledger.json"), "utf-8");
+    expect(ledger).toContain("拿着残页");
+    const manifest = await loadManifest(ctx.root);
+    expect(manifest.adopted.write["1"]).toBe(draft.artifactId);
+
+    await mkdir(join(created.bookDir, "chapters"), { recursive: true });
+    const before = await readFile(join(created.bookDir, "chapters", "0001_锁.md"), "utf-8");
+    await expect(persistAdoptedChapter({
+      bookDir: created.bookDir,
+      chapterNumber: 1,
+      title: "锁",
+      body: "NEW_BODY_SHOULD_NOT_LAND",
+      renameFile: async (from, to) => {
+        const normalized = from.replace(/\\/g, "/");
+        const staged = normalized.includes("/staged/") && to.replace(/\\/g, "/").endsWith("chapters/index.json");
+        if (staged) throw new Error("disk full");
+        await rename(from, to);
+      },
+    })).rejects.toThrow(/disk full/);
+    expect(await readFile(join(created.bookDir, "chapters", "0001_锁.md"), "utf-8")).toBe(before);
+    const restored = JSON.parse(await readFile(join(created.bookDir, "chapters", "index.json"), "utf-8")) as Array<{ status: string }>;
+    expect(restored[0]?.status).toBe("ready-for-review");
+  });
+
+  it("carries hooks and summaries forward, and prefers a mentioned setting over the front of a long catalog", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-memory-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港",
+        oneLine: "会计",
+        proposition: "MARK-ONCE",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const filler = Array.from({ length: 12 }, (_, index) => `### 条目${index}\n${"设定".repeat(400)}`).join("\n\n");
+    const settings = `${filler}\n\n### 夜港铁律\n魔法有代价。`;
+    expect(settings.length).toBeGreaterThan(8000);
+    expect(pickSettingsByMention(settings, { texts: ["这一章要写到夜港铁律"] })).toMatch(/^### 夜港铁律/);
+    await mkdir(join(created.bookDir, "story", "settings"), { recursive: true });
+    await writeFile(join(created.bookDir, "story", "settings", "index.json"), JSON.stringify({
+      categories: ["规则"],
+      entries: [{ id: "rule", category: "规则", name: "夜港铁律", file: "story/settings/rule.md", adoptedArtifactId: "g1" }],
+    }), "utf-8");
+    await writeFile(join(created.bookDir, "story", "settings", "rule.md"), settings, "utf-8");
+    await mkdir(join(created.bookDir, "story", "outline"), { recursive: true });
+    await writeFile(join(created.bookDir, "story", "outline", "volume_map.md"), "## 第 2 章 铁律\n\n写到夜港铁律。\n", "utf-8");
+    const prompts: string[] = [];
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      prompts.push(text);
+      if (text.includes("整理人物状态")) {
+        return JSON.stringify({
+          summary: "沈砚把玉佩藏进账本。",
+          characters: [{ name: "沈砚", status: "藏着玉佩" }],
+          openHooks: [{ id: "jade", label: "没有署名的玉佩", note: "第1章埋下" }],
+          advanceHooks: [],
+          resolveHooks: [],
+        });
+      }
+      if (text.includes("撰写第 2 章")) return "# 第2章\n铁律应验。";
+      return `# 第1章\nPREV_TAIL_UNIQUE 雨停了。`;
+    };
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
+    const first = await generateChapterDraft({ ...ctx, chapterNumber: 1, title: "雨" });
+    await adoptChapterDraft({ ...ctx, artifactId: first.artifactId });
+    await generateChapterDraft({ ...ctx, chapterNumber: 2, title: "铁律" });
+    const prompt = prompts.find((text) => text.includes("撰写第 2 章"));
+    expect(prompt).toBeTruthy();
+    expect(prompt!.match(/MARK-ONCE/g)).toHaveLength(1);
+    expect(prompt!.match(/【上一章结尾】/g)).toHaveLength(1);
+    expect(prompt!.match(/PREV_TAIL_UNIQUE/g)).toHaveLength(1);
+    expect(prompt).toContain("本章目标约 3000 字");
+    expect(prompt).toContain("夜港铁律");
+    expect(prompt).toContain("没有署名的玉佩");
+    expect(prompt).toContain("第 1 章埋下");
+
+    const chapters = Array.from({ length: 29 }, (_, index) => {
+      const chapter = index + 1;
+      return {
+        chapter,
+        artifactId: `art-${chapter}`,
+        title: `题${chapter}`,
+        summary: chapter === 5 ? "第五章埋下了没有署名的玉佩。" : `第${chapter}章平常。`,
+        characters: [],
+        openHooks: chapter === 5 ? [{ id: "jade-5", label: "没有署名的玉佩", note: "第5章埋下" }] : [],
+        advanceHookIds: [],
+        resolveHookIds: [],
+      };
+    });
+    await mkdir(join(created.bookDir, "story", "state"), { recursive: true });
+    await writeFile(join(created.bookDir, "story", "state", "serial-ledger.json"), JSON.stringify({
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      chapters,
+    }), "utf-8");
+    const manifest = await loadManifest(ctx.root);
+    await saveManifest(ctx.root, {
+      ...manifest,
+      adopted: {
+        ...manifest.adopted,
+        write: Object.fromEntries(chapters.map((chapter) => [String(chapter.chapter), chapter.artifactId])),
+      },
+    });
+    const chapter30 = await assembleAuthoringContext(ctx.root, { stage: "write", chapterNumber: 30 });
+    expect(chapter30.text).toContain("没有署名的玉佩（第 5 章埋下）");
+    expect(chapter30.text).toContain("第 25 章");
+    expect(chapter30.text).not.toContain("第1章平常");
+
+    await saveManifest(ctx.root, {
+      ...manifest,
+      adopted: { ...manifest.adopted, write: { "5": "someone-else" } },
+    });
+    await writeFile(join(created.bookDir, "story", "current_state.md"), "LEGACY_MARK 旧状态\n", "utf-8");
+    const stale = await assembleAuthoringContext(ctx.root, { stage: "write", chapterNumber: 30 });
+    expect(stale.text).not.toContain("没有署名的玉佩");
+    expect(stale.text).toContain("LEGACY_MARK");
+  });
+
+  it("reads the old state files when a book has no rolling ledger yet", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-legacy-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "旧书",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    await mkdir(join(created.bookDir, "story", "state"), { recursive: true });
+    await writeFile(join(created.bookDir, "story", "current_state.md"), "LEGACY_MARK 他在书院。\n", "utf-8");
+    await writeFile(join(created.bookDir, "story", "state", "hooks.json"), JSON.stringify({
+      hooks: [{
+        hookId: "旧玉佩",
+        startChapter: 5,
+        type: "伏笔",
+        status: "open",
+        lastAdvancedChapter: 5,
+        expectedPayoff: "没有署名的玉佩",
+        notes: "",
+      }],
+    }), "utf-8");
+    await writeFile(join(created.bookDir, "story", "state", "chapter_summaries.json"), JSON.stringify({
+      rows: [{
+        chapter: 5,
+        title: "书院",
+        characters: "",
+        events: "第五章埋下玉佩",
+        stateChanges: "",
+        hookActivity: "",
+        mood: "",
+        chapterType: "",
+      }],
+    }), "utf-8");
+    const text = await assembleAuthoringContext(
+      { projectRoot: root, bookId: created.bookId },
+      { stage: "write", chapterNumber: 30 },
+    );
+    expect(text.text).toContain("LEGACY_MARK");
+    expect(text.text).toContain("没有署名的玉佩");
+    expect(text.text).toContain("第五章埋下玉佩");
+  });
+
+  it("merges old-book memory by chapter number and skips a stale ledger chapter", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-merge-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "醉词",
+        oneLine: "旧书",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    await mkdir(join(created.bookDir, "story", "state"), { recursive: true });
+    await writeFile(join(created.bookDir, "story", "current_state.md"), "OLD_CAST 他还在书院。\n", "utf-8");
+    await writeFile(join(created.bookDir, "story", "state", "hooks.json"), JSON.stringify({
+      hooks: [{
+        hookId: "old-jade",
+        startChapter: 12,
+        type: "伏笔",
+        status: "open",
+        lastAdvancedChapter: 12,
+        expectedPayoff: "旧书伏笔玉佩",
+        notes: "",
+      }],
+    }), "utf-8");
+    await writeFile(join(created.bookDir, "story", "state", "serial-ledger.json"), JSON.stringify({
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      chapters: [
+        {
+          chapter: 10,
+          artifactId: "stale-alive",
+          title: "错章",
+          summary: "ALIVE_GONE 不该出现",
+          characters: [{ name: "错人", status: "ALIVE_GONE" }],
+          openHooks: [],
+          advanceHookIds: [],
+          resolveHookIds: [],
+        },
+        {
+          chapter: 260,
+          artifactId: "art-260",
+          title: "新章",
+          summary: "LEDGER_260 刚采用的一段。",
+          characters: [{ name: "沈砚", status: "刚出书院" }],
+          openHooks: [],
+          advanceHookIds: [],
+          resolveHookIds: [],
+        },
+      ],
+    }), "utf-8");
+    await saveManifest({ projectRoot: root, bookId: created.bookId }, {
+      ...(await loadManifest({ projectRoot: root, bookId: created.bookId })),
+      adopted: { ground: [], write: { "10": "someone-else", "260": "art-260" } },
+    });
+    const text = await assembleAuthoringContext(
+      { projectRoot: root, bookId: created.bookId },
+      { stage: "write", chapterNumber: 261 },
+    );
+    expect(text.text).toContain("OLD_CAST");
+    expect(text.text).toContain("旧书伏笔玉佩");
+    expect(text.text).toContain("LEDGER_260");
+    expect(text.text).toContain("刚出书院");
+    expect(text.text).not.toContain("ALIVE_GONE");
+  });
+
+  it("holds the authoring lock past 8 seconds when Studio liveness does not know the stage", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-lock-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "锁",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    setBookLockLivenessCheck(() => false);
+    try {
+      let entered = false;
+      await withBookWriteLock(store, "落笔", async () => {
+        expect(ageInProcessBookLockForTest(root, created.bookId, 9_000)).toBe(true);
+        await expect(withBookWriteLock(store, "审查本章", async () => {
+          entered = true;
+        })).rejects.toBeInstanceOf(BookWriteLockError);
+      });
+      expect(entered).toBe(false);
+    } finally {
+      resetProcessBookLocksForTest();
+    }
+  });
+
+  it("lets another save run while review is still waiting on the model", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-review-lock-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "审",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    const ctx = { root: store, project: project() };
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "雨",
+      llm: async () => "正文",
+    });
+    let releaseModel: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    let entered = false;
+    const llm: AuthoringLlmFn = async (call) => {
+      if (call.roleId !== "write.review") return "正文";
+      await withBookWriteLock(store, "保存手改", async () => {
+        entered = true;
+      });
+      await gate;
+      return JSON.stringify({
+        summary: "可以",
+        coverage: "chapter:1",
+        issues: [],
+      });
+    };
+    const pending = reviewChapterDraft({ ...ctx, artifactId: draft.artifactId, llm });
+    for (let attempt = 0; attempt < 50 && !entered; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(entered).toBe(true);
+    releaseModel();
+    await pending;
+  });
+
+  it("overwrites the same hand-edited candidate instead of minting a new version", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-hand-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "手改",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    const draft = await generateChapterDraft({
+      root: store,
+      project: project(),
+      chapterNumber: 4,
+      title: "夜",
+      llm: async () => "原稿",
+    });
+    const hand = await saveHandEditedArtifact(store, draft.artifactId, "手改一");
+    const again = await saveHandEditedArtifact(store, hand.artifactId, "手改二");
+    expect(again.artifactId).toBe(hand.artifactId);
+    expect(again.version).toBe(hand.version);
+    expect(hand.artifactId).not.toBe(draft.artifactId);
+    const loaded = await loadArtifact(store, hand.artifactId);
+    expect(loaded?.body).toContain("手改二");
+  });
+
+  it("stops adopt when an index entry cannot be parsed and leaves index.json untouched", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-index-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "目录",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const indexPath = join(created.bookDir, "chapters", "index.json");
+    await mkdir(join(created.bookDir, "chapters"), { recursive: true });
+    const broken = "[{\"number\":12,\"title\":\"坏条目\"}]\n";
+    await writeFile(indexPath, broken, "utf-8");
+    await expect(persistAdoptedChapter({
+      bookDir: created.bookDir,
+      chapterNumber: 12,
+      title: "坏条目",
+      body: "新正文",
+    })).rejects.toThrow(/没有改写 index.json/);
+    expect(await readFile(indexPath, "utf-8")).toBe(broken);
+  });
+
+  it("matches a parenthetical setting name instead of the first 8000 characters", () => {
+    const picked = pickSettingsByMention(
+      `### 铁律（代价）\n${"甲".repeat(80)}\n\n### 无关长文\n${"乙".repeat(9000)}`,
+      { texts: ["本章写到铁律"] },
+      400,
+    );
+    expect(picked).toContain("铁律（代价）");
+    expect(picked.includes("乙乙乙")).toBe(false);
+  });
+
+  it("keeps the original chapter recoverable after autosave and rolls later pauses into one file", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-autosave-"));
+    const bookDir = join(root, "books", "old");
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    await mkdir(join(bookDir, "story", "runtime"), { recursive: true });
+    await writeFile(join(bookDir, "story", "runtime", "chapter-0008.plan.md"), "不要清掉\n", "utf-8");
+    await writeFile(join(bookDir, "chapters", "0008_雨.md"), "旧正文\n", "utf-8");
+    await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify([{
+      number: 8,
+      title: "雨",
+      status: "approved",
+      wordCount: 3,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }], null, 2), "utf-8");
+    const started = new Date("2026-03-01T00:00:00.000Z");
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "第一次停笔",
+      fresh: true,
+      now: started,
+    });
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "第二次停笔",
+      now: new Date(started.getTime() + 5 * 60 * 1000),
+    });
+    const index = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as Array<{ status: string; auditIssues: string[] }>;
+    expect(index[0]?.status).toBe("approved");
+    expect(index[0]?.auditIssues ?? []).toEqual([]);
+    expect(await readFile(join(bookDir, "chapters", "0008_雨.md"), "utf-8")).toContain("第二次停笔");
+    expect(await readFile(join(bookDir, "story", "runtime", "chapter-0008.plan.md"), "utf-8")).toContain("不要清掉");
+    const versions = await listChapterVersions(bookDir, 8);
+    expect(versions.map((version) => version.source)).toEqual(["autosave", "manual"]);
+    const baseline = versions.find((version) => version.source === "manual");
+    expect(baseline).toBeTruthy();
+    expect(await readChapterVersion(bookDir, 8, baseline!.id)).toBe("旧正文\n");
+    const autosave = versions.find((version) => version.source === "autosave");
+    expect(await readChapterVersion(bookDir, 8, autosave!.id)).toContain("第二次停笔");
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "隔了一阵再改",
+      now: new Date(started.getTime() + 11 * 60 * 1000),
+    });
+    const later = await listChapterVersions(bookDir, 8);
+    expect(later.filter((version) => version.source === "autosave")).toHaveLength(2);
+    expect(await readChapterVersion(bookDir, 8, baseline!.id)).toBe("旧正文\n");
+    await autosaveChapterBody({
+      bookDir,
+      chapterNumber: 8,
+      content: "重新打开后再改",
+      fresh: true,
+      now: new Date(started.getTime() + 12 * 60 * 1000),
+    });
+    const reopened = await listChapterVersions(bookDir, 8);
+    expect(reopened.filter((version) => version.source === "autosave").length).toBeGreaterThan(2);
+    expect(await readChapterVersion(bookDir, 8, baseline!.id)).toBe("旧正文\n");
+  });
+
+  it("does not write the chapter when adopt is aborted", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-abort-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "中止",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    const draft = await generateChapterDraft({
+      root: store,
+      project: project(),
+      chapterNumber: 1,
+      title: "夜",
+      llm: async () => "不该落盘的正文",
+    });
+    await expect(adoptChapterDraft({
+      root: store,
+      project: project(),
+      artifactId: draft.artifactId,
+      llm: async () => {
+        await new StateManager(root).forceReleaseBookLock(created.bookId, { graceMs: 0 });
+        throw new Error("aborted");
+      },
+    })).rejects.toThrow("采用已中止，正文没有写入");
+    const files = await readdir(join(created.bookDir, "chapters")).catch(() => [] as string[]);
+    expect(files.some((file) => file.startsWith("0001") && file.endsWith(".md"))).toBe(false);
+  });
+
+  it("starts a new hand version after adopt and stale-marks the overwritten candidate report", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-hand-stale-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "手改过期",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const store = { projectRoot: root, bookId: created.bookId };
+    const draft = await generateChapterDraft({
+      root: store,
+      project: project(),
+      chapterNumber: 4,
+      title: "夜",
+      llm: async () => "原稿",
+    });
+    const hand = await saveHandEditedArtifact(store, draft.artifactId, "手改一");
+    await saveReport(store, {
+      reportId: "rep-hand",
+      stage: "write",
+      targetRefs: [hand.artifactId],
+      coverage: "chapter:4",
+      inputRefs: [],
+      actualReviewModel: "review-model",
+      createdAt: new Date().toISOString(),
+      summary: "先这样",
+      issues: [],
+      stale: false,
+    });
+    const again = await saveHandEditedArtifact(store, hand.artifactId, "手改二");
+    expect(again.artifactId).toBe(hand.artifactId);
+    expect((await loadReport(store, "rep-hand"))?.stale).toBe(true);
+    await adoptChapterDraft({
+      root: store,
+      project: project(),
+      artifactId: hand.artifactId,
+      llm: async () => JSON.stringify({ summary: "采用了", characters: [], openHooks: [], advanceHooks: [], resolveHooks: [] }),
+    });
+    const afterAdopt = await saveHandEditedArtifact(store, hand.artifactId, "采用后再改");
+    expect(afterAdopt.artifactId).not.toBe(hand.artifactId);
+    expect(afterAdopt.status).toBe("candidate");
+  });
+
+  it("picks a role file by its name when there is no settings catalog", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-roles-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "角色",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    await mkdir(join(created.bookDir, "story", "roles", "主要角色"), { recursive: true });
+    await mkdir(join(created.bookDir, "story", "outline"), { recursive: true });
+    await writeFile(join(created.bookDir, "story", "roles", "主要角色", "路人.md"), `${"乙".repeat(9000)}\n`, "utf-8");
+    await writeFile(join(created.bookDir, "story", "roles", "主要角色", "沈砚.md"), "MARK_ROLE 他带着玉佩。\n", "utf-8");
+    await writeFile(join(created.bookDir, "story", "outline", "volume_map.md"), "第 1 章写沈砚。\n", "utf-8");
+    const prompts: string[] = [];
+    await generateChapterDraft({
+      root: { projectRoot: root, bookId: created.bookId },
+      project: project(),
+      chapterNumber: 1,
+      title: "夜",
+      llm: async (call) => {
+        prompts.push(call.messages.map((message) => message.content).join("\n"));
+        return "正文";
+      },
+    });
+    expect(prompts.join("\n")).toContain("MARK_ROLE");
   });
 });

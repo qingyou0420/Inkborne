@@ -14,6 +14,7 @@ import {
   BookWriteLockError,
   BOOK_LOCK_INTERACTIVE_WAIT_MS,
   formatBookWriteLockCopy,
+  readAuthoringOpenHooks,
   isBookWriteLockMessage,
   setBookLockLivenessCheck,
   PipelineRunner,
@@ -97,7 +98,8 @@ import {
   fillMissingAuthoringRoles,
   loadRoleApiKeys,
   resolveAuthoringRole,
-  bindRestoredChapter,
+  bindRestoredChapterUnlocked,
+  autosaveChapterBody,
   type ActionPayload,
   type ActionSource,
   type AgentSkill,
@@ -170,6 +172,7 @@ import {
   normalizePlatformOrOther,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
+import { isWriteNextRequest } from "../lib/write-next-request.js";
 import {
   advanceShortFictionStages,
   shortFictionToolStages,
@@ -1403,6 +1406,7 @@ async function executeConfirmedProductionAction(args: {
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
     tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
       language: lang,
+      redirectNewChapters: true,
       workerSkills: (worker) => worker === "writer" ? productionSkills("longWriting") : [],
     });
     agent = "writer";
@@ -3632,7 +3636,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const relativePath = chapterFile?.replace(/\\/g, "/");
       const index = await state.loadChapterIndex(id);
       const title = index.find((item) => item.number === num)?.title;
-      await bindRestoredChapter({
+      await bindRestoredChapterUnlocked({
         root: { projectRoot: root, bookId: id },
         chapterNumber: num,
         title,
@@ -3641,7 +3645,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       return c.json({ ok: true, chapterNumber: num, versionId: c.req.param("versionId"), result });
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      if (e instanceof BookWriteLockError) {
+        return c.json({
+          error: {
+            code: "BOOK_BUSY",
+            message: formatBookWriteLockCopy(e, "zh"),
+            owner: e.owner,
+          },
+        }, 409);
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      const zh = /[\u4e00-\u9fff]/.test(message)
+        ? message
+        : "恢复这个版本没有成功。正文可能已经回到旧稿，候选稿没有换过去。请再试一次。";
+      return c.json({ error: zh }, 500);
     } finally {
       await releaseLock();
     }
@@ -3667,7 +3684,37 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.put("/api/v1/books/:id/chapters/:num", async (c) => {
     const id = c.req.param("id");
     const num = parseInt(c.req.param("num"), 10);
-    const { content } = await c.req.json<{ content: string }>();
+    const payload = await c.req.json<{ content?: string; autosave?: boolean; fresh?: boolean }>();
+    const content = payload.content ?? "";
+
+    if (payload.autosave) {
+      const releaseLock = await state.acquireBookLock(id);
+      try {
+        const saved = await autosaveChapterBody({
+          bookDir: state.bookDir(id),
+          chapterNumber: num,
+          content,
+          fresh: payload.fresh === true,
+        });
+        return c.json({ ok: true, chapterNumber: num, autosave: true, wordCount: saved.wordCount });
+      } catch (e) {
+        if (e instanceof BookWriteLockError) {
+          return c.json({
+            error: {
+              code: "BOOK_BUSY",
+              message: formatBookWriteLockCopy(e, "zh"),
+              owner: e.owner,
+            },
+          }, 409);
+        }
+        const message = e instanceof Error ? e.message : String(e);
+        return c.json({
+          error: /[\u4e00-\u9fff]/.test(message) ? message : "自动保存没有成功。",
+        }, 500);
+      } finally {
+        await releaseLock();
+      }
+    }
 
     const releaseLock = await state.acquireBookLock(id);
     try {
@@ -4092,11 +4139,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const markdown = await readFile(join(state.bookDir(id), "story", "pending_hooks.md"), "utf-8").catch(() => "");
       hooks = parsePendingHooksMarkdown(markdown);
     }
+    const authoringHooks = await readAuthoringOpenHooks(root, id).catch(() => []);
+    const seen = new Set(hooks.map((hook) => hook.hookId));
+    for (const hook of authoringHooks) {
+      if (seen.has(hook.hookId)) continue;
+      seen.add(hook.hookId);
+      hooks.push(hook);
+    }
     const due = selectDueHooks(hooks, chapterNumber).map((hook) => ({
       ...hook,
       dueState: classifyHookDue(hook, chapterNumber),
     }));
-    return c.json({ chapterNumber, hooks: due });
+    const dueIds = new Set(due.map((hook) => hook.hookId));
+    const openHooks = authoringHooks
+      .filter((hook) => !dueIds.has(hook.hookId))
+      .map((hook) => ({
+        hookId: hook.hookId,
+        label: hook.label,
+        startChapter: hook.startChapter,
+        targetChapter: hook.targetChapter,
+        status: hook.status,
+      }));
+    return c.json({ chapterNumber, hooks: due, openHooks });
   });
 
   app.get("/api/v1/books/:id/truth-proposals", async (c) => {
@@ -5611,6 +5675,22 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const surfaceLanguage = agentBookId
         ? (bookLanguage ?? configLanguage)
         : (requestedLanguage ?? inferLanguage(instruction));
+      if (
+        agentBookId
+        && sessionKind === "book"
+        && (
+          requestedIntent === "write_next"
+          || (isWriteNextRequest(instruction) && !isConfirmedProductionAction(actionSource, requestedIntent))
+        )
+      ) {
+        return c.json({
+          response: surfaceLanguage === "en"
+            ? "The next chapter is written in 落笔."
+            : "下一章请到落笔里写。",
+          navigate: "write",
+          bookId: agentBookId,
+        });
+      }
       const streamSessionId = loadedBookSession.sessionId;
       const titleBeforeRun = bookSession.title;
       let sessionTitleBroadcasted = false;
@@ -5999,6 +6079,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           sessionKind,
           playMode,
           actionSource,
+          redirectNewChapters: sessionKind === "book",
           requestedIntent,
           actionPayload,
           requestedSkills,

@@ -209,7 +209,7 @@ async function readError(res: Response): Promise<StudioApiError> {
 export async function fetchJson<T>(
   path: string,
   init: RequestInit = {},
-  deps?: { readonly fetchImpl?: typeof fetch },
+  deps?: { readonly fetchImpl?: typeof fetch; readonly silentBookBusy?: boolean },
 ): Promise<T> {
   const url = buildApiUrl(path);
   if (!url) {
@@ -222,7 +222,7 @@ export async function fetchJson<T>(
 
   if (!res.ok) {
     const error = await readError(res);
-    if (error.code === "BOOK_BUSY") emitBookBusy(error);
+    if (error.code === "BOOK_BUSY" && !deps?.silentBookBusy) emitBookBusy(error);
     if (method === "DELETE" && (res.status === 404 || error.code === "NOT_FOUND")) {
       invalidateApiPaths(deriveInvalidationPaths(path));
     }
@@ -308,22 +308,58 @@ export function useApi<T>(path: string) {
   return { data, loading, error, refetch, mutate: setData };
 }
 
-export async function postApi<T>(path: string, body?: unknown): Promise<T> {
+export async function postApi<T>(path: string, body?: unknown, options?: { silentBookBusy?: boolean }): Promise<T> {
   const result = await fetchJson<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }, options);
   invalidateApiPaths(deriveInvalidationPaths(path));
   return result;
 }
 
-export async function putApi<T>(path: string, body?: unknown): Promise<T> {
+export async function putApi<T>(path: string, body?: unknown, options?: { silentBookBusy?: boolean }): Promise<T> {
   const result = await fetchJson<T>(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }, options);
   invalidateApiPaths(deriveInvalidationPaths(path));
   return result;
+}
+
+function isBookBusyError(error: unknown): boolean {
+  return error instanceof StudioApiError && (error.code === "BOOK_BUSY" || error.status === 409);
+}
+
+/** Autosave retries a busy book without raising the global lock card. */
+export async function retryingBookBusy<T>(fn: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      last = error;
+      if (!isBookBusyError(error) || attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+    }
+  }
+  throw last;
+}
+
+export async function putChapterAutosave(
+  bookId: string,
+  chapterNumber: number,
+  content: string,
+  options?: { readonly fresh?: boolean },
+): Promise<void> {
+  await retryingBookBusy(() => fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content,
+      autosave: true,
+      ...(options?.fresh ? { fresh: true } : {}),
+    }),
+  }, { silentBookBusy: true }));
 }

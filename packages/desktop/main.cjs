@@ -53,6 +53,72 @@ let engineHandle = emptyEngineHandle();
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 let quitting = false;
+let allowClose = false;
+let quitDeciding = false;
+
+// Covers the autosave busy-retry budget (350+700+1050ms) plus the requests themselves.
+const UNSAVED_CHECK_TIMEOUT_MS = 3000;
+
+function withTimeout(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+async function pageHasUnsavedEdits() {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return false;
+  const script = `(async () => {
+    try {
+      if (window.__inkborneFlushUnsavedEdits) await window.__inkborneFlushUnsavedEdits();
+    } catch (error) {}
+    return Boolean(window.__inkborneHasUnsavedEdits && window.__inkborneHasUnsavedEdits());
+  })()`;
+  try {
+    const value = await withTimeout(
+      win.webContents.executeJavaScript(script, true),
+      UNSAVED_CHECK_TIMEOUT_MS,
+      true,
+    );
+    return value === true;
+  } catch {
+    return true;
+  }
+}
+
+function askLeaveWithUnsaved() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const choice = dialog.showMessageBoxSync(parent, {
+    type: "warning",
+    buttons: ["留下", "仍要离开"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: "还有没保存的修改",
+    message: "编辑框里还有没存好的文字。",
+    detail: "关窗前会先试着存下来。留下可以继续写。仍要离开的话，没存上的修改会丢掉。",
+  });
+  return choice === 1;
+}
 let instanceToken = "";
 let projectRoot = "";
 let enginePort = 0;
@@ -420,6 +486,15 @@ function createWindow(targetUrl) {
         ? "Studio 页可访问 window.fantaWriter.checkUpdate"
         : "Studio 页没有 fantaWriter 桥；请用菜单「帮助 → 检查更新」打开独立更新窗");
     }).catch(() => undefined);
+  });
+  mainWindow.on("close", (event) => {
+    if (allowClose || quitting) return;
+    event.preventDefault();
+    void (async () => {
+      if (await pageHasUnsavedEdits() && !askLeaveWithUnsaved()) return;
+      allowClose = true;
+      mainWindow?.close();
+    })();
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -1059,8 +1134,21 @@ if (!gotLock) {
   app.on("before-quit", (event) => {
     if (quitting) return;
     event.preventDefault();
-    quitting = true;
-    stopEngine({ graceful: true }).finally(() => app.quit());
+    if (quitDeciding) return;
+    quitDeciding = true;
+    void (async () => {
+      try {
+        if (!allowClose && await pageHasUnsavedEdits() && !askLeaveWithUnsaved()) {
+          quitDeciding = false;
+          return;
+        }
+        allowClose = true;
+        quitting = true;
+        await stopEngine({ graceful: true });
+      } finally {
+        if (quitting) app.quit();
+      }
+    })();
   });
   app.on("window-all-closed", () => {
     quitting = true;

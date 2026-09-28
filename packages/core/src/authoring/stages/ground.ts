@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeFileAtomic } from "../../utils/atomic-write.js";
+import { withBookWriteLock } from "../book-lock.js";
 import { assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from "../context.js";
 import { asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
@@ -284,6 +285,12 @@ export async function reviewGroundEntries(input: GroundRuntime & {
 export async function adoptGroundEntries(input: GroundRuntime & {
   readonly entryIds: readonly string[];
 }): Promise<{ adopted: string[] }> {
+  return withBookWriteLock(input.root, "采用设定", () => adoptGroundEntriesInner(input));
+}
+
+async function adoptGroundEntriesInner(input: GroundRuntime & {
+  readonly entryIds: readonly string[];
+}): Promise<{ adopted: string[] }> {
   if (!input.root.bookId) throw new Error("研墨采用需要已建的书。");
   const catalog = await loadSettingsCatalog(input.root);
   const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
@@ -294,8 +301,7 @@ export async function adoptGroundEntries(input: GroundRuntime & {
     const loaded = await loadArtifact(input.root, entry.candidateArtifactId);
     if (!loaded) continue;
     const dest = join(bookDir, entry.file);
-    await mkdir(dirname(dest), { recursive: true });
-    await writeFile(dest, loaded.body.endsWith("\n") ? loaded.body : `${loaded.body}\n`, "utf-8");
+    await writeFileAtomic(dest, loaded.body.endsWith("\n") ? loaded.body : `${loaded.body}\n`);
     await saveArtifact(input.root, { ...loaded.meta, status: "adopted" }, loaded.body);
     entry.adoptedArtifactId = entry.candidateArtifactId;
     adopted.push(id);

@@ -7,7 +7,8 @@ export type ChapterVersionSource =
   | "agent"
   | "revision"
   | "regeneration"
-  | "restore";
+  | "restore"
+  | "autosave";
 
 export interface ChapterVersion {
   readonly id: string;
@@ -17,7 +18,7 @@ export interface ChapterVersion {
   readonly characterCount: number;
 }
 
-const VERSION_ID_PATTERN = /^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$/;
+const VERSION_ID_PATTERN = /^(\d{13})_(manual|agent|revision|regeneration|restore|autosave)_([0-9a-f-]{36})$/;
 
 export async function readChapterUserBrief(
   bookDir: string,
@@ -77,6 +78,54 @@ export async function archiveChapterVersion(
     createdAt: now.toISOString(),
     characterCount: content.length,
   };
+}
+
+/** Rolling autosaves share one file until this window closes or a new edit session starts. */
+export const AUTOSAVE_MERGE_MS = 10 * 60 * 1000;
+
+/**
+ * Keep the on-disk chapter recoverable, then store the new text as a rolling autosave.
+ * The first save (or any save whose disk text differs from the newest version) archives
+ * the disk bytes as a manual baseline before touching the autosave file.
+ */
+export async function storeAutosaveVersion(
+  bookDir: string,
+  chapterNumber: number,
+  content: string,
+  now = new Date(),
+  options?: { readonly fresh?: boolean; readonly diskContent?: string },
+): Promise<ChapterVersion> {
+  assertChapterNumber(chapterNumber);
+  const versions = await listChapterVersions(bookDir, chapterNumber);
+  const latest = versions[0];
+  let archivedBaseline = false;
+  if (options?.diskContent !== undefined) {
+    const latestBody = latest
+      ? await readChapterVersion(bookDir, chapterNumber, latest.id).catch(() => undefined)
+      : undefined;
+    if (latestBody !== options.diskContent) {
+      await archiveChapterVersion(
+        bookDir,
+        chapterNumber,
+        options.diskContent,
+        "manual",
+        new Date(now.getTime() - 1),
+      );
+      archivedBaseline = true;
+    }
+  }
+  const current = (await listChapterVersions(bookDir, chapterNumber))[0];
+  const age = current ? now.getTime() - Date.parse(current.createdAt) : Number.POSITIVE_INFINITY;
+  const canMerge = !archivedBaseline
+    && options?.fresh !== true
+    && current?.source === "autosave"
+    && age >= 0
+    && age <= AUTOSAVE_MERGE_MS;
+  if (canMerge && current) {
+    await writeFile(join(versionsDir(bookDir, chapterNumber), `${current.id}.md`), content, "utf-8");
+    return { ...current, characterCount: content.length };
+  }
+  return archiveChapterVersion(bookDir, chapterNumber, content, "autosave", now);
 }
 
 export async function listChapterVersions(

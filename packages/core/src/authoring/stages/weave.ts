@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { writeFileAtomic } from "../../utils/atomic-write.js";
+import { withBookWriteLock } from "../book-lock.js";
 import {
   applyVolumeMapNodeEdit,
   findExactChapterNode,
@@ -418,12 +420,12 @@ async function persistWeaveCandidate(input: {
     runId: input.runId,
     label: `规划 ${input.start}-${input.end}`,
   }, markdown);
-  await writeFile(join(authoringRootDir(input.root), "artifacts", artifactId, "beats.json"), `${JSON.stringify({
+  await writeFileAtomic(join(authoringRootDir(input.root), "artifacts", artifactId, "beats.json"), `${JSON.stringify({
     beats: input.beats,
     volumes: assembled.volumes,
     bookOutline: assembled.preamble,
     leadingNotes: input.leadingNotes ?? "",
-  }, null, 2)}\n`, "utf-8");
+  }, null, 2)}\n`);
   const generatedCount = input.beats.filter((beat) => beat.summary && beat.summary !== "（待补概要）").length;
   const manifest = await loadManifest(input.root);
   await saveManifest(input.root, {
@@ -733,12 +735,15 @@ export async function reviewWeave(input: WeaveRuntime & {
 }
 
 export async function adoptWeave(input: WeaveRuntime & { readonly artifactId: string }): Promise<void> {
+  return withBookWriteLock(input.root, "采用规划", () => adoptWeaveInner(input));
+}
+
+async function adoptWeaveInner(input: WeaveRuntime & { readonly artifactId: string }): Promise<void> {
   if (!input.root.bookId) throw new Error("织卷采用需要已建的书。");
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到可采用的规划。");
   const dest = join(input.root.projectRoot, "books", input.root.bookId, "story", "outline", "volume_map.md");
-  await mkdir(dirname(dest), { recursive: true });
-  await writeFile(dest, loaded.body.endsWith("\n") ? loaded.body : `${loaded.body}\n`, "utf-8");
+  await writeFileAtomic(dest, loaded.body.endsWith("\n") ? loaded.body : `${loaded.body}\n`);
   await saveArtifact(input.root, { ...loaded.meta, status: "adopted" }, loaded.body);
   const beats = beatsFromOutline(loaded.body);
   const manifest = await loadManifest(input.root);

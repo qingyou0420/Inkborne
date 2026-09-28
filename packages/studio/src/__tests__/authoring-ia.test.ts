@@ -8,6 +8,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
+import { isWriteNextRequest } from "../lib/write-next-request";
 
 const studioRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -55,6 +57,11 @@ describe("authoring four-agent IA", () => {
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/write-candidate-body/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/loading && !data/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/parentArtifactId/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/baseBody/);
+    expect(read("src/api/authoring-routes.ts")).toMatch(/parentArtifactId/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/基于当前手改改写/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/另起一稿/);
+    expect(read("src/lib/unsaved-edits.ts")).toMatch(/__inkborneHasUnsavedEdits/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/authoring\/write\/hand/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/authoring\/write\/select/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/key=\{`\$\{bookId\}:\$\{writeChapter \?\? data\.nextChapter\}`\}/);
@@ -71,5 +78,28 @@ describe("authoring four-agent IA", () => {
     expect(read("src/pages/BookStudy.tsx")).toMatch(/authoring\/workspace/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/api\/v1\/authoring\/ground\/revise/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/\/api\/v1\/authoring\/weave\/revise/);
+  });
+
+  it("sends a chapter hand edit to the chapter that was open when it was typed", () => {
+    const pending = trackChapterEdit("zui-ci", 12, "新的一段", "旧的一段");
+    const viewChapter = 13;
+    expect(pending).not.toBeNull();
+    const request = chapterEditRequest(pending!);
+    expect(request.chapterNumber).toBe(12);
+    expect(request.chapterNumber).not.toBe(viewChapter);
+    expect(request.content).toBe("新的一段");
+    expect(request.autosave).toBe(true);
+    expect(trackChapterEdit("zui-ci", 12, "旧的一段", "旧的一段")).toBeNull();
+  });
+
+  it("treats a bare 写下一章 as a request to open 落笔", () => {
+    expect(isWriteNextRequest("写下一章")).toBe(true);
+    expect(isWriteNextRequest("写下一章。")).toBe(true);
+    expect(isWriteNextRequest("请写下一章")).toBe(true);
+    expect(isWriteNextRequest("帮我看看下一章的伏笔")).toBe(false);
+    expect(read("src/pages/ChatPage.tsx")).toMatch(/isWriteNextRequest/);
+    expect(read("src/pages/DaemonControl.tsx")).toMatch(/审稿方式/);
+    expect(read("src/components/SerialCockpitStrip.tsx")).not.toMatch(/startWriteNext/);
+    expect(read("src/components/SerialCockpitStrip.tsx")).not.toMatch(/startDraft/);
   });
 });

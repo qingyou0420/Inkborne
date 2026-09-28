@@ -447,9 +447,9 @@ describe("buildAgentSystemPrompt", () => {
 
     it("steers chapter rewrite to reviser instead of writer", () => {
       const prompt = buildAgentSystemPrompt("my-book", "zh", "book");
-      expect(prompt).toContain("续写新的下一章用 writer");
+      expect(prompt).toContain("续写新的下一章不要调用 writer");
       expect(prompt).toContain("修改、重写或重修已有章节用 reviser");
-      expect(prompt).toContain("三者不可互换");
+      expect(prompt).toContain("下一章请到落笔里写");
       expect(prompt).toContain("只重建状态/摘要/伏笔或重新审稿时，用 resync_chapter_state");
       expect(prompt).toContain("allowNewHooks=false");
     });

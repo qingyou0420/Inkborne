@@ -71,12 +71,14 @@ import {
   toggleSelectedSkillIds,
   type StudioSkill,
 } from "./skill-ui-state";
+import { isWriteNextRequest } from "../lib/write-next-request";
 
 // -- Types --
 
 interface Nav {
   toDashboard: () => void;
   toBook: (id: string) => void;
+  toWrite?: (id: string) => void;
   toServices: () => void;
   toFilm: (projectId: string) => void;
   toFilmStudio: (projectId: string) => void;
@@ -683,6 +685,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       if (chatStreaming || loading) await abortSession(activeSessionId);
       return;
     }
+    if (activeBookId && nav.toWrite && isWriteNextRequest(text) && attachedFiles.length === 0) {
+      nav.toWrite(activeBookId);
+      showToast(isZh ? "下一章请到落笔里写。" : "The next chapter opens in 落笔.", "info");
+      return;
+    }
     const requestedSkills = selectedSkillIdsForSend(selectedSkillIds);
     autoScrollPinnedRef.current = true;
     const attachments = await serializeChatAttachments(attachedFiles);
@@ -720,7 +727,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     }
   };
 
-  const handleQuickAction = (command: string, requestedIntent?: "write_next") => {
+  const handleQuickAction = (command: string, requestedIntent?: "write_next" | "open_write") => {
+    if (requestedIntent === "open_write") {
+      if (activeBookId && nav.toWrite) nav.toWrite(activeBookId);
+      return;
+    }
     if (!activeSessionId) return;
     autoScrollPinnedRef.current = true;
     void sendMessage(activeSessionId, command, {
@@ -734,6 +745,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const handleProposedAction = async (details: ProposedActionDetails) => {
     // Lock the proposal card so the production action can't be re-fired.
     markProposalResolved(details.execId, "confirmed");
+    if (details.action === "write_next" && activeBookId && nav.toWrite) {
+      nav.toWrite(activeBookId);
+      return;
+    }
     const targetPlayMode = details.targetSessionKind === "play"
       ? details.actionPayload?.playStart?.mode ?? activeSession?.playMode ?? (details.action === "play_start" ? "open" : undefined)
       : undefined;

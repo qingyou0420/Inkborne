@@ -4,29 +4,40 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useEffect, useRef, useState } from "react";
-import { postApi, putApi, useApi } from "../hooks/use-api";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
+import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
+import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { showToast } from "../lib/toast";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { currentWriteArtifact, reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
 import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
 
-export function AuthoringWritePanel({
-  bookId,
-  chapterNumber,
-  chapterTitle,
-  isZh,
-  onChanged,
-}: {
+const AUTOSAVE_MS = 1500;
+
+export interface AuthoringWritePanelHandle {
+  flush: () => Promise<void>;
+}
+
+export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   readonly bookId: string;
   readonly chapterNumber: number;
   readonly chapterTitle?: string;
   readonly isZh: boolean;
+  readonly generateNonce?: number;
+  readonly onBusyChange?: (busy: boolean) => void;
   readonly onChanged?: () => void;
-}) {
+}>(function AuthoringWritePanel({
+  bookId,
+  chapterNumber,
+  chapterTitle,
+  isZh,
+  generateNonce = 0,
+  onBusyChange,
+  onChanged,
+}, ref) {
   const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
-  const scope = `chapter:${chapterNumber}`;
   const candidate = currentWriteArtifact(data, chapterNumber);
   const adoptedId = data?.manifest?.adopted?.write?.[String(chapterNumber)];
   const parentId = candidate?.parentArtifactId && candidate.parentArtifactId !== candidate.artifactId
@@ -38,8 +49,20 @@ export function AuthoringWritePanel({
   const [diffOpen, setDiffOpen] = useState(false);
   const [requirement, setRequirement] = useState("");
   const [body, setBody] = useState("");
+  const [lengthNote, setLengthNote] = useState("");
+  const [generateChoice, setGenerateChoice] = useState(false);
   const dirtyRef = useRef(false);
+  const pendingEditRef = useRef<ReturnType<typeof trackChapterEdit>>(null);
+  const inflightRef = useRef<Promise<string | undefined> | null>(null);
+  const bodyRef = useRef("");
   const lastLoadedId = useRef<string>("");
+  const timerRef = useRef<number | null>(null);
+  const seenGenerate = useRef(generateNonce);
+  const candidateRef = useRef(candidate);
+  const chapterTitleRef = useRef(chapterTitle);
+  bodyRef.current = body;
+  candidateRef.current = candidate;
+  chapterTitleRef.current = chapterTitle;
   const artifactUrl = candidate
     ? `/authoring/artifacts/${encodeURIComponent(candidate.artifactId)}?bookId=${encodeURIComponent(bookId)}`
     : "";
@@ -53,28 +76,22 @@ export function AuthoringWritePanel({
   const savedBody = artifactForCurrent?.body ?? (!candidate ? chapterForCurrent?.content ?? "" : "");
 
   useEffect(() => {
-    dirtyRef.current = false;
-    lastLoadedId.current = "";
-    setBody("");
-    setReport(null);
-    setReportOpen(false);
-    setDiffOpen(false);
-    setRequirement("");
-  }, [bookId, chapterNumber]);
+    onBusyChange?.(Boolean(busy));
+  }, [busy, onBusyChange]);
+
+  useEffect(() => registerUnsavedCheck(() => dirtyRef.current || pendingEditRef.current !== null), []);
 
   useEffect(() => {
     const loadKey = candidate?.artifactId ?? `empty:${bookId}:${chapterNumber}`;
-    if (dirtyRef.current && lastLoadedId.current === loadKey) return;
+    if (dirtyRef.current) return;
     if (candidate) {
       if (artifactForCurrent?.body == null) return;
       setBody(artifactForCurrent.body);
-      dirtyRef.current = false;
       lastLoadedId.current = loadKey;
       return;
     }
     if (chapterForCurrent?.content) {
       setBody(chapterForCurrent.content);
-      dirtyRef.current = false;
       lastLoadedId.current = loadKey;
       return;
     }
@@ -84,24 +101,103 @@ export function AuthoringWritePanel({
     }
   }, [artifactForCurrent?.body, bookId, candidate, chapterForCurrent?.content, chapterNumber]);
 
-  const persistIfDirty = async (): Promise<string | undefined> => {
-    if (!dirtyRef.current) return candidate?.artifactId;
-    if (candidate) {
-      const saved = await putApi<{ artifactId?: string }>(`/authoring/artifacts/${candidate.artifactId}`, { bookId, body });
-      dirtyRef.current = false;
+  const persistSnapshot = async (
+    pending: NonNullable<ReturnType<typeof trackChapterEdit>>,
+  ): Promise<string | undefined> => {
+    const target = chapterEditRequest(pending);
+    if (target.artifactId) {
+      const saved = await retryingBookBusy(() => putApi<{ artifactId?: string }>(
+        `/authoring/artifacts/${target.artifactId}`,
+        { bookId: target.bookId, body: target.content },
+        { silentBookBusy: true },
+      ));
       await refetch();
-      return saved.artifactId ?? candidate.artifactId;
+      return saved.artifactId ?? target.artifactId;
     }
-    const saved = await postApi<{ artifactId: string }>("/authoring/write/hand", {
-      bookId,
-      chapterNumber,
-      title: chapterTitle,
-      body,
-    });
-    dirtyRef.current = false;
+    if (!target.content.trim()) return undefined;
+    const saved = await retryingBookBusy(() => postApi<{ artifactId: string }>("/authoring/write/hand", {
+      bookId: target.bookId,
+      chapterNumber: target.chapterNumber,
+      title: chapterTitleRef.current,
+      body: target.content,
+    }, { silentBookBusy: true }));
     await refetch();
     return saved.artifactId;
   };
+
+  const persistIfDirty = async (): Promise<string | undefined> => {
+    const previous = inflightRef.current;
+    if (previous) await previous.catch(() => undefined);
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const pending = pendingEditRef.current;
+    if (!pending) return candidateRef.current?.artifactId;
+    pendingEditRef.current = null;
+    dirtyRef.current = false;
+    const sourceArtifactId = pending.artifactId;
+    const holder: { current?: Promise<string | undefined> } = {};
+    holder.current = (async () => {
+      try {
+        const savedId = await persistSnapshot(pending);
+        const newer = pendingEditRef.current;
+        if (
+          savedId
+          && newer
+          && newer.bookId === pending.bookId
+          && newer.chapterNumber === pending.chapterNumber
+          && newer.artifactId === sourceArtifactId
+        ) {
+          pendingEditRef.current = { ...newer, artifactId: savedId };
+        }
+        return savedId;
+      } catch (error) {
+        if (!pendingEditRef.current) {
+          pendingEditRef.current = pending;
+          dirtyRef.current = true;
+        }
+        throw error;
+      } finally {
+        if (inflightRef.current === holder.current) inflightRef.current = null;
+      }
+    })();
+    inflightRef.current = holder.current;
+    return holder.current;
+  };
+
+  const persistRef = useRef(persistIfDirty);
+  persistRef.current = persistIfDirty;
+  useEffect(() => registerUnsavedFlush(() => persistRef.current().then(() => undefined)), []);
+  useImperativeHandle(ref, () => ({
+    flush: async () => {
+      await persistRef.current();
+    },
+  }), []);
+
+  useEffect(() => {
+    if (!dirtyRef.current) return;
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      void persistIfDirty().catch((error) => {
+        const busy = error instanceof Error && /BOOK_BUSY|正在写|写入被占用/.test(error.message);
+        if (busy) return;
+        showToast(error instanceof Error ? error.message : String(error), "error");
+      });
+    }, AUTOSAVE_MS);
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [body]);
+
+  useEffect(() => {
+    return () => {
+      void persistRef.current();
+    };
+  }, [bookId, chapterNumber]);
 
   const run = async (label: string, fn: () => Promise<unknown>, notifyParent = false) => {
     setBusy(label);
@@ -118,6 +214,46 @@ export function AuthoringWritePanel({
     }
   };
 
+  const startGenerate = (mode: "hand" | "fresh") => {
+    setGenerateChoice(false);
+    void run("generate", async () => {
+      const snapshot = bodyRef.current;
+      const hand = mode === "hand";
+      const parentArtifactId = await persistIfDirty();
+      const result = await postApi<{ lengthNote?: string; message?: string }>("/authoring/write/generate", {
+        bookId,
+        chapterNumber,
+        title: chapterTitle,
+        requirements: requirement || undefined,
+        ...(hand && snapshot.trim() ? { baseBody: snapshot } : {}),
+        ...(parentArtifactId ? { parentArtifactId } : {}),
+      });
+      setLengthNote(result.lengthNote ?? "");
+      if (result.lengthNote) showToast(result.lengthNote, "info");
+      if (bodyRef.current === snapshot) {
+        dirtyRef.current = false;
+        pendingEditRef.current = null;
+      }
+      return result;
+    }, true);
+  };
+
+  const requestGenerate = () => {
+    const handEdited = dirtyRef.current || candidate?.source === "hand" || (body.trim() !== "" && body !== savedBody);
+    if (handEdited) {
+      setGenerateChoice(true);
+      return;
+    }
+    startGenerate("fresh");
+  };
+
+  useEffect(() => {
+    if (generateNonce === seenGenerate.current) return;
+    seenGenerate.current = generateNonce;
+    requestGenerate();
+  }, [generateNonce]);
+
+  const editorLocked = busy === "generate" || busy === "revise";
   const leftId = parentId && parentId !== candidate?.artifactId ? parentId : undefined;
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
   const activeReport = report ?? workspaceReport;
@@ -144,12 +280,35 @@ export function AuthoringWritePanel({
         className="min-h-[220px] w-full rounded-md border border-border bg-background px-3 py-2 font-serif text-sm leading-6"
         placeholder={isZh ? "候选正文会出现在这里，可直接修改。" : "Candidate text appears here and can be edited."}
         value={body}
+        disabled={editorLocked}
         onChange={(event) => {
-          dirtyRef.current = true;
-          setBody(event.target.value);
+          const next = event.target.value;
+          pendingEditRef.current = trackChapterEdit(bookId, chapterNumber, next, savedBody, candidate?.artifactId);
+          dirtyRef.current = pendingEditRef.current !== null;
+          setBody(next);
         }}
         data-testid="write-candidate-body"
       />
+      <p className="text-xs text-muted-foreground">
+        {isZh ? "停笔一会儿会自动保存手改。换章或离开前也会先存下来。" : "Edits save automatically after a short pause, and before you leave."}
+      </p>
+      {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
+      {generateChoice ? (
+        <div className="space-y-2 rounded-xl border border-border bg-background px-3 py-3" data-testid="write-generate-choice">
+          <p className="text-sm">{isZh ? "这一章有手改。要基于手改继续写，还是另起一稿？" : "This chapter has hand edits. Rewrite from them, or start a fresh draft?"}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground" onClick={() => startGenerate("hand")}>
+              {isZh ? "基于当前手改改写" : "Rewrite from edits"}
+            </button>
+            <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={() => startGenerate("fresh")}>
+              {isZh ? "另起一稿" : "Start fresh"}
+            </button>
+            <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={() => setGenerateChoice(false)}>
+              {isZh ? "取消" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       <button
         type="button"
         className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
@@ -162,6 +321,7 @@ export function AuthoringWritePanel({
         className="min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
         placeholder={isZh ? "本章要求、重点场景、保持的文风（可选）" : "Optional chapter notes"}
         value={requirement}
+        disabled={editorLocked}
         onChange={(event) => setRequirement(event.target.value)}
       />
       <div className="flex flex-wrap gap-2">
@@ -169,12 +329,8 @@ export function AuthoringWritePanel({
           type="button"
           className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
           disabled={Boolean(busy)}
-          onClick={() => void run("generate", () => postApi("/authoring/write/generate", {
-            bookId,
-            chapterNumber,
-            title: chapterTitle,
-            requirements: requirement || undefined,
-          }), true)}
+          onClick={requestGenerate}
+          data-testid="write-generate"
         >
           {busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "开始写本章" : "Write this chapter")}
         </button>
@@ -224,10 +380,14 @@ export function AuthoringWritePanel({
           disabled={(!candidate && !body.trim()) || Boolean(busy)}
           onClick={() => void run("adopt", async () => {
             const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-            const result = await postApi<{ message?: string; settled?: boolean }>("/authoring/write/adopt", {
+            const result = await postApi<{ message?: string; settled?: boolean; lengthNote?: string }>("/authoring/write/adopt", {
               bookId,
               artifactId,
             });
+            if (result.lengthNote) {
+              setLengthNote(result.lengthNote);
+              showToast(result.lengthNote, "info");
+            }
             showToast(result.message ?? (isZh ? "章节已采用" : "Chapter adopted"), result.settled === false ? "info" : "success");
             return result;
           }, true)}
@@ -279,6 +439,7 @@ export function AuthoringWritePanel({
               artifactId: leftId,
             });
             dirtyRef.current = false;
+            pendingEditRef.current = null;
             setDiffOpen(false);
           });
         }}
@@ -292,4 +453,4 @@ export function AuthoringWritePanel({
       />
     </section>
   );
-}
+});

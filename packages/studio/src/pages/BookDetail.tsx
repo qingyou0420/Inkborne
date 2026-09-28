@@ -1,7 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useEffect, useMemo, useState } from "react";
-import { SerialCockpitStrip, startDraft, startWriteNext } from "../components/SerialCockpitStrip";
-import { AuthoringWritePanel } from "../components/AuthoringWritePanel";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
+import { AuthoringWritePanel, type AuthoringWritePanelHandle } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
@@ -116,7 +116,9 @@ export function BookDetail({
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
-  const [reviewMode, setReviewMode] = useState<"auto" | "manual">("auto");
+  const [generateNonce, setGenerateNonce] = useState(0);
+  const [panelBusy, setPanelBusy] = useState(false);
+  const writePanelRef = useRef<AuthoringWritePanelHandle>(null);
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<{ ok: boolean; reasons: Array<{ code?: string; message?: string; messageZh?: string; chapterNumber?: number }> } | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<{
@@ -134,11 +136,6 @@ export function BookDetail({
   const [overrideValue, setOverrideValue] = useState("");
   const [writeChapter, setWriteChapter] = useState<number | null>(null);
 
-  useEffect(() => {
-    void fetchJson<{ mode?: string }>(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`)
-      .then((r) => setReviewMode(r.mode === "manual" ? "manual" : "auto"))
-      .catch(() => undefined);
-  }, [bookId]);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const drafting = draftRequestPending || activity.drafting;
@@ -178,38 +175,9 @@ export function BookDetail({
       .catch(() => setReviewQueue([]));
   }, [bookId, skipPreviousApproval, data?.nextChapter, activity.lastError]);
 
-  const handleWriteNext = async () => {
-    setWriteRequestPending(true);
-    try {
-      await startWriteNext(bookId, skipPreviousApproval);
-    } catch (e) {
-      setWriteRequestPending(false);
-      setActionMessage(e instanceof Error ? e.message : "Failed");
-    }
-  };
-
-  const handleDraft = async () => {
-    setDraftRequestPending(true);
-    try {
-      await startDraft(bookId, skipPreviousApproval);
-    } catch (e) {
-      setDraftRequestPending(false);
-      setActionMessage(e instanceof Error ? e.message : "Failed");
-    }
-  };
-
-  const handleToggleReviewMode = async () => {
-    const next = reviewMode === "manual" ? "auto" : "manual";
-    setReviewMode(next);
-    try {
-      await fetchJson(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: next }),
-      });
-    } catch {
-      setReviewMode(reviewMode);
-    }
+  const selectWriteChapter = async (chapterNumber: number) => {
+    await writePanelRef.current?.flush();
+    setWriteChapter(chapterNumber);
   };
 
   const runRewrite = async (chapterNum: number, brief: string) => {
@@ -392,7 +360,6 @@ export function BookDetail({
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
   const reviewCount = chapters.filter((ch) => ch.status === "ready-for-review").length;
 
-  const preflightOk = preflight?.ok !== false;
   const showSkip = hasPreviousChapterUnapprovedReason(preflight?.reasons ?? []);
   const isZh = book.language !== "en";
   const emptyCopy = writeEmptyCopy({
@@ -463,38 +430,28 @@ export function BookDetail({
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
-          <div className="inline-flex overflow-hidden rounded-[10px] bg-primary text-primary-foreground">
-            <button
-              type="button"
-              onClick={handleWriteNext}
-              disabled={writing || drafting || !preflightOk}
-              className="inline-flex h-10 items-center gap-2 px-5 text-[14px] font-medium disabled:opacity-40"
-              data-testid="write-next-primary"
-            >
-              {writing ? <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Feather size={16} />}
-              {writing ? t("dash.writing") : t("cockpit.writeNext")}
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger className="border-l border-primary-foreground/20 px-2">
-                <ChevronDown size={14} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => void handleDraft()}>{t("book.draftOnly")}</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void handleToggleReviewMode()}>
-                  {reviewMode === "manual" ? t("book.reviewManual") : t("book.reviewAuto")}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <button
+            type="button"
+            onClick={() => setGenerateNonce((value) => value + 1)}
+            disabled={writing || drafting || panelBusy}
+            className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-primary px-5 text-[14px] font-medium text-primary-foreground disabled:opacity-40"
+            data-testid="write-next-primary"
+          >
+            {writing || panelBusy ? <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Feather size={16} />}
+            {writing || panelBusy ? t("dash.writing") : (isZh ? "落笔 · 写下一章" : "落笔 · Write next")}
+          </button>
         </div>
       </div>
 
       <AuthoringWritePanel
+        ref={writePanelRef}
         key={`${bookId}:${writeChapter ?? data.nextChapter}`}
         bookId={bookId}
         chapterNumber={writeChapter ?? data.nextChapter}
         chapterTitle={data.chapters.find((item) => item.number === (writeChapter ?? data.nextChapter))?.title}
         isZh={isZh}
+        generateNonce={generateNonce}
+        onBusyChange={setPanelBusy}
         onChanged={() => refetch()}
       />
 
@@ -608,7 +565,7 @@ export function BookDetail({
                       <button
                         type="button"
                         className="btn-ghost h-8 px-2 text-[13px]"
-                        onClick={() => setWriteChapter(ch.number)}
+                        onClick={() => void selectWriteChapter(ch.number)}
                       >
                         {isZh ? "打磨" : "Polish"}
                       </button>

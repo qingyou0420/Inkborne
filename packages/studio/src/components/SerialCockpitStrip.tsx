@@ -1,4 +1,4 @@
-import { fetchJson, postApi } from "../hooks/use-api";
+import { fetchJson } from "../hooks/use-api";
 import { useEffect, useState } from "react";
 import { stripEngineTokens } from "../lib/copy-map";
 import { findChapterNode, parseVolumeMapTree } from "../lib/volume-map-tree";
@@ -23,6 +23,7 @@ export interface DueHook {
   readonly dueState?: string;
   readonly targetChapter?: number;
   readonly status?: string;
+  readonly label?: string;
 }
 
 export function SerialCockpitStrip({
@@ -44,6 +45,7 @@ export function SerialCockpitStrip({
 }) {
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<DueHook>>([]);
+  const [openHooks, setOpenHooks] = useState<ReadonlyArray<DueHook>>([]);
   const [volumeMap, setVolumeMap] = useState("");
 
   useEffect(() => {
@@ -51,9 +53,15 @@ export function SerialCockpitStrip({
     void fetchJson<WritePreflightEvaluation>(`/books/${bookId}/write-preflight${query}`)
       .then(setPreflight)
       .catch(() => setPreflight(null));
-    void fetchJson<{ hooks?: DueHook[] }>(`/books/${bookId}/hooks/due`)
-      .then((body) => setHooks(body.hooks ?? []))
-      .catch(() => setHooks([]));
+    void fetchJson<{ hooks?: DueHook[]; openHooks?: DueHook[] }>(`/books/${bookId}/hooks/due`)
+      .then((body) => {
+        setHooks(body.hooks ?? []);
+        setOpenHooks(body.openHooks ?? []);
+      })
+      .catch(() => {
+        setHooks([]);
+        setOpenHooks([]);
+      });
     void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
       .then((body) => setVolumeMap(body.content ?? ""))
       .catch(() => setVolumeMap(""));
@@ -93,7 +101,13 @@ export function SerialCockpitStrip({
       {hooks.length > 0 && (
         <div className="text-[13px] text-mark-text">
           {isZh ? "到期/逾期伏笔：" : "Due/overdue hooks: "}
-          {hooks.map((hook) => `${stripEngineTokens(hook.hookId)}${hook.dueState === "overdue" ? (isZh ? "（逾期）" : " (overdue)") : ""}`).join(" · ")}
+          {hooks.map((hook) => `${stripEngineTokens(hook.label || hook.hookId)}${hook.dueState === "overdue" ? (isZh ? "（逾期）" : " (overdue)") : ""}`).join(" · ")}
+        </div>
+      )}
+      {openHooks.length > 0 && (
+        <div className="text-[13px] text-mark-text" data-testid="open-hooks-line">
+          {isZh ? "待收伏笔：" : "Open threads: "}
+          {openHooks.map((hook) => stripEngineTokens(hook.label || hook.hookId)).join(" · ")}
         </div>
       )}
       {blocked && (
@@ -122,10 +136,3 @@ export function SerialCockpitStrip({
   );
 }
 
-export async function startWriteNext(bookId: string, skipPreviousApproval: boolean): Promise<void> {
-  await postApi(`/books/${bookId}/write-next`, { skipPreviousApproval });
-}
-
-export async function startDraft(bookId: string, skipPreviousApproval: boolean): Promise<void> {
-  await postApi(`/books/${bookId}/draft`, { skipPreviousApproval });
-}

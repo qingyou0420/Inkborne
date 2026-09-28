@@ -111,6 +111,8 @@ export interface AgentSessionConfig {
   actionSource?: ActionSource;
   /** Explicit user-confirmed action requested by the UI/command surface. */
   requestedIntent?: RequestedIntent;
+  /** Book chat must not start the old writer pipeline. Studio sets this for 落笔. */
+  redirectNewChapters?: boolean;
   /** Structured execution arguments confirmed by the UI/command surface. */
   actionPayload?: ActionPayload;
   /** User/UI-forced Agent Skills for this turn, e.g. @open-world-play. */
@@ -806,6 +808,7 @@ type CreateAgentToolsForModeParams = {
   readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
   readonly workerSkills?: (agent: string) => ReadonlyArray<ActivatedSkillGuidance>;
   readonly productionSkills?: (capability: ProductionSkillCapability) => ReadonlyArray<ActivatedSkillGuidance>;
+  readonly redirectNewChapters?: boolean;
 };
 
 function createAgentToolsForMode(params: CreateAgentToolsForModeParams) {
@@ -826,6 +829,7 @@ function createModeTools(params: CreateAgentToolsForModeParams) {
     language: lang,
     activeSkills: params.activeSkills,
     workerSkills: params.workerSkills,
+    redirectNewChapters: params.redirectNewChapters,
   });
   const proposalTool = createProposeActionTool(lang, {
     sameSession: params.sessionKind !== "chat",
@@ -1218,6 +1222,7 @@ async function runAgentSessionUnlocked(
         return [];
       },
       productionSkills,
+      redirectNewChapters: config.redirectNewChapters === true && sessionKind === "book",
     });
     const agent = new Agent({
       initialState: {

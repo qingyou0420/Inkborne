@@ -1,4 +1,4 @@
-import { useApi, postApi } from "../hooks/use-api";
+import { useApi, postApi, putApi } from "../hooks/use-api";
 import { useEffect, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import { useI18n, type TFunction } from "../hooks/use-i18n";
@@ -15,6 +15,7 @@ export function DaemonControl({ nav: _nav, theme: _theme, t, sse }: { nav: Nav; 
   const { lang } = useI18n();
   const isZh = lang !== "en";
   const { data, refetch } = useApi<{ running: boolean }>("/daemon");
+  const { data: reviewMode, refetch: refetchReviewMode } = useApi<{ mode: "auto" | "manual" }>("/project/chapter-review-mode");
   const { data: booksData } = useApi<{ books: ReadonlyArray<{ id: string; title: string }> }>("/books");
   const [loading, setLoading] = useState(false);
 
@@ -56,11 +57,49 @@ export function DaemonControl({ nav: _nav, theme: _theme, t, sse }: { nav: Nav; 
   };
 
   const isRunning = data?.running ?? false;
+  const reviewIsManual = reviewMode?.mode === "manual";
+  const setReviewMode = async (mode: "auto" | "manual") => {
+    try {
+      await putApi("/project/chapter-review-mode", { mode });
+      await refetchReviewMode();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "审稿方式没有改成", "error");
+    }
+  };
 
   return (
     <div className="space-y-8">
       <div className="flex items-baseline justify-between">
-        <h1 className="font-serif text-[32px] font-medium leading-10">{t("daemon.title")}</h1>
+        <div>
+          <h1 className="font-serif text-[32px] font-medium leading-10">{t("daemon.title")}</h1>
+          <p className="mt-2 max-w-xl text-[15px] leading-[26px] text-muted-foreground">
+            {isZh
+              ? "自动模式会自己按顺序往下写。平时写下一章，请回书房用落笔。自动模式记下的人物和伏笔，落笔写后面的章时会按章号补进来。已经用落笔采用的章，以落笔账本为准。"
+              : "Auto mode writes the next chapters on its own. For a chapter you are writing now, go back to 落笔. Hooks and character notes from auto mode are merged by chapter number when 落笔 continues. Chapters adopted in 落笔 keep the 落笔 ledger."}
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm" data-testid="chapter-review-mode">
+            <span className="text-muted-foreground">{isZh ? "审稿方式" : "Review"}</span>
+            <button
+              type="button"
+              className={`rounded-lg border px-3 py-1.5 ${reviewIsManual ? "border-border" : "border-primary bg-primary text-primary-foreground"}`}
+              onClick={() => void setReviewMode("auto")}
+            >
+              {isZh ? "自动" : "Auto"}
+            </button>
+            <button
+              type="button"
+              className={`rounded-lg border px-3 py-1.5 ${reviewIsManual ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}
+              onClick={() => void setReviewMode("manual")}
+            >
+              {isZh ? "人工" : "Manual"}
+            </button>
+            <span className="text-muted-foreground">
+              {isZh
+                ? "自动：写完按审稿结果继续。人工：写完停下来等你看。"
+                : "Auto continues after review. Manual stops when the chapter is drafted."}
+            </span>
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           <span className={`text-[13px] font-medium ${isRunning ? "text-foreground" : "text-muted-foreground"}`}>
             {isRunning ? t("daemon.running") : t("daemon.stopped")}

@@ -571,8 +571,8 @@ function buildBookPrompt(bookId: string, isZh: boolean): string {
 
 ## 动作边界
 
-- 续写新的下一章用 writer；修改、重写或重修已有章节用 reviser；审查已有章节用 auditor。三者不可互换。
-- 连续写多章只启动一次 writer 并传入章数，不要重复或并发启动。
+- 续写新的下一章不要调用 writer，也不要走旧的写章流水线。直接告诉用户：下一章请到落笔里写。
+- 修改、重写或重修已有章节用 reviser；审查已有章节用 auditor。不要用它们代替落笔去写新章。
 - 章节生产必须落盘：不要在聊天正文里输出章节来冒充完成。sub_agent 成功后结束本轮，完成态只以成功工具结果为准。
 - 用户给出明确旧文本和新文本时可做局部 patch；用户给出完整替换稿时可整章 replace；需要模型生成整章修改时必须走 reviser。
 - 用户明确要求保留最新章节正文、只重建状态/摘要/伏笔或重新审稿时，用 resync_chapter_state；不要再调用 reviser 改写正文。
@@ -593,8 +593,8 @@ ${commonOutputRules(true)}`
 
 ## Action Boundary
 
-- Use writer only to append the next chapter, reviser to change or rewrite an existing chapter, and auditor to review an existing chapter. Never substitute one for another.
-- Start writer once for a multi-chapter request and pass the count; never repeat or parallelize it.
+- Do not call writer to append a new chapter, and do not start the old chapter pipeline. Tell the user the next chapter is written in 落笔.
+- Use reviser to change or rewrite an existing chapter, and auditor to review an existing chapter. Do not use them to write a new chapter.
 - Chapter production must be persisted. Do not emit chapter prose in chat as if it were saved. End the turn after sub_agent succeeds, and derive completion only from a successful tool result.
 - Use a local patch only when the user supplies an exact old/new edit, and whole replacement only when the user supplies the complete replacement. Model-generated whole-chapter changes must use reviser.
 - When the user explicitly wants the latest chapter prose preserved and only asks to rebuild state, summaries, hooks, or re-audit it, use resync_chapter_state instead of reviser.
