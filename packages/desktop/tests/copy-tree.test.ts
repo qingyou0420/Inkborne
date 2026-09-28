@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("copyTree dereference", () => {
-  it("follows a directory symlink and copies file contents", () => {
+  it("follows a directory symlink and copies file contents", (ctx) => {
     const root = mkdtempSync(join(tmpdir(), "fw-copy-"));
     temps.push(root);
     const store = join(root, "store", "pkg");
@@ -26,7 +26,13 @@ describe("copyTree dereference", () => {
     writeFileSync(join(store, "index.js"), "export const n = 1\n");
     const src = join(root, "src");
     mkdirSync(join(src, "node_modules"), { recursive: true });
-    symlinkSync(store, join(src, "node_modules", "pkg"));
+    try {
+      symlinkSync(store, join(src, "node_modules", "pkg"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "ENOTSUP") ctx.skip();
+      throw error;
+    }
     const dest = join(root, "dest");
     copyTree(src, dest);
     expect(readFileSync(join(dest, "node_modules", "pkg", "index.js"), "utf8")).toContain("export const n");
