@@ -155,7 +155,7 @@ export function BookWorkspaceNav({
             </DropdownMenuItem>
             {nav.toTruth && (
               <DropdownMenuItem onClick={() => nav.toTruth?.(bookId)}>
-                {isZh ? "真相文件" : "Truth files"}
+                {isZh ? "设定档案" : "Story files"}
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>

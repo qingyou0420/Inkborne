@@ -3,6 +3,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { fetchJson, useApi } from "../hooks/use-api";
+import { actionErrorText, isActionError } from "../lib/error-copy";
 import { Download, FileText, Loader2, Play, Upload } from "lucide-react";
 
 interface Nav { toDashboard: () => void }
@@ -157,7 +158,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
         setDetail(nextDetail);
         setPreviewChapterNumber(nextDetail.chapters?.[0]?.number ?? nextDetail.manifest.chapters[0]?.number ?? null);
       })
-      .catch((err) => setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => setStatus(actionErrorText(err)))
       .finally(() => setDetailLoading(false));
   }, [selected?.projectId]);
 
@@ -181,7 +182,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       if (!title.trim()) setTitle(file.name.replace(/\.[^.]+$/u, ""));
       setStatus(isZh ? `已上传：${res.storedPath}` : `Uploaded: ${res.storedPath}`);
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus(actionErrorText(err));
     } finally {
       setBusy("");
     }
@@ -207,7 +208,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       setStatus(isZh ? `已创建翻译项目：${res.title}` : `Created translation project: ${res.title}`);
       await refetch();
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus(actionErrorText(err));
     } finally {
       setBusy("");
     }
@@ -231,7 +232,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       setDetail(updated);
       setPreviewChapterNumber(updated.chapters?.[0]?.number ?? updated.manifest.chapters[0]?.number ?? null);
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus(actionErrorText(err));
     } finally {
       setBusy("");
     }
@@ -249,7 +250,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       });
       setStatus(isZh ? `已导出 ${format}: ${res.outputPath}` : `Exported ${format}: ${res.outputPath}`);
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus(actionErrorText(err));
     } finally {
       setBusy("");
     }
@@ -457,7 +458,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       </div>
 
       {status && (
-        <div className={`rounded-xl px-4 py-3 text-sm ${status.startsWith("Error:") ? "bg-destructive/10 text-destructive" : "bg-ok/15 text-foreground"}`}>
+        <div className={`rounded-xl px-4 py-3 text-sm ${isActionError(status) ? "bg-destructive/10 text-destructive" : "bg-ok/15 text-foreground"}`}>
           {status}
         </div>
       )}

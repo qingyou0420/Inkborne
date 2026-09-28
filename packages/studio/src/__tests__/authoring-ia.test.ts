@@ -33,6 +33,12 @@ describe("authoring four-agent IA", () => {
     expect(routes).toMatch(/\/api\/v1\/authoring\/roles\/:roleId\/test/);
     expect(routes).toMatch(/saveHandEditedArtifact/);
     expect(settings).toMatch(/AuthoringRolesPanel/);
+    expect(settings).toMatch(/高级：八个角色/);
+    expect(read("src/pages/ServiceListPage.tsx")).toMatch(/SimpleModelSettings/);
+    expect(read("src/components/BookWorkspaceNav.tsx")).toMatch(/设定档案/);
+    expect(read("src/components/BookBusyCard.tsx")).toMatch(/这本书正在被写入/);
+    expect(read("src/components/BookBusyCard.tsx")).toMatch(/等它写完/);
+    expect(read("src/components/BookBusyCard.tsx")).toMatch(/强制放开/);
   });
 
   it("keeps 问心 chat from writing the project default model", () => {

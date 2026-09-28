@@ -8,6 +8,7 @@ import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
+import { isExcludedFromProjectArchive } from "../lib/archive-exclude.js";
 import { randomUUID } from "node:crypto";
 import {
   StateManager,
@@ -47,6 +48,10 @@ import {
   resolveServiceModel,
   loadSecrets,
   saveSecrets,
+  maskApiKey,
+  describeSecretsLocation,
+  listInProcessBookLocks,
+  atomicWritesInFlight,
   listModelsForService,
   isApiKeyOptionalForEndpoint,
   getAllEndpoints,
@@ -391,8 +396,8 @@ async function listArchiveFiles(dir: string, prefix = ""): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
-    if (entry.name === ".DS_Store") continue;
     const relativePath = prefix ? join(prefix, entry.name) : entry.name;
+    if (isExcludedFromProjectArchive(relativePath)) continue;
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...await listArchiveFiles(fullPath, relativePath));
@@ -440,6 +445,21 @@ function writeTarOctal(header: Buffer, offset: number, length: number, value: nu
   const text = value.toString(8).padStart(length - 1, "0").slice(-(length - 1));
   header.write(text, offset, length - 1, "ascii");
   header[offset + length - 1] = 0;
+}
+
+function publicSecretView(apiKey: string | undefined, reveal: boolean): {
+  configured: boolean;
+  last4: string;
+  apiKey: string;
+  locationHint: string;
+} {
+  const masked = maskApiKey(apiKey);
+  return {
+    configured: masked.configured,
+    last4: masked.last4,
+    apiKey: reveal ? (apiKey?.trim() ?? "") : "",
+    locationHint: describeSecretsLocation().hint,
+  };
 }
 
 function isHeaderSafeApiKey(value: string): boolean {
@@ -2863,6 +2883,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     });
   });
 
+  app.get("/api/v1/engine/write-status", (c) => {
+    const locks = listInProcessBookLocks(root).map((lock) => ({
+      bookId: lock.bookId,
+      stage: lock.stage ?? "",
+      heldMs: lock.heldMs,
+    }));
+    const atomicWrites = atomicWritesInFlight();
+    return c.json({
+      locks,
+      atomicWrites,
+      busy: locks.length > 0 || atomicWrites > 0,
+    });
+  });
+
   app.post("/api/v1/engine/shutdown", async (c) => {
     for (const controller of activeConfirmedTasks.values()) {
       try {
@@ -4677,7 +4711,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "Unsupported cover service" }, 400);
     }
     const secrets = await loadSecrets(root);
-    return c.json({ apiKey: secrets.services[coverSecretKey(service)]?.apiKey ?? "" });
+    return c.json(publicSecretView(secrets.services[coverSecretKey(service)]?.apiKey, c.req.query("reveal") === "1"));
   });
 
   app.put("/api/v1/cover/secret/:service", async (c) => {
@@ -4754,7 +4788,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       provider: resolveServiceProviderFamily(baseService) ?? "openai",
       baseUrl: resolvedBaseUrl,
     });
-    if (!apiKey?.trim() && !apiKeyOptional) {
+    let resolvedKey = apiKey?.trim() ?? "";
+    if (!resolvedKey) {
+      const secrets = await loadSecrets(root);
+      resolvedKey = secrets.services[service]?.apiKey?.trim() ?? "";
+    }
+    if (!resolvedKey && !apiKeyOptional) {
       return c.json({
         ok: false,
         error: pick(language, "API Key 不能为空", "API Key must not be empty"),
@@ -4766,7 +4805,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const probe = await probeServiceCapabilities({
       root,
       service,
-      apiKey: apiKey?.trim() ?? "",
+      apiKey: resolvedKey,
       baseUrl: resolvedBaseUrl,
       preferredApiFormat: apiFormat,
       preferredStream: stream,
@@ -4835,9 +4874,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/services/:service/secret", async (c) => {
     const service = c.req.param("service");
     const secrets = await loadSecrets(root);
-    return c.json({
-      apiKey: secrets.services[service]?.apiKey ?? "",
-    });
+    return c.json(publicSecretView(secrets.services[service]?.apiKey, c.req.query("reveal") === "1"));
   });
 
   app.get("/api/v1/services/models", async (c) => {

@@ -49,6 +49,9 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
 
   // -- Local form state --
   const [apiKey, setApiKey] = useState("");
+  const [keyConfigured, setKeyConfigured] = useState(false);
+  const [keyLast4, setKeyLast4] = useState("");
+  const [keyHint, setKeyHint] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [customName, setCustomName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -104,6 +107,9 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       .then((result) => {
         if (cancelled) return;
         setApiKey(result.apiKey);
+        setKeyConfigured(result.configured);
+        setKeyLast4(result.last4);
+        setKeyHint(result.locationHint);
         setDetectedModel(result.detectedModel);
         setDetectedConfig(result.detectedConfig);
         setStatus(result.status);
@@ -142,7 +148,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   // -- Handlers --
   const handleTest = async () => {
     const trimmedKey = apiKey.trim();
-    if (!trimmedKey && !isCustom && !apiKeyOptional) {
+    if (!trimmedKey && !isCustom && !apiKeyOptional && !keyConfigured) {
       setStatus({ state: "error", message: tr("请先输入 API Key", "Enter an API key first") });
       return;
     }
@@ -222,6 +228,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         apiKeyOptional,
         resolvedCustomName,
         apiKey: trimmedKey,
+        preserveStoredSecret: keyConfigured && !trimmedKey,
         baseUrl,
         apiFormat,
         stream,
@@ -307,14 +314,27 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           <div className="relative">
             <input
               type={showKey ? "text" : "password"} value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)} placeholder={apiKeyOptional ? tr("本地服务可留空", "Optional for local service") : "sk-..."}
+              onChange={(e) => setApiKey(e.target.value)} placeholder={keyConfigured ? tr(`已保存，末四位 ${keyLast4 || "····"}`, `Saved, last 4 ${keyLast4 || "····"}`) : (apiKeyOptional ? tr("本地服务可留空", "Optional for local service") : "sk-...")}
               className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
             />
-            <button type="button" onClick={() => setShowKey((v) => !v)}
+            <button type="button" onClick={() => {
+              if (!showKey && !apiKey && keyConfigured) {
+                void fetchJson<{ apiKey?: string; last4?: string }>(`/services/${encodeURIComponent(effectiveServiceId)}/secret?reveal=1`)
+                  .then((secret) => {
+                    setApiKey(secret.apiKey ?? "");
+                    if (secret.last4) setKeyLast4(secret.last4);
+                    setShowKey(true);
+                  })
+                  .catch(() => setShowKey(true));
+                return;
+              }
+              setShowKey((v) => !v);
+            }}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors">
               {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
+          {keyHint ? <p className="text-[11px] leading-5 text-muted-foreground/70">{keyHint}</p> : null}
         </Field>
 
         {/* Actions + feedback */}

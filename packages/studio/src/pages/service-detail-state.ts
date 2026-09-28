@@ -89,18 +89,25 @@ export async function rehydrateServiceConnectionStatus(args: {
   readonly fetchJsonImpl?: JsonFetcher;
 }): Promise<{
   readonly apiKey: string;
+  readonly configured: boolean;
+  readonly last4: string;
+  readonly locationHint: string;
   readonly status: ServiceDetailConnectionStatus;
   readonly detectedModel: string;
   readonly detectedConfig: ServiceDetailDetectedConfig | null;
 }> {
   const fetchJsonImpl = args.fetchJsonImpl ?? fetchJson;
-  const secret = await fetchJsonImpl<{ apiKey?: string }>(
+  const secret = await fetchJsonImpl<{ apiKey?: string; configured?: boolean; last4?: string; locationHint?: string }>(
     `/services/${encodeURIComponent(args.effectiveServiceId)}/secret`,
   );
   const apiKey = String(secret.apiKey ?? "");
+  const configured = secret.configured === true || apiKey.length > 0;
 
   return {
     apiKey,
+    configured,
+    last4: String(secret.last4 ?? (apiKey ? apiKey.slice(-4) : "")),
+    locationHint: String(secret.locationHint ?? ""),
     status: { state: "idle" },
     detectedModel: "",
     detectedConfig: null,
@@ -128,6 +135,7 @@ export async function saveServiceConfig(args: {
   readonly apiKeyOptional?: boolean;
   readonly resolvedCustomName: string;
   readonly apiKey: string;
+  readonly preserveStoredSecret?: boolean;
   readonly baseUrl: string;
   readonly apiFormat: "chat" | "responses";
   readonly stream: boolean;
@@ -145,7 +153,7 @@ export async function saveServiceConfig(args: {
   const trimmedKey = args.apiKey.trim();
   const trimmedBaseUrl = args.baseUrl.trim();
 
-  if (!trimmedKey && !args.isCustom && !args.apiKeyOptional) {
+  if (!trimmedKey && !args.isCustom && !args.apiKeyOptional && !args.preserveStoredSecret) {
     return {
       status: { state: "error", message: "请先输入 API Key" },
       detectedModel: "",
@@ -210,11 +218,13 @@ export async function saveServiceConfig(args: {
   const savedStream = typeof detectedConfig?.stream === "boolean" ? detectedConfig.stream : args.stream;
   const savedBaseUrl = args.isCustom ? (detectedConfig?.baseUrl ?? trimmedBaseUrl) : undefined;
 
-  await fetchJsonImpl(`/services/${encodeURIComponent(args.effectiveServiceId)}/secret`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey: trimmedKey }),
-  });
+  if (trimmedKey || !args.preserveStoredSecret) {
+    await fetchJsonImpl(`/services/${encodeURIComponent(args.effectiveServiceId)}/secret`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: trimmedKey }),
+    });
+  }
 
   await fetchJsonImpl("/services/config", {
     method: "PUT",

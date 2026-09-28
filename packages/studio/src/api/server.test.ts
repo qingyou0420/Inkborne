@@ -438,6 +438,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     isApiKeyOptionalForEndpoint: actual.isApiKeyOptionalForEndpoint,
     loadSecrets: loadSecretsMock,
     saveSecrets: saveSecretsMock,
+    maskApiKey: actual.maskApiKey,
+    describeSecretsLocation: actual.describeSecretsLocation,
+    listInProcessBookLocks: actual.listInProcessBookLocks,
+    atomicWritesInFlight: actual.atomicWritesInFlight,
     getServiceApiKey: getServiceApiKeyMock,
     listModelsForService: listModelsForServiceMock,
     getAllEndpoints: getAllEndpointsMock,
@@ -2444,7 +2448,19 @@ describe("createStudioServer daemon lifecycle", () => {
 
     const response = await app.request("http://localhost/api/v1/services/moonshot/secret");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ apiKey: "sk-moon" });
+    await expect(response.json()).resolves.toEqual({
+      configured: true,
+      last4: "moon",
+      apiKey: "",
+      locationHint: expect.any(String),
+    });
+    const revealed = await app.request("http://localhost/api/v1/services/moonshot/secret?reveal=1");
+    expect(revealed.status).toBe(200);
+    await expect(revealed.json()).resolves.toMatchObject({
+      configured: true,
+      last4: "moon",
+      apiKey: "sk-moon",
+    });
   });
 
   it("rejects non-header-safe service secrets instead of persisting diagnostic text", async () => {

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { BOOK_BUSY_EVENT, postApi, type StudioApiError } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 
-function formatHeld(heldMs?: number): string {
-  if (!heldMs || heldMs < 0) return "未知";
+function busySentence(heldMs?: number): string {
+  if (heldMs == null || heldMs < 0) return "这本书正在被写入";
   const seconds = Math.max(1, Math.round(heldMs / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
-  return `${Math.round(seconds / 60)} 分钟`;
+  if (seconds < 60) return `这本书正在被写入（已 ${seconds} 秒）`;
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `这本书正在被写入（已 ${minutes} 分钟）`;
 }
 
 export function BookBusyCard() {
@@ -24,28 +26,12 @@ export function BookBusyCard() {
   }, []);
 
   if (!error) return null;
-  const owner = error.owner;
-  const bookId = owner?.bookId;
+  const bookId = error.owner?.bookId;
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-foreground/20 fade-in-150">
       <div className="w-full max-w-lg mx-4 rounded-2xl border border-border bg-card p-6 space-y-4">
-        <div>
-          <h2 className="text-lg font-semibold">写入被占用</h2>
-          <p className="mt-2 text-sm text-muted-foreground break-words">{error.message}</p>
-        </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-          <dt className="text-muted-foreground">书</dt>
-          <dd>{bookId ?? "未知"}</dd>
-          <dt className="text-muted-foreground">任务</dt>
-          <dd>{owner?.taskId ?? "无活动任务"}</dd>
-          <dt className="text-muted-foreground">阶段</dt>
-          <dd>{owner?.stage ?? "未知"}</dd>
-          <dt className="text-muted-foreground">已持续</dt>
-          <dd>{formatHeld(owner?.heldMs)}</dd>
-          <dt className="text-muted-foreground">pid</dt>
-          <dd>{owner?.pid ?? "未知"}</dd>
-        </dl>
+        <p className="text-base font-medium">{busySentence(error.owner?.heldMs)}</p>
         {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
         <div className="flex flex-wrap justify-end gap-2">
           <button
@@ -53,7 +39,7 @@ export function BookBusyCard() {
             className="rounded-lg border border-border px-3 py-2 text-sm"
             onClick={() => setError(null)}
           >
-            关闭
+            等它写完
           </button>
           <button
             type="button"
@@ -64,16 +50,23 @@ export function BookBusyCard() {
               setBusy(true);
               try {
                 await postApi(`/books/${bookId}/lock/force-release`);
-                setNote("已强制释放书锁。可以重试刚才的操作。");
+                setNote("已经放开。可以重试刚才的操作。");
                 setError(null);
               } catch (err) {
-                setNote(err instanceof Error ? err.message : String(err));
+                setNote(pageErrorText(err instanceof Error ? err.message : String(err)));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            {busy ? "释放中…" : (!owner?.taskId && owner?.inProcess ? "强制释放（当前引擎无活动任务）" : "强制释放")}
+            {busy ? "放开中…" : "强制放开"}
+          </button>
+          <button
+            type="button"
+            className="rounded-lg border border-border px-3 py-2 text-sm"
+            onClick={() => setError(null)}
+          >
+            关闭
           </button>
         </div>
       </div>

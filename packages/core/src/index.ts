@@ -635,7 +635,7 @@ export {
   type ModelInfo,
 } from "./llm/service-presets.js";
 export { resolveServiceModel, type ResolvedModel } from "./llm/service-resolver.js";
-export { loadSecrets, saveSecrets, getServiceApiKey, type SecretsFile } from "./llm/secrets.js";
+export { loadSecrets, loadSecretsSync, saveSecrets, getServiceApiKey, maskApiKey, describeSecretsLocation, type SecretsFile, type SecretsLoadOptions } from "./llm/secrets.js";
 export {
   COVER_PROVIDER_PRESETS,
   coverSecretKey,
@@ -792,6 +792,7 @@ export {
 } from "./utils/hook-governance.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 export { analyzeHookHealth } from "./utils/hook-health.js";
+export { atomicWritesInFlight } from "./utils/atomic-file-set.js";
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type WriteChapterGateOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
@@ -810,6 +811,7 @@ export {
   isBookWriteLockMessage,
   setBookLockLivenessCheck,
   StateManager,
+  listInProcessBookLocks,
   type AcquireBookLockOptions,
   type BookLockHolder,
   type BookLockLivenessCheck,

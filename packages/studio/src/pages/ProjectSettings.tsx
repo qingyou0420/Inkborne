@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bell, Bot, FileText, FolderUp, Globe, MessageSquare, Radar, RotateCcw, Search, Plus, Trash2 } from "lucide-react";
 import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
 import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { getDesktopBridge } from "../lib/desktop-bridge";
 import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
 import { useI18n, type TFunction } from "../hooks/use-i18n";
@@ -17,6 +18,7 @@ import {
   type NotifyChannelDraft,
   type NotifyType,
   type OverrideRow,
+  legacyAgentLabel,
 } from "./project-settings-model";
 import {
   serializeSkillFolder,
@@ -97,14 +99,11 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const isZh = lang !== "en";
   const { data: projectData, refetch: refetchProject } = useApi<{ language?: string }>("/project");
   const { data: overridesData, refetch: refetchOverrides } = useApi<{ overrides: Record<string, unknown> }>("/project/model-overrides");
-  const { data: defaultModelData, refetch: refetchDefaultModel } = useApi<{ service: string | null; defaultModel: string | null }>("/project/default-model");
   const { data: researchSearchData, refetch: refetchResearchSearch } = useApi<{ researchSearch: Partial<ResearchSearchDraft> }>("/project/research-search");
   const { data: notifyData, refetch: refetchNotify } = useApi<{ channels: unknown[] }>("/project/notify");
   const { data: detectionData, refetch: refetchDetection } = useApi<{ detection: unknown | null }>("/project/detection");
   const { data: skillsData, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
   const { data: promptPacksData, refetch: refetchPromptPacks } = useApi<PromptPacksResponse>("/prompt-packs");
-  const [defaultService, setDefaultService] = useState("");
-  const [defaultModel, setDefaultModel] = useState("");
   const [researchSearch, setResearchSearch] = useState<ResearchSearchDraft>({ ...DEFAULT_RESEARCH_SEARCH });
   const [overrideRows, setOverrideRows] = useState<OverrideRow[]>([]);
   const [notifyChannels, setNotifyChannels] = useState<NotifyChannelDraft[]>([]);
@@ -130,12 +129,6 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
       return { agent, model: model ?? "", rest };
     }));
   }, [overridesData]);
-
-  useEffect(() => {
-    if (!defaultModelData) return;
-    setDefaultService(defaultModelData.service ?? "");
-    setDefaultModel(defaultModelData.defaultModel ?? "");
-  }, [defaultModelData]);
 
   useEffect(() => {
     if (!researchSearchData) return;
@@ -461,101 +454,64 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
         </div>
       </SettingsCard>
 
-      <AuthoringRolesPanel isZh={isZh} />
-
-      {/* Model routing — per-agent model overrides */}
-      <SettingsCard title={t("settings.modelOverrides")} description={t("settings.modelOverridesHint")} icon={<Bot size={18} />}>
-        <div className="rounded-xl border border-border/60 bg-secondary/20 p-3 space-y-2">
-          <div>
-            <div className="text-sm font-semibold">{t("settings.globalDefaultModel")}</div>
-            <p className="mt-1 text-xs text-muted-foreground">{t("settings.globalDefaultModelHint")}</p>
-          </div>
-          <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
-            <input
-              value={defaultService}
-              onChange={(e) => setDefaultService(e.target.value)}
-              placeholder={t("settings.serviceId")}
-              className={`${fieldClass} font-mono`}
-            />
-            <input
-              value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder={t("settings.modelId")}
-              className={`${fieldClass} font-mono`}
-            />
-            <button
-              onClick={() => runSave("default-model", async () => {
-                await putApi("/project/default-model", {
-                  service: defaultService.trim() || undefined,
-                  defaultModel: defaultModel.trim(),
-                });
-                await refetchDefaultModel();
-              }, t("settings.saved"))}
-              disabled={saving === "default-model" || !defaultModel.trim()}
-              className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
-            >
-              {saving === "default-model" ? t("config.saving") : t("config.save")}
-            </button>
-          </div>
-        </div>
-        <div className="space-y-2">
-          {overrideRows.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">{t("settings.noOverrides")}</p>
-          )}
-          {overrideRows.map((row, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                value={row.agent}
-                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
-                placeholder={t("settings.agentName")}
-                className={`${fieldClass} flex-1`}
-              />
-              <span className="text-muted-foreground">→</span>
-              <input
-                value={row.model}
-                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, model: e.target.value } : r)))}
-                placeholder={t("settings.modelId")}
-                className={`${fieldClass} flex-1 font-mono`}
-              />
-              <button
-                onClick={() => setOverrideRows((prev) => prev.filter((_, j) => j !== i))}
-                className="shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                aria-label="remove"
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
-          ))}
-        </div>
+      <SettingsCard title={isZh ? "本机目录" : "Folders on this computer"} description={isZh ? "日志和密钥放在本机用户数据目录，不在书稿文件夹里。" : "Logs and keys stay in this computer's app data, not in the manuscript folder."} icon={<FolderUp size={18} />}>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => setOverrideRows((prev) => [...prev, { agent: "", model: "" }])}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${c.btnSecondary}`}
+            type="button"
+            onClick={() => {
+              const bridge = getDesktopBridge();
+              if (!bridge?.openLogDir) {
+                setNotice({ tone: "info", message: isZh ? "请在桌面版菜单「帮助」里打开日志目录。" : "Use the desktop Help menu to open the log folder." });
+                return;
+              }
+              void bridge.openLogDir();
+            }}
+            className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnSecondary}`}
           >
-            <Plus size={14} /> {t("settings.addOverride")}
+            {isZh ? "打开日志目录" : "Open log folder"}
           </button>
           <button
-            onClick={() => runSave("overrides", async () => {
-              const overrides: Record<string, unknown> = {};
-              for (const r of overrideRows) {
-                const agent = r.agent.trim();
-                const model = r.model.trim();
-                if (!agent || !model) continue;
-                overrides[agent] = r.rest && Object.keys(r.rest).length > 0 ? { ...r.rest, model } : model;
+            type="button"
+            onClick={() => {
+              const bridge = getDesktopBridge();
+              if (!bridge?.openProjectDir) {
+                setNotice({ tone: "info", message: isZh ? "请在桌面版菜单「帮助」里打开项目目录。" : "Use the desktop Help menu to open the project folder." });
+                return;
               }
-              await putApi("/project/model-overrides", { overrides });
-              await refetchOverrides();
-            }, t("settings.saved"))}
-            disabled={saving === "overrides"}
-            className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
+              void bridge.openProjectDir();
+            }}
+            className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnSecondary}`}
           >
-            {saving === "overrides" ? t("config.saving") : t("config.save")}
+            {isZh ? "打开项目目录" : "Open project folder"}
           </button>
-          <button onClick={nav.toServices} className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnSecondary}`}>
+          <button type="button" onClick={nav.toServices} className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary}`}>
             {t("settings.openModelConfig")}
           </button>
         </div>
       </SettingsCard>
+
+      <details className="rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm">
+        <summary className="cursor-pointer text-base font-bold">{isZh ? "高级：八个角色和旧的分角色模型" : "Advanced: eight roles and old per-role models"}</summary>
+        <div className="mt-4 space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {isZh
+              ? "平时只要在模型配置里填接口地址、密钥、主力模型和审查模型。这里可以单独改某一步。下面的旧名称只用来填充角色，不能在这里改。"
+              : "Day to day, set the address, key, main model, and review model in Model Config. Change one role here. Older names below only fill those roles and are not edited here."}
+          </p>
+          <AuthoringRolesPanel isZh={isZh} />
+          {overrideRows.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{isZh ? "没有旧的分角色模型。" : "No older per-role models."}</p>
+          ) : (
+            <ul className="space-y-1 text-sm">
+              {overrideRows.map((row) => (
+                <li key={`${row.agent}:${row.model}`} className="text-muted-foreground">
+                  {legacyAgentLabel(row.agent)} → <span className="font-mono text-foreground">{row.model || (isZh ? "未填模型" : "no model")}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
 
       <SettingsCard
         title={isZh ? "联网研究搜索服务" : "Research Search Provider"}

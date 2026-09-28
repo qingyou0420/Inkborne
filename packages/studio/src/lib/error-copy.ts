@@ -6,15 +6,15 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
 }> = [
   {
     pattern: /Latest chapter (\d+) is state-degraded\. Repair state or rewrite that chapter before continuing\./g,
-    replacement: "最新第 $1 章处于状态降级（state-degraded）。继续写下一章前，请先修复状态，或重写这一章。",
+    replacement: "最新第 $1 章状态待修。继续写下一章前，请先修复这一章的状态，或重写这一章。",
   },
   {
     pattern: /Chapter (\d+) is not state-degraded\./g,
-    replacement: "第 $1 章不是状态降级（state-degraded），无需按状态修复。",
+    replacement: "第 $1 章不是状态待修，不用按状态修复。",
   },
   {
     pattern: /Only the latest state-degraded chapter can be repaired safely \(latest is (\d+)\)\./g,
-    replacement: "只能安全修复最新的状态降级（state-degraded）章节；当前最新章是第 $1 章。",
+    replacement: "只能安全修复最新一章的状态待修；当前最新章是第 $1 章。",
   },
   {
     pattern: /State repair still failed for chapter (\d+)\./g,
@@ -22,11 +22,11 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   },
   {
     pattern: /Studio LLM API key not set\. Open Studio services and save an API key for the selected service\./g,
-    replacement: "Studio 模型 API Key 未设置。请打开“模型配置”，为当前服务保存 API Key。",
+    replacement: "还没有保存模型密钥。请打开「模型配置」，给当前接口填上密钥。",
   },
   {
     pattern: /INKOS_LLM_API_KEY not set\. Run 'inkos config set-global' or add it to project \.env file\./g,
-    replacement: "INKOS_LLM_API_KEY 未设置。请运行 `inkos config set-global`，或在项目 .env 文件中添加它。",
+    replacement: "还没有设置模型密钥。请在「模型配置」里保存密钥。",
   },
   {
     pattern: /Book "([^"]+)" is locked by an active write(?: \([^)]+\))?\. .*/g,
@@ -38,15 +38,15 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   },
   {
     pattern: /volume_map\.md has no entry for chapter (\d+)\./g,
-    replacement: "volume_map.md 没有第 $1 章条目。请先排纲。",
+    replacement: "卷纲里没有第 $1 章。请先排纲。",
   },
   {
     pattern: /story_frame\.md is empty or still a placeholder\./g,
-    replacement: "story_frame.md 为空或仍是占位。请先写骨架。",
+    replacement: "故事骨架是空的，或还是占位。请先写骨架。",
   },
   {
     pattern: /author_intent\.md is empty or still a placeholder\./g,
-    replacement: "author_intent.md 为空或仍是占位。请先写作者意图。",
+    replacement: "作者意图是空的，或还是占位。请先写作者意图。",
   },
   {
     pattern: /Chapter (\d+) is not approved\. Pass skipPreviousApproval to continue with 带病续写\./g,
@@ -54,7 +54,7 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   },
   {
     pattern: /Chapter (\d+) has (\d+) critical audit issue\(s\) and cannot be approved without an explicit override\./g,
-    replacement: "第 $1 章有 $2 条 critical 审稿问题，未记录覆盖理由不能通过。",
+    replacement: "第 $1 章有 $2 条严重审稿问题，没记下放行理由就不能通过。",
   },
   {
     pattern: /LLM stream produced no token for (\d+)ms/g,
@@ -70,12 +70,38 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   },
 ];
 
+function stripTechnicalTokens(message: string): string {
+  return message
+    .replace(/^\s*Error:\s*/i, "")
+    .replace(/\s*\(\s*pid:\d+[^)]*\)/gi, "")
+    .replace(/\bpid:\d+\b/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 export function localizeKnownRuntimeMessage(message: string): string {
+  const stripped = stripTechnicalTokens(message);
   // Runtime messages arrive in English; in English mode show them as-is.
-  if (getAppLanguage() === "en") return message;
-  let localized = message;
+  if (getAppLanguage() === "en") return stripped;
+  let localized = stripped;
   for (const entry of KNOWN_RUNTIME_REPLACEMENTS) {
     localized = localized.replace(entry.pattern, entry.replacement);
   }
   return localized;
+}
+
+/** Page-level failure text. Strips the English "Error:" prefix and uses the shared copy. */
+export function pageErrorText(message: string): string {
+  return localizeKnownRuntimeMessage(message);
+}
+
+export const ACTION_ERROR_MARK = "失败：";
+
+export function actionErrorText(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  return `${ACTION_ERROR_MARK}${localizeKnownRuntimeMessage(raw)}`;
+}
+
+export function isActionError(message: string): boolean {
+  return message.startsWith(ACTION_ERROR_MARK);
 }

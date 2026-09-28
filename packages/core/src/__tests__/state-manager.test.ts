@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, readFile, mkdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StateManager } from "../state/manager.js";
+import { formatBookWriteLockCopy, listInProcessBookLocks, StateManager } from "../state/manager.js";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 
@@ -858,6 +858,16 @@ describe("StateManager", () => {
           inProcess: true,
         });
         await expect(manager.acquireBookLock("lock-book-holder")).rejects.toThrow(/task:write-next-1/);
+        const listed = listInProcessBookLocks(tempDir);
+        expect(listed.map((lock) => lock.bookId)).toContain("lock-book-holder");
+        const copy = formatBookWriteLockCopy({
+          bookId: "lock-book-holder",
+          message: 'Book "lock-book-holder" is locked',
+          owner: listed.find((lock) => lock.bookId === "lock-book-holder"),
+        });
+        expect(copy).toContain("这本书正在被写入");
+        expect(copy).not.toMatch(/pid/i);
+        expect(copy).not.toContain("write-next-1");
       } finally {
         await release();
       }

@@ -3,6 +3,7 @@ import { showToast } from "../lib/toast";
 import { trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { fetchJson, putApi, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -187,7 +188,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     </div>
   );
 
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const lines = data.content.split("\n");

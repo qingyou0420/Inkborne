@@ -5,6 +5,7 @@
  */
 
 import { useApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
@@ -34,7 +35,7 @@ export function BookAskPage({
 }) {
   const { error } = useApi<{ book?: { title?: string } }>(`/books/${bookId}`);
 
-  if (error) return <div className="text-destructive p-8">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
 
   return (
     <div className="flex h-full min-h-0 flex-1">

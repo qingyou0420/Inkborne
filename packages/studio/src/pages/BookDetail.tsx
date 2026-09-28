@@ -1,4 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
 import { AuthoringWritePanel, type AuthoringWritePanelHandle } from "../components/AuthoringWritePanel";
@@ -353,7 +354,7 @@ export function BookDetail({
     </div>
   );
 
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const { book, chapters } = data;

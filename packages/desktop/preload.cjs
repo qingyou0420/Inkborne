@@ -17,6 +17,8 @@ const desktopBridge = {
   pickInstaller: () => ipcRenderer.invoke("app:pickInstaller"),
   openPath: (target) => ipcRenderer.invoke("app:openPath", target),
   openUpdateDir: () => ipcRenderer.invoke("app:openUpdateDir"),
+  openLogDir: () => ipcRenderer.invoke("app:openLogDir"),
+  openProjectDir: () => ipcRenderer.invoke("app:openProjectDir"),
   showAbout: () => ipcRenderer.invoke("app:showAbout"),
   openUpdatePanel: () => ipcRenderer.invoke("app:openUpdatePanel"),
 };
