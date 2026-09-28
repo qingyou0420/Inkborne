@@ -175,6 +175,25 @@ describe("hash route", () => {
       expect(routeToHash({ page: "logs" })).toBe("#/logs");
       expect(routeToHash({ page: "daemon" })).toBe("#/daemon");
     });
+
+    it("keeps chapter, analytics, and truth pages after refresh", () => {
+      expect(parseHash("#/book/novel-1/chapter/137")).toEqual({
+        page: "chapter",
+        bookId: "novel-1",
+        chapterNumber: 137,
+      });
+      expect(routeToHash({ page: "chapter", bookId: "novel-1", chapterNumber: 137 }))
+        .toBe("#/book/novel-1/chapter/137");
+      expect(parseHash("#/book/novel-1/analytics")).toEqual({ page: "analytics", bookId: "novel-1" });
+      expect(routeToHash({ page: "analytics", bookId: "novel-1" })).toBe("#/book/novel-1/analytics");
+      expect(parseHash("#/book/novel-1/truth")).toEqual({ page: "truth", bookId: "novel-1" });
+      expect(routeToHash({ page: "truth", bookId: "novel-1" })).toBe("#/book/novel-1/truth");
+      expect(parseHash(routeToHash({ page: "chapter", bookId: "九龙", chapterNumber: 2 }))).toEqual({
+        page: "chapter",
+        bookId: "九龙",
+        chapterNumber: 2,
+      });
+    });
   });
 });
 

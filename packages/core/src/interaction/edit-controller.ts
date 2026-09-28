@@ -1,6 +1,7 @@
 import { access, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import type { ChapterMeta } from "../models/chapter.js";
+import { resolveChapterFile } from "../authoring/chapter-index.js";
 import {
   archiveChapterVersion,
   type ChapterVersionSource,
@@ -257,19 +258,11 @@ async function executeEntityRename(
 
 async function findChapterPath(root: string, chapterNumber: number): Promise<{ readonly chaptersDir: string; readonly chapterPath: string; readonly chapterFile: string }> {
   const chaptersDir = join(root, "chapters");
-  const paddedChapter = String(chapterNumber).padStart(4, "0");
-  const chapterFile = (await readdir(chaptersDir).catch((error) => {
-    if (isMissingDirectoryError(error)) {
-      return [];
-    }
-    throw error;
-  }))
-    .find((file) => file.startsWith(`${paddedChapter}_`) && file.endsWith(".md"));
-
-  if (!chapterFile) {
+  const located = await resolveChapterFile(root, chapterNumber);
+  if (!located) {
     throw new Error(`Chapter ${chapterNumber} not found.`);
   }
-  return { chaptersDir, chapterPath: join(chaptersDir, chapterFile), chapterFile };
+  return { chaptersDir, chapterPath: join(chaptersDir, located.fileName), chapterFile: located.fileName };
 }
 
 async function clearChapterRuntimeFiles(root: string, chapterNumber: number): Promise<ReadonlyArray<string>> {

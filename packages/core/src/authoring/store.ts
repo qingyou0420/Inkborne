@@ -5,11 +5,19 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
 import { z } from "zod";
+import {
+  ensureWorkflowIndex,
+  filterWorkflowArtifacts,
+  noteWorkflowArtifact,
+  noteWorkflowReport,
+  noteWorkflowRun,
+  type WorkflowIndex,
+} from "./workflow-index.js";
 import {
   AuthoringArtifactMetaSchema,
   AuthoringReviewReportSchema,
@@ -95,10 +103,12 @@ export async function saveManifest(root: AuthoringStoreRoot, manifest: z.input<t
 
 export async function saveRun(root: AuthoringStoreRoot, run: z.input<typeof AuthoringRunRecordSchema> | AuthoringRunRecord): Promise<void> {
   const parsed = AuthoringRunRecordSchema.parse({ ...run, updatedAt: nowIso() });
+  const rootDir = authoringRootDir(root);
   await writeFileAtomic(
-    join(authoringRootDir(root), "runs", `${parsed.runId}.json`),
+    join(rootDir, "runs", `${parsed.runId}.json`),
     `${JSON.stringify(parsed, null, 2)}\n`,
   );
+  await noteWorkflowRun(rootDir, parsed);
 }
 
 export async function loadRun(root: AuthoringStoreRoot, runId: string): Promise<AuthoringRunRecord | undefined> {
@@ -106,16 +116,8 @@ export async function loadRun(root: AuthoringStoreRoot, runId: string): Promise<
 }
 
 export async function listRuns(root: AuthoringStoreRoot): Promise<AuthoringRunRecord[]> {
-  const dir = join(authoringRootDir(root), "runs");
-  if (!(await exists(dir))) return [];
-  const files = await readdir(dir);
-  const items: AuthoringRunRecord[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json") || file.endsWith(".control.json")) continue;
-    const run = await readJson(join(dir, file), (raw) => AuthoringRunRecordSchema.parse(raw));
-    if (run) items.push(run);
-  }
-  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  return [...index.runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export type AuthoringRunControl = "none" | "pause" | "cancel";
@@ -163,6 +165,7 @@ export async function saveArtifact(
       { relativePath: "meta.json", content: `${JSON.stringify(parsed, null, 2)}\n` },
     ],
   });
+  await noteWorkflowArtifact(authoringRootDir(root), parsed);
   return parsed;
 }
 
@@ -178,25 +181,18 @@ export async function loadArtifact(
 }
 
 export async function listArtifacts(root: AuthoringStoreRoot, stage?: AuthoringStage): Promise<AuthoringArtifactMeta[]> {
-  const dir = join(authoringRootDir(root), "artifacts");
-  if (!(await exists(dir))) return [];
-  const ids = await readdir(dir);
-  const items: AuthoringArtifactMeta[] = [];
-  for (const id of ids) {
-    const meta = await readJson(join(dir, id, "meta.json"), (raw) => AuthoringArtifactMetaSchema.parse(raw));
-    if (!meta) continue;
-    if (stage && meta.stage !== stage) continue;
-    items.push(meta);
-  }
-  return items.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  return filterWorkflowArtifacts(index, stage ? { stage } : {});
 }
 
 export async function saveReport(root: AuthoringStoreRoot, report: z.input<typeof AuthoringReviewReportSchema> | AuthoringReviewReport): Promise<void> {
   const parsed = AuthoringReviewReportSchema.parse(report);
+  const rootDir = authoringRootDir(root);
   await writeFileAtomic(
-    join(authoringRootDir(root), "reviews", `${parsed.reportId}.json`),
+    join(rootDir, "reviews", `${parsed.reportId}.json`),
     `${JSON.stringify(parsed, null, 2)}\n`,
   );
+  await noteWorkflowReport(rootDir, parsed);
 }
 
 export async function loadReport(root: AuthoringStoreRoot, reportId: string): Promise<AuthoringReviewReport | undefined> {
@@ -204,18 +200,58 @@ export async function loadReport(root: AuthoringStoreRoot, reportId: string): Pr
 }
 
 export async function listReports(root: AuthoringStoreRoot, stage?: AuthoringStage): Promise<AuthoringReviewReport[]> {
-  const dir = join(authoringRootDir(root), "reviews");
-  if (!(await exists(dir))) return [];
-  const files = await readdir(dir);
-  const items: AuthoringReviewReport[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) continue;
-    const report = await readJson(join(dir, file), (raw) => AuthoringReviewReportSchema.parse(raw));
-    if (!report) continue;
-    if (stage && report.stage !== stage) continue;
-    items.push(report);
+  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  return loadIndexedReports(root, index, (report) => (stage ? report.stage === stage : true));
+}
+
+async function loadIndexedReports(
+  root: AuthoringStoreRoot,
+  index: WorkflowIndex,
+  include: (report: WorkflowIndex["reports"][number]) => boolean,
+): Promise<AuthoringReviewReport[]> {
+  const selected = index.reports.filter(include);
+  const items = await Promise.all(selected.map((report) => loadReport(root, report.reportId)));
+  return items
+    .filter((report): report is AuthoringReviewReport => Boolean(report))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function loadAuthoringWorkspaceLists(
+  root: AuthoringStoreRoot,
+  query: {
+    readonly chapter?: number;
+    readonly stage?: AuthoringStage;
+    readonly summary?: boolean;
+  } = {},
+): Promise<{
+  readonly artifacts: AuthoringArtifactMeta[];
+  readonly reports: AuthoringReviewReport[];
+  readonly runs: AuthoringRunRecord[];
+}> {
+  if (query.summary) {
+    return { artifacts: [], reports: [], runs: [] };
   }
-  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const chapter = query.chapter;
+  const scopedChapter = Number.isInteger(chapter) && (chapter ?? 0) > 0;
+  const artifacts = filterWorkflowArtifacts(index, scopedChapter
+    ? { stage: "write", scope: `chapter:${chapter}` }
+    : query.stage
+      ? { stage: query.stage }
+      : {});
+  const ids = new Set(artifacts.map((item) => item.artifactId));
+  const reports = await loadIndexedReports(root, index, (report) => {
+    if (scopedChapter) return report.targetRefs.some((id) => ids.has(id));
+    if (query.stage) return report.stage === query.stage;
+    return true;
+  });
+  const runs = (scopedChapter
+    ? []
+    : query.stage
+      ? index.runs.filter((run) => run.stage === query.stage)
+      : index.runs
+  ).slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { artifacts, reports, runs };
 }
 
 export function reportAppliesTo(report: AuthoringReviewReport, artifactId: string): boolean {
@@ -227,10 +263,11 @@ async function markBoundReportsStale(
   artifactId: string,
   reason: string,
 ): Promise<void> {
-  const reports = await listReports(root);
-  for (const report of reports) {
-    if (report.stale) continue;
-    if (!report.targetRefs.includes(artifactId)) continue;
+  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const matches = index.reports.filter((report) => !report.stale && report.targetRefs.includes(artifactId));
+  for (const pointer of matches) {
+    const report = await loadReport(root, pointer.reportId);
+    if (!report || report.stale || !report.targetRefs.includes(artifactId)) continue;
     await saveReport(root, { ...report, stale: true, staleReason: reason });
   }
 }
@@ -240,21 +277,18 @@ export async function markReportsStale(
   targetRef: string,
   reason: string,
 ): Promise<void> {
-  const reports = await listReports(root);
-  const target = await loadArtifact(root, targetRef);
-  for (const report of reports) {
-    if (report.stale) continue;
-    if (report.targetRefs.includes(targetRef)) continue;
-    if (!target) continue;
-    let sameScope = false;
-    for (const ref of report.targetRefs) {
-      const loaded = await loadArtifact(root, ref);
-      if (loaded?.meta.scope === target.meta.scope && loaded.meta.stage === target.meta.stage) {
-        sameScope = true;
-        break;
-      }
-    }
+  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const target = index.artifacts.find((item) => item.artifactId === targetRef);
+  if (!target) return;
+  const candidates = index.reports.filter((report) => !report.stale && !report.targetRefs.includes(targetRef));
+  for (const pointer of candidates) {
+    const sameScope = pointer.targetRefs.some((ref) => {
+      const loaded = index.artifacts.find((item) => item.artifactId === ref);
+      return loaded?.scope === target.scope && loaded.stage === target.stage;
+    });
     if (!sameScope) continue;
+    const report = await loadReport(root, pointer.reportId);
+    if (!report || report.stale || report.targetRefs.includes(targetRef)) continue;
     await saveReport(root, { ...report, stale: true, staleReason: reason });
   }
 }

@@ -159,6 +159,13 @@ export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
   return [];
 }
 
+export function apiUrlMatchesInvalidation(url: string, paths: ReadonlyArray<string>): boolean {
+  return paths.some((path) => {
+    if (path === url) return true;
+    return path === "/api/v1/authoring/workspace" && (url === path || url.startsWith(`${path}?`));
+  });
+}
+
 export function invalidateApiPaths(paths: ReadonlyArray<string>): void {
   if (!paths.length || typeof window === "undefined") {
     return;
@@ -295,7 +302,7 @@ export function useApi<T>(path: string) {
 
     const handleInvalidate = (event: Event) => {
       const detail = (event as CustomEvent<ApiInvalidateDetail>).detail;
-      if (!detail?.paths.includes(url)) return;
+      if (!detail || !apiUrlMatchesInvalidation(url, detail.paths)) return;
       void refetch();
     };
 

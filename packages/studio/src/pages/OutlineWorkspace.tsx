@@ -126,7 +126,7 @@ export function OutlineWorkspace({
   useEffect(() => {
     void Promise.all([
       fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`).catch(() => ({ content: "" })),
-      fetchJson<{ candidateWeave?: { body?: string } }>(`/authoring/workspace?bookId=${encodeURIComponent(bookId)}`).catch(() => ({ candidateWeave: undefined })),
+      fetchJson<{ candidateWeave?: { body?: string } }>(`/authoring/workspace?bookId=${encodeURIComponent(bookId)}&summary=1`).catch(() => ({ candidateWeave: undefined })),
     ]).then(([file, workspace]) => {
       const adopted = file.content ?? "";
       setVolumeMap(adopted.trim() ? adopted : (workspace.candidateWeave?.body ?? ""));

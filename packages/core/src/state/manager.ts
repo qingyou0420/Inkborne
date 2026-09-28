@@ -830,6 +830,7 @@ export class StateManager {
       return [{
         number,
         title: rawTitle || `第${number}章`,
+        file,
         status: "ready-for-review" as const,
         wordCount: content.replace(/\s+/g, "").length,
         createdAt: timestamp,

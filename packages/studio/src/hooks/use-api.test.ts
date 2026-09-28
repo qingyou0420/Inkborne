@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  apiUrlMatchesInvalidation,
   buildApiUrl,
   chapterMutationInvalidationPaths,
   deriveInvalidationPaths,
@@ -7,6 +8,20 @@ import {
   invalidationPathsForChapterMutationSse,
   StudioApiError,
 } from "./use-api";
+
+describe("apiUrlMatchesInvalidation", () => {
+  it("refreshes chapter-filtered workspace queries from the shared workspace key", () => {
+    expect(apiUrlMatchesInvalidation(
+      "/api/v1/authoring/workspace?bookId=demo&chapter=12",
+      ["/api/v1/authoring/workspace"],
+    )).toBe(true);
+    expect(apiUrlMatchesInvalidation(
+      "/api/v1/authoring/workspace?bookId=demo&summary=1",
+      ["/api/v1/authoring/workspace"],
+    )).toBe(true);
+    expect(apiUrlMatchesInvalidation("/api/v1/books/demo", ["/api/v1/authoring/workspace"])).toBe(false);
+  });
+});
 
 describe("buildApiUrl", () => {
   it("returns null for blank paths so callers can skip requests", () => {

@@ -7,6 +7,7 @@
 import { fetchJson, useApi } from "../hooks/use-api";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
+import { readLastChapter } from "../lib/last-chapter";
 import { useEffect, useMemo, useState } from "react";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { StageDot } from "../components/StageDot";
@@ -108,7 +109,7 @@ export function BookStudy({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
-  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
@@ -251,6 +252,7 @@ export function BookStudy({
       onClick: () => goStage(nav, bookId, "weave"),
     });
   }
+  const lastOpened = readLastChapter(bookId);
   const nextTitle = snapshot?.nextChapter.title
     ? shortChapterTitle(snapshot.nextChapter.title)
     : "";
@@ -318,6 +320,16 @@ export function BookStudy({
               {snapshot.nextChapter.oneLine && (
                 <p className="text-sm leading-6 text-foreground/80">{snapshot.nextChapter.oneLine}</p>
               )}
+              {lastOpened && lastOpened !== snapshot.nextChapter.number ? (
+                <button
+                  type="button"
+                  className="text-sm underline text-muted-foreground"
+                  data-testid="study-last-chapter"
+                  onClick={() => nav.toChapter(bookId, lastOpened)}
+                >
+                  {isZh ? `回到上次的第 ${lastOpened} 章` : `Back to chapter ${lastOpened}`}
+                </button>
+              ) : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">{guide.subtitle}</p>

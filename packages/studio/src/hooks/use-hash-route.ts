@@ -73,6 +73,20 @@ function parseHash(hash: string): HashRoute {
   const bookWriteMatch = path.match(/^book\/([^/]+)\/(?:write|settings)$/);
   if (bookWriteMatch) return { page: "book-write", bookId: decodePart(bookWriteMatch[1]) };
 
+  const bookChapterMatch = path.match(/^book\/([^/]+)\/chapter\/(\d+)$/);
+  if (bookChapterMatch) {
+    const chapterNumber = Number(bookChapterMatch[2]);
+    if (Number.isInteger(chapterNumber) && chapterNumber >= 1) {
+      return { page: "chapter", bookId: decodePart(bookChapterMatch[1]), chapterNumber };
+    }
+  }
+
+  const bookAnalyticsMatch = path.match(/^book\/([^/]+)\/analytics$/);
+  if (bookAnalyticsMatch) return { page: "analytics", bookId: decodePart(bookAnalyticsMatch[1]) };
+
+  const bookTruthMatch = path.match(/^book\/([^/]+)\/truth$/);
+  if (bookTruthMatch) return { page: "truth", bookId: decodePart(bookTruthMatch[1]) };
+
   const bookChatMatch = path.match(/^book\/([^/]+)\/chat$/);
   if (bookChatMatch) return { page: "book-ask", bookId: decodePart(bookChatMatch[1]) };
 
@@ -120,6 +134,9 @@ function routeToHash(route: HashRoute): string {
     case "daemon": return "#/daemon";
     case "book-ask": return `#/book/${encodeURIComponent(route.bookId)}/ask`;
     case "book-ground": return `#/book/${encodeURIComponent(route.bookId)}/ground`;
+    case "chapter": return `#/book/${encodeURIComponent(route.bookId)}/chapter/${route.chapterNumber}`;
+    case "analytics": return `#/book/${encodeURIComponent(route.bookId)}/analytics`;
+    case "truth": return `#/book/${encodeURIComponent(route.bookId)}/truth`;
     case "book-create": return "#/book/new";
     case "services": return "#/services";
     case "project-settings": return "#/settings";
@@ -147,6 +164,7 @@ const HASH_PAGES = new Set([
   "services", "project-settings", "service-detail", "translation", "import",
   "update", "play", "film", "flow", "film-author", "film-studio",
   "short", "short-settings", "short-analytics", "logs", "daemon",
+  "chapter", "analytics", "truth",
 ]);
 
 export function useHashRoute() {
