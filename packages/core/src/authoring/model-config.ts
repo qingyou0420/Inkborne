@@ -38,7 +38,8 @@ const LEGACY_AGENT_TO_ROLE: Readonly<Record<string, AuthoringRoleId>> = {
   continuity: "write.review",
 };
 
-export const DEFAULT_ROLE_INSTRUCTIONS: Readonly<Record<AuthoringRoleId, string>> = {
+/** v1 stock text. Roles still on this wording pick up the current default. */
+export const LEGACY_ROLE_INSTRUCTIONS_V1: Readonly<Record<AuthoringRoleId, string>> = {
   "ask.main": "你是「问心」。通过对话理解作者想写的故事，整理成可编辑的故事正典：一句话故事、核心命题、主角欲望、主要冲突、视角文风、边界与待定项。不要擅自补全作者明确保留的未知，不要生成人物卡或卷纲。",
   "ask.review": "你是「问心审查」。只阅读故事正典，判断是否理解作者意图、核心矛盾是否清晰、前提是否自相矛盾、篇幅与构想是否匹配。开放结局和作者主动保留的未知不是缺陷。不要改稿。",
   "ground.main": "你是「研墨」。根据已采用正典生成适合本书的设定目录与条目。人物、地点、规则等按小说需要增减，不强制修炼体系。只改指定范围，保留未选手改。",
@@ -48,6 +49,32 @@ export const DEFAULT_ROLE_INSTRUCTIONS: Readonly<Record<AuthoringRoleId, string>
   "write.main": "你是「落笔」。按已采用正典、设定、章概要和前文写正文或按意见修改。默认只改指定范围。新摘要与人物状态只属于本候选稿，未经采用不得推进正式连载状态。",
   "write.review": "你是「落笔审查」。检查正文与正典/设定/章概要及已采用前文的一致性，指出人物、时空、伏笔、视角与节奏问题。用原文证据，不把审美判断写成事实错误。不要改正文。",
 };
+
+export const ROLE_INSTRUCTIONS_VERSION = 2;
+
+export const DEFAULT_ROLE_INSTRUCTIONS: Readonly<Record<AuthoringRoleId, string>> = {
+  ...LEGACY_ROLE_INSTRUCTIONS_V1,
+  "write.main": "你是「落笔」。按已采用正典、设定、章概要和前文写这一章正文，或按意见改这一章。只写故事，不写创作说明。默认只改作者指定的范围。新摘要和人物状态只属于本候选稿，作者还没采用时，不要推进正式连载状态。作者写在角色卡里的附加要求优先于这段默认说明。",
+  "write.review": "你是「落笔审查」。对照正典、设定、章概要和已采用前文检查这一章。按情节推进、人物一致、伏笔、节奏、文笔分开说。用原文做证据。审美偏好不要写成事实错误。不要改正文。作者写在角色卡里的附加要求优先于这段默认说明。",
+};
+
+export function upgradeStoredRoleInstructions(
+  roleId: AuthoringRoleId,
+  config: AuthoringRoleConfig,
+): AuthoringRoleConfig {
+  const version = config.instructionsVersion ?? 1;
+  if (version >= ROLE_INSTRUCTIONS_VERSION) return config;
+  const current = config.instructions?.trim() ?? "";
+  const legacy = LEGACY_ROLE_INSTRUCTIONS_V1[roleId];
+  if (!current || current === legacy) {
+    return {
+      ...config,
+      instructions: DEFAULT_ROLE_INSTRUCTIONS[roleId],
+      instructionsVersion: ROLE_INSTRUCTIONS_VERSION,
+    };
+  }
+  return { ...config, instructionsVersion: ROLE_INSTRUCTIONS_VERSION };
+}
 
 function cloneLlm(llm: LLMConfig): LLMConfig {
   return {
@@ -87,7 +114,10 @@ export function fillMissingAuthoringRoles(config: ProjectConfig): AuthoringRoles
   const defaultModel = config.llm.defaultModel?.trim() || config.llm.model;
   const defaultService = config.llm.service;
   for (const roleId of AUTHORING_ROLE_IDS) {
-    if (filled[roleId]?.modelId) continue;
+    if (filled[roleId]?.modelId) {
+      filled[roleId] = upgradeStoredRoleInstructions(roleId, filled[roleId] ?? {});
+      continue;
+    }
     const mappedAgents = Object.entries(LEGACY_AGENT_TO_ROLE)
       .filter(([, mapped]) => mapped === roleId)
       .map(([agent]) => agent);
@@ -99,7 +129,7 @@ export function fillMissingAuthoringRoles(config: ProjectConfig): AuthoringRoles
         break;
       }
     }
-    filled[roleId] = {
+    filled[roleId] = upgradeStoredRoleInstructions(roleId, {
       serviceRef: imported.serviceRef ?? defaultService,
       modelId: imported.modelId ?? defaultModel,
       stream: imported.stream ?? config.llm.stream,
@@ -107,10 +137,10 @@ export function fillMissingAuthoringRoles(config: ProjectConfig): AuthoringRoles
       thinkingBudget: imported.thinkingBudget ?? config.llm.thinkingBudget,
       ...(imported.apiFormat ? { apiFormat: imported.apiFormat } : {}),
       instructions: DEFAULT_ROLE_INSTRUCTIONS[roleId],
-      instructionsVersion: 1,
+      instructionsVersion: ROLE_INSTRUCTIONS_VERSION,
       lastTestStatus: "untested",
       ...existing[roleId],
-    };
+    });
   }
   return filled;
 }
@@ -175,7 +205,7 @@ export function resolveAuthoringRole(input: {
   readonly temporary?: AuthoringRoleConfig;
   readonly apiKeys?: Record<string, string>;
 }): ResolvedAuthoringRole {
-  const stored = input.roles?.[input.roleId] ?? {};
+  const stored = upgradeStoredRoleInstructions(input.roleId, input.roles?.[input.roleId] ?? {});
   const temporary = input.temporary ?? {};
   const merged: AuthoringRoleConfig = { ...stored, ...temporary };
   const serviceChanged = Boolean(temporary.serviceRef && temporary.serviceRef !== stored.serviceRef);

@@ -28,7 +28,7 @@ import {
   stripEngineTokens,
 } from "../lib/copy-map";
 import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
-import { formatTokenCount, sumTokenUsage } from "../lib/token-usage";
+import { estimateTokenCost, firstPricePerMillion, formatTokenCount, sumTokenUsage } from "../lib/token-usage";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
 import {
   CheckCircle2,
@@ -112,6 +112,7 @@ export function BookStudy({
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
   const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
+  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ pricePerMillion?: number }> }>("/services/config");
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
@@ -202,6 +203,7 @@ export function BookStudy({
   const book = data.book;
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);
   const tokenTotal = sumTokenUsage(authoring?.runs);
+  const tokenCost = estimateTokenCost(tokenTotal, firstPricePerMillion(serviceConfig?.services));
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
   const currentStage = stage?.stage ?? "write";
   const guide = studyGuideCopy(currentStage, isZh);
@@ -291,8 +293,8 @@ export function BookStudy({
         {tokenTotal > 0 ? (
           <p className="text-sm text-muted-foreground" data-testid="study-token-usage">
             {isZh
-              ? `这本书累计用了 ${formatTokenCount(tokenTotal, true)}`
-              : `This book has used ${formatTokenCount(tokenTotal, false)}`}
+              ? `这本书累计用了 ${formatTokenCount(tokenTotal, true)}${tokenCost ? `（${tokenCost}）` : ""}`
+              : `This book has used ${formatTokenCount(tokenTotal, false)}${tokenCost ? ` (${tokenCost})` : ""}`}
           </p>
         ) : null}
       </header>

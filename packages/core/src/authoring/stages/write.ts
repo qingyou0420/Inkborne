@@ -11,9 +11,11 @@ import {
   assembleAuthoringContext,
   invalidateChapterState,
   loadBookJson,
+  loadCanonDocument,
   loadChapterText,
   resolvePlannedChapterTitle,
 } from "../context.js";
+import { composeWriteSystemPrompt } from "../write-system-prompt.js";
 import { collapseDuplicateChapterHeadings, ensureSingleChapterHeading } from "../chapter-heading.js";
 import { completeRole, completeRoleObserved } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
@@ -163,6 +165,8 @@ async function streamChapterText(input: {
   activeWriteRuns.set(runId, local);
   const signal = mergeAbort(input.lockSignal, local.signal);
   const createdAt = new Date().toISOString();
+  const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
+  const system = composeWriteSystemPrompt(input.resolved.instructions, voice);
   let streamed = "";
   const baseRun = {
     runId,
@@ -187,6 +191,7 @@ async function streamChapterText(input: {
       observed = await completeRoleObserved(input.resolved, input.prompt, {
         llm: input.projectLlm,
         signal,
+        system,
         onTextDelta: (delta) => {
           streamed += delta;
           return input.onTextDelta?.(delta);
@@ -356,9 +361,11 @@ export async function reviewChapterDraft(input: WriteRuntime & {
     body: loaded.body,
     chapterNumber,
   });
+  const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
   const { text, rawExcerpt } = await requestReviewModelText({
     resolved,
     llm: input.llm,
+    system: composeWriteSystemPrompt(resolved.instructions, voice),
     prompt: reviewPrompt(
       "write",
       coverage,
@@ -502,11 +509,14 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
   let settleText = "";
   try {
     const resolved = await resolve(input.project, "write.main", input.root.projectRoot);
+    const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
     settleText = await completeRole(resolved, [
       "根据刚采用的正文整理人物状态与伏笔变化。不要改正文。",
       "只输出一个 JSON 对象，包含 summary（这一章的一段话）、characters（[{name, status}]）、openHooks（[{id, label, targetChapter, note}]，新埋下还没收的线）、advanceHooks（推进了但没收回的旧线 id）、resolveHooks（已经收回的线 id）。拿不准时 summary 仍要写，其余留空数组。",
       chapterBody.slice(0, 8000),
-    ].join("\n"), input.settle ?? input.llm, signal);
+    ].join("\n"), input.settle ?? input.llm, signal, {
+      system: composeWriteSystemPrompt(resolved.instructions, voice),
+    });
     settled = true;
   } catch (error) {
     if (signal?.aborted) {

@@ -5,10 +5,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
+import { quarantineCorruptFile } from "../utils/quarantine-corrupt.js";
 import { z } from "zod";
 import {
   ensureWorkflowIndex,
@@ -92,9 +93,92 @@ export function emptyManifest(root: AuthoringStoreRoot): WorkflowManifest {
   });
 }
 
+function newerArtifact(left: AuthoringArtifactMeta, right: AuthoringArtifactMeta): AuthoringArtifactMeta {
+  if (left.version !== right.version) return left.version > right.version ? left : right;
+  return left.createdAt >= right.createdAt ? left : right;
+}
+
+function pickNewest(items: readonly AuthoringArtifactMeta[]): AuthoringArtifactMeta | undefined {
+  return items.reduce<AuthoringArtifactMeta | undefined>((best, item) => (
+    best ? newerArtifact(best, item) : item
+  ), undefined);
+}
+
+/** Rebuild the workflow ledger from artifact meta when manifest.json cannot be parsed. */
+export async function rebuildManifestFromArtifacts(root: AuthoringStoreRoot): Promise<WorkflowManifest> {
+  const artifactsDir = join(authoringRootDir(root), "artifacts");
+  const ids = await readdir(artifactsDir).catch(() => [] as string[]);
+  const metas: AuthoringArtifactMeta[] = [];
+  for (const id of ids) {
+    const meta = await readJson(
+      join(artifactsDir, id, "meta.json"),
+      (raw) => AuthoringArtifactMetaSchema.parse(raw),
+    ).catch(() => undefined);
+    if (meta) metas.push(meta);
+  }
+  const ask = metas.filter((item) => item.stage === "ask");
+  const weave = metas.filter((item) => item.stage === "weave");
+  const groundAdopted = metas.filter((item) => item.stage === "ground" && item.status === "adopted").map((item) => item.artifactId);
+  const groundCandidates = metas
+    .filter((item) => item.stage === "ground" && (item.status === "candidate" || item.status === "draft"))
+    .map((item) => item.artifactId);
+  const adoptedAsk = pickNewest(ask.filter((item) => item.status === "adopted"));
+  const candidateAsk = pickNewest(ask.filter((item) => item.status === "candidate" || item.status === "draft")) ?? pickNewest(ask);
+  const adoptedWeave = pickNewest(weave.filter((item) => item.status === "adopted"));
+  const candidateWeave = pickNewest(weave.filter((item) => item.status === "candidate" || item.status === "draft")) ?? pickNewest(weave);
+  const adoptedWrite: Record<string, string> = {};
+  const candidateWrite: Record<string, string> = {};
+  const byChapter = new Map<string, AuthoringArtifactMeta[]>();
+  for (const meta of metas) {
+    if (meta.stage !== "write") continue;
+    const match = /^chapter:(\d+)$/.exec(meta.scope);
+    if (!match?.[1]) continue;
+    const list = byChapter.get(match[1]) ?? [];
+    list.push(meta);
+    byChapter.set(match[1], list);
+  }
+  for (const [chapter, items] of byChapter) {
+    const adopted = pickNewest(items.filter((item) => item.status === "adopted"));
+    const candidate = pickNewest(items.filter((item) => item.status === "candidate" || item.status === "draft"))
+      ?? pickNewest(items.filter((item) => item.status !== "archived"))
+      ?? pickNewest(items);
+    if (adopted) adoptedWrite[chapter] = adopted.artifactId;
+    if (candidate) candidateWrite[chapter] = candidate.artifactId;
+  }
+  return WorkflowManifestSchema.parse({
+    ...emptyManifest(root),
+    adopted: {
+      ...(adoptedAsk ? { ask: adoptedAsk.artifactId } : {}),
+      ground: groundAdopted,
+      ...(adoptedWeave ? { weave: adoptedWeave.artifactId } : {}),
+      write: adoptedWrite,
+    },
+    candidates: {
+      ...(candidateAsk ? { ask: candidateAsk.artifactId } : {}),
+      ground: groundCandidates,
+      ...(candidateWeave ? { weave: candidateWeave.artifactId } : {}),
+      write: candidateWrite,
+    },
+    coverage: {
+      settingsAdopted: groundAdopted.length,
+      chaptersWrittenAdopted: Object.keys(adoptedWrite).length,
+    },
+  });
+}
+
 export async function loadManifest(root: AuthoringStoreRoot): Promise<WorkflowManifest> {
   const path = join(authoringRootDir(root), "manifest.json");
-  return (await readJson(path, (raw) => WorkflowManifestSchema.parse(raw))) ?? emptyManifest(root);
+  if (!(await exists(path))) return emptyManifest(root);
+  try {
+    const raw = await readFile(path, "utf-8");
+    if (!raw.trim()) return emptyManifest(root);
+    return WorkflowManifestSchema.parse(JSON.parse(raw) as unknown);
+  } catch {
+    await quarantineCorruptFile(path).catch(() => undefined);
+    const rebuilt = await rebuildManifestFromArtifacts(root);
+    await saveManifest(root, rebuilt);
+    return rebuilt;
+  }
 }
 
 export async function saveManifest(root: AuthoringStoreRoot, manifest: z.input<typeof WorkflowManifestSchema> | WorkflowManifest): Promise<void> {
@@ -228,10 +312,11 @@ export async function loadAuthoringWorkspaceLists(
   readonly reports: AuthoringReviewReport[];
   readonly runs: AuthoringRunRecord[];
 }> {
-  if (query.summary) {
-    return { artifacts: [], reports: [], runs: [] };
-  }
   const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const sortedRuns = () => index.runs.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (query.summary) {
+    return { artifacts: [], reports: [], runs: sortedRuns() };
+  }
   const chapter = query.chapter;
   const scopedChapter = Number.isInteger(chapter) && (chapter ?? 0) > 0;
   const artifacts = filterWorkflowArtifacts(index, scopedChapter
@@ -246,7 +331,7 @@ export async function loadAuthoringWorkspaceLists(
     return true;
   });
   const runs = (scopedChapter
-    ? []
+    ? index.runs.filter((run) => run.scope === `chapter:${chapter}` || run.producedArtifactIds.some((id) => ids.has(id)))
     : query.stage
       ? index.runs.filter((run) => run.stage === query.stage)
       : index.runs

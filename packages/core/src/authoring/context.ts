@@ -8,6 +8,7 @@ import { access, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { findChapterNode, findVolumeOwningNode, parseVolumeMapTree, volumeMapLeadingNotesMarkdown } from "../utils/volume-map-tree.js";
+import { readBookJsonFile } from "../state/book-json.js";
 import { splitChapterHeading } from "./chapter-heading.js";
 import { parseCanon, canonFromCompat, serializeCanon } from "./canon.js";
 import { loadWriteMemory, pickSettingsByMention } from "./serial-ledger.js";
@@ -42,7 +43,7 @@ export async function isLightweightAuthoringBook(bookDir: string): Promise<boole
 }
 
 export async function loadBookJson(bookDir: string): Promise<{ title: string; genre?: string; targetChapters?: number; chapterWordCount?: number; language?: string }> {
-  const raw = JSON.parse(await readFile(join(bookDir, "book.json"), "utf-8")) as Record<string, unknown>;
+  const raw = await readBookJsonFile(bookDir);
   return {
     title: typeof raw.title === "string" ? raw.title : "未命名",
     genre: typeof raw.genre === "string" ? raw.genre : undefined,

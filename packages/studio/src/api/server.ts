@@ -1803,6 +1803,7 @@ interface ServiceConfigEntry {
   temperature?: number;
   apiFormat?: "chat" | "responses";
   stream?: boolean;
+  pricePerMillion?: number;
 }
 
 type LLMConfigSource = "env" | "studio";
@@ -1993,6 +1994,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+      ...priceField(value.pricePerMillion),
     };
   }
 
@@ -2002,7 +2004,18 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+    ...priceField(value.pricePerMillion),
   };
+}
+
+function readPricePerMillion(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
+}
+
+function priceField(value: unknown): { pricePerMillion?: number } {
+  const price = readPricePerMillion(value);
+  return price === undefined ? {} : { pricePerMillion: price };
 }
 
 function normalizeConfigSource(value: unknown): LLMConfigSource {
@@ -2021,6 +2034,7 @@ function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
         ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
         ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" ? { apiFormat: entry.apiFormat } : {}),
         ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
+        ...priceField(entry.pricePerMillion),
       }));
   }
 
@@ -2038,11 +2052,15 @@ function mergeServiceConfig(existing: ServiceConfigEntry[], updates: ServiceConf
   for (const update of updates) {
     const key = serviceConfigKey(update);
     const previous = merged.get(key);
-    merged.set(key, {
+    const next: ServiceConfigEntry = {
       ...previous,
       ...update,
       ...(update.models === undefined && previous?.models ? { models: previous.models } : {}),
-    });
+    };
+    if ("pricePerMillion" in update && !(typeof update.pricePerMillion === "number" && update.pricePerMillion > 0)) {
+      delete next.pricePerMillion;
+    }
+    merged.set(key, next);
   }
   return [...merged.values()];
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readAuthoringSse } from "./authoring-stream";
-import { formatTokenCount, sumTokenUsage } from "./token-usage";
+import { estimateTokenCost, formatTokenCount, sumTokenUsage } from "./token-usage";
 
 function sseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -32,5 +32,7 @@ describe("authoring write stream", () => {
     expect(formatTokenCount(860, true)).toBe("860 token");
     expect(formatTokenCount(12500, true)).toBe("1.3 万 token");
     expect(sumTokenUsage([{ usage: { totalTokens: 10 } }, { usage: { totalTokens: 5 } }, {}])).toBe(15);
+    expect(estimateTokenCost(12500, 2)).toBe("约 0.03 元");
+    expect(estimateTokenCost(12500, undefined)).toBe("");
   });
 });

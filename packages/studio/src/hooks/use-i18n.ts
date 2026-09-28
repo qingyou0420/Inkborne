@@ -385,7 +385,7 @@ const strings = {
   "settings.globalDefaultModelHint": { zh: "Chat、书籍操作和 CLI 未指定模型时使用这一组默认服务与模型。", en: "Used by Chat, book actions, and CLI paths when no explicit model is selected." },
   "settings.serviceId": { zh: "服务 ID（如 deepseek）", en: "service id (e.g. deepseek)" },
   "settings.noOverrides": { zh: "还没有按角色指定模型，都用默认模型。", en: "No overrides — every role uses the default model." },
-  "settings.agentName": { zh: "角色（如 落笔 / 研墨）", en: "role (e.g. writer / architect)" },
+  "settings.agentName": { zh: "角色（如 落笔 / 研墨）", en: "role (e.g. write / ground)" },
   "settings.modelId": { zh: "模型 ID", en: "model id" },
   "settings.addOverride": { zh: "添加路由", en: "Add override" },
   "settings.noChannels": { zh: "暂无通知渠道。", en: "No channels yet." },

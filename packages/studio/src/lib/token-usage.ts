@@ -24,3 +24,18 @@ export function formatTokenCount(total: number, isZh: boolean): string {
 export function sumTokenUsage(runs: ReadonlyArray<{ usage?: TokenUsage }> | undefined): number {
   return (runs ?? []).reduce((sum, run) => sum + (run.usage?.totalTokens ?? 0), 0);
 }
+
+export function firstPricePerMillion(
+  services: ReadonlyArray<{ pricePerMillion?: number }> | undefined,
+): number | undefined {
+  const price = services?.find((entry) => typeof entry.pricePerMillion === "number" && entry.pricePerMillion > 0)?.pricePerMillion;
+  return price && price > 0 ? price : undefined;
+}
+
+/** Rough yuan estimate from an optional 元 / 百万 token price. Empty when the author left it blank. */
+export function estimateTokenCost(totalTokens: number, pricePerMillion?: number): string {
+  if (!pricePerMillion || pricePerMillion <= 0 || !Number.isFinite(totalTokens) || totalTokens <= 0) return "";
+  const yuan = (totalTokens / 1_000_000) * pricePerMillion;
+  if (yuan < 0.01) return "不到 0.01 元";
+  return `约 ${yuan.toFixed(2)} 元`;
+}

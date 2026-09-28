@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, mkdir, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatBookWriteLockCopy, listInProcessBookLocks, StateManager } from "../state/manager.js";
@@ -53,6 +53,18 @@ describe("StateManager", () => {
 
     it("throws when loading a non-existent book", async () => {
       await expect(manager.loadBookConfig("nope")).rejects.toThrow();
+    });
+
+    it("sets a truncated book.json aside and points at the latest snapshot", async () => {
+      const bookDir = manager.bookDir("broken-book");
+      await mkdir(join(bookDir, "story", "snapshots", "12"), { recursive: true });
+      await writeFile(join(bookDir, "book.json"), "{", "utf-8");
+      await expect(manager.loadBookConfig("broken-book")).rejects.toThrow(/snapshots[/\\]12/);
+      const names = await readdir(bookDir);
+      expect(names.some((name) => name.startsWith("book.json.corrupt-"))).toBe(true);
+      expect(names.includes("book.json")).toBe(false);
+      await expect(manager.loadBookConfig("broken-book")).rejects.toThrow(/book\.json 坏了/);
+      expect(await manager.listBooks()).toContain("broken-book");
     });
   });
 

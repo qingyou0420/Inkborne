@@ -8,7 +8,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { collapseDuplicateChapterHeadings } from "@actalk/inkos-core/chapter-heading";
 import { postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
 import { postAuthoringStream, type AuthoringStreamResult } from "../lib/authoring-stream";
-import { formatTokenCount, type TokenUsage } from "../lib/token-usage";
+import { estimateTokenCost, firstPricePerMillion, formatTokenCount, type TokenUsage } from "../lib/token-usage";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { showToast } from "../lib/toast";
@@ -107,6 +107,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   const { data: basis } = useApi<WriteBasis>(
     `/authoring/write/basis?bookId=${encodeURIComponent(bookId)}&chapterNumber=${chapterNumber}`,
   );
+  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ pricePerMillion?: number }> }>("/services/config");
   const artifactForCurrent = artifact?.meta?.artifactId === candidate?.artifactId ? artifact : undefined;
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
   const rawSaved = artifactForCurrent?.body ?? (!candidate ? chapterForCurrent?.content ?? "" : "");
@@ -374,6 +375,9 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   const runUsage = data?.runs?.find((run) => run.runId && run.runId === candidate?.runId)?.usage;
   const shownUsage = usage ?? runUsage;
   const usageLabel = shownUsage?.totalTokens ? formatTokenCount(shownUsage.totalTokens, isZh) : "";
+  const usageCost = shownUsage?.totalTokens
+    ? estimateTokenCost(shownUsage.totalTokens, firstPricePerMillion(serviceConfig?.services))
+    : "";
   const leftId = parentId && parentId !== candidate?.artifactId ? parentId : undefined;
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
   const activeReport = report ?? workspaceReport;
@@ -450,7 +454,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
         {usageLabel ? (
           <p className="text-xs text-muted-foreground" data-testid="write-token-usage">
-            {isZh ? `这次用了 ${usageLabel}` : `This pass used ${usageLabel}`}
+            {isZh ? `这次用了 ${usageLabel}${usageCost ? `（${usageCost}）` : ""}` : `This pass used ${usageLabel}${usageCost ? ` (${usageCost})` : ""}`}
           </p>
         ) : null}
       {generateChoice ? (

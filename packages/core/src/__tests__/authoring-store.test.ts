@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   saveHandEditedArtifact,
   saveManifest,
   saveReport,
+  saveRun,
   type AuthoringStoreRoot,
 } from "../authoring/store.js";
 
@@ -139,5 +140,48 @@ describe("authoring store", () => {
     expect((await loadReport(store, "other"))?.stale).toBe(false);
     expect((await loadReport(store, "bound"))?.stale).toBe(true);
     expect(await readFile(otherPath, "utf-8")).toContain("他章报告");
+  });
+
+  it("rebuilds a truncated manifest from artifact meta and keeps chapter usage", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-store-"));
+    const store: AuthoringStoreRoot = { projectRoot: root, bookId: "demo" };
+    const stamp = new Date().toISOString();
+    await saveArtifact(store, {
+      artifactId: "write-ch2",
+      stage: "write",
+      scope: "chapter:2",
+      version: 2,
+      source: "generate",
+      status: "candidate",
+      bodyPath: "body.md",
+      inputRefs: [],
+      createdAt: stamp,
+    }, "第二章正文");
+    await saveRun(store, {
+      runId: "run-ch2",
+      stage: "write",
+      operation: "generate",
+      roleId: "write.main",
+      status: "completed",
+      scope: "chapter:2",
+      producedArtifactIds: ["write-ch2"],
+      modelSnapshot: {},
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      createdAt: stamp,
+      updatedAt: stamp,
+    });
+    const manifestPath = join(root, "books", "demo", "story", "workflow", "manifest.json");
+    await writeFile(manifestPath, "{", "utf-8");
+    const restored = await loadManifest(store);
+    expect(restored.candidates.write["2"]).toBe("write-ch2");
+    const names = await readdir(join(root, "books", "demo", "story", "workflow"));
+    expect(names.some((name) => name.startsWith("manifest.json.corrupt-"))).toBe(true);
+    const chapter = await loadAuthoringWorkspaceLists(store, { chapter: 2 });
+    expect(chapter.runs.map((run) => run.usage?.totalTokens)).toEqual([15]);
+    const summary = await loadAuthoringWorkspaceLists(store, { summary: true });
+    expect(summary.artifacts).toEqual([]);
+    expect(summary.runs.reduce((sum, run) => sum + (run.usage?.totalTokens ?? 0), 0)).toBe(15);
+    const other = await loadAuthoringWorkspaceLists(store, { chapter: 1 });
+    expect(other.runs).toEqual([]);
   });
 });

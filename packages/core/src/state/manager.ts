@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { join, resolve, sep } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
+import { bookDirHasCorruptBookJson, readBookJsonFile } from "./book-json.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
@@ -728,12 +729,7 @@ export class StateManager {
   }
 
   async loadBookConfig(bookId: string): Promise<BookConfig> {
-    const configPath = join(this.bookDir(bookId), "book.json");
-    const raw = await readFile(configPath, "utf-8");
-    if (!raw.trim()) {
-      throw new Error(`book.json is empty for book "${bookId}"`);
-    }
-    return JSON.parse(raw) as BookConfig;
+    return await readBookJsonFile(this.bookDir(bookId)) as BookConfig;
   }
 
   async saveBookConfig(bookId: string, config: BookConfig): Promise<void> {
@@ -766,7 +762,7 @@ export class StateManager {
           await stat(bookJsonPath);
           bookIds.push(entry);
         } catch {
-          // not a book directory
+          if (await bookDirHasCorruptBookJson(join(this.booksDir, entry))) bookIds.push(entry);
         }
       }
       return bookIds;

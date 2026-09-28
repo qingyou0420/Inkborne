@@ -79,12 +79,13 @@ export async function completeRole(
   user: string,
   llm?: AuthoringLlmFn,
   signal?: AbortSignal,
-  options?: { readonly responseFormat?: "json_object" },
+  options?: { readonly responseFormat?: "json_object"; readonly system?: string },
 ): Promise<string> {
   const result = await completeRoleObserved(resolved, user, {
     llm,
     signal,
     ...(options?.responseFormat ? { responseFormat: options.responseFormat } : {}),
+    ...(options?.system ? { system: options.system } : {}),
   });
   return result.content;
 }
@@ -97,9 +98,11 @@ export async function completeRoleObserved(
     readonly signal?: AbortSignal;
     readonly onTextDelta?: (delta: string) => void | Promise<void>;
     readonly responseFormat?: "json_object";
+    readonly system?: string;
   },
 ): Promise<AuthoringLlmResult> {
   const fn = options?.llm ?? createAuthoringLlm(resolved);
+  const system = options?.system?.trim() || resolved.instructions;
   return readAuthoringLlmResult(await fn({
     roleId: resolved.roleId,
     snapshot: resolved.snapshot,
@@ -107,7 +110,7 @@ export async function completeRoleObserved(
     ...(options?.onTextDelta ? { onTextDelta: options.onTextDelta } : {}),
     ...(options?.responseFormat ? { responseFormat: options.responseFormat } : {}),
     messages: [
-      { role: "system", content: resolved.instructions },
+      { role: "system", content: system },
       { role: "user", content: user },
     ],
   }));

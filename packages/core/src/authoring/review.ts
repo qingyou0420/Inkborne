@@ -126,6 +126,7 @@ export async function requestReviewModelText(input: {
   readonly prompt: string;
   readonly llm?: AuthoringLlmFn;
   readonly signal?: AbortSignal;
+  readonly system?: string;
 }): Promise<{ text: string; rawExcerpt?: string }> {
   const allowFormat = shouldAttemptJsonResponseFormat(input.resolved);
   const once = (format: boolean) => completeRole(
@@ -133,7 +134,10 @@ export async function requestReviewModelText(input: {
     input.prompt,
     input.llm,
     input.signal,
-    format ? { responseFormat: "json_object" } : undefined,
+    {
+      ...(format ? { responseFormat: "json_object" as const } : {}),
+      ...(input.system ? { system: input.system } : {}),
+    },
   );
   let text: string;
   try {

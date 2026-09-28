@@ -10,6 +10,8 @@ const LLMServiceEntrySchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   apiFormat: z.enum(["chat", "responses"]).optional(),
   stream: z.boolean().optional(),
+  /** Optional yuan per million tokens. Used only to show an estimate. */
+  pricePerMillion: z.number().positive().optional(),
 });
 
 const LLMCoverConfigSchema = z.object({

@@ -14,6 +14,7 @@ interface ServiceEntry {
   readonly service?: string;
   readonly name?: string;
   readonly baseUrl?: string;
+  readonly pricePerMillion?: number;
 }
 
 interface ServicesConfig {
@@ -66,6 +67,8 @@ export function SimpleModelSettings() {
   const [showKey, setShowKey] = useState(false);
   const [mainModel, setMainModel] = useState("");
   const [reviewModel, setReviewModel] = useState("");
+  const [pricePerMillion, setPricePerMillion] = useState("");
+  const [hadPrice, setHadPrice] = useState(false);
   const [hint, setHint] = useState("密钥只存在本机用户数据目录（与应用配置、日志放在一起），不会放进书稿文件夹。");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,6 +89,11 @@ export function SimpleModelSettings() {
         const review = roles.roles?.["write.review"]?.modelId || main;
         setMainModel(main);
         setReviewModel(review);
+        const priced = (config.services ?? []).find((entry) => typeof entry.pricePerMillion === "number" && entry.pricePerMillion > 0);
+        if (priced?.pricePerMillion) {
+          setPricePerMillion(String(priced.pricePerMillion));
+          setHadPrice(true);
+        }
         const secret = await fetchJson<SecretView>(`/services/${encodeURIComponent(picked.id)}/secret`);
         if (cancelled) return;
         setConfigured(Boolean(secret.configured) || Boolean(secret.apiKey));
@@ -151,6 +159,8 @@ export function SimpleModelSettings() {
       setStatus(tr("请先填写接口地址", "Enter the API address first"));
       return;
     }
+    const price = Number(pricePerMillion.trim());
+    const savedPrice = pricePerMillion.trim() && Number.isFinite(price) && price > 0 ? price : 0;
     setBusy(true);
     setStatus(tr("正在保存…", "Saving…"));
     try {
@@ -160,15 +170,18 @@ export function SimpleModelSettings() {
         setConfigured(true);
         setLast4(typedKey.slice(-4));
       }
-      if (serviceId.startsWith("custom:")) {
+      if (serviceId.startsWith("custom:") || savedPrice > 0 || hadPrice) {
         await putApi("/services/config", {
           service: serviceId,
           defaultModel: nextMain,
           services: [{
-            service: "custom",
-            name: serviceName || "自定义",
-            baseUrl: baseUrl.trim(),
-            models: [nextMain, nextReview].filter((model, index, list) => model && list.indexOf(model) === index),
+            service: serviceId.startsWith("custom:") ? "custom" : serviceId,
+            ...(serviceId.startsWith("custom:") ? {
+              name: serviceName || "自定义",
+              baseUrl: baseUrl.trim(),
+              models: [nextMain, nextReview].filter((model, index, list) => model && list.indexOf(model) === index),
+            } : {}),
+            pricePerMillion: savedPrice,
           }],
         });
       }
@@ -254,6 +267,17 @@ export function SimpleModelSettings() {
             onChange={(event) => setReviewModel(event.target.value)}
             placeholder={tr("留空则和主力模型相同", "Leave blank to use the main model")}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono"
+          />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>{tr("估算单价（元 / 百万 token，可留空）", "Estimate (yuan / million tokens, optional)")}</span>
+          <input
+            value={pricePerMillion}
+            onChange={(event) => setPricePerMillion(event.target.value)}
+            inputMode="decimal"
+            placeholder={tr("例如 2，只用来估算，不计费", "e.g. 2, estimate only")}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono"
+            data-testid="model-price-per-million"
           />
         </label>
       </div>
