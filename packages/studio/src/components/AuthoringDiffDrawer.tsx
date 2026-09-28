@@ -39,6 +39,8 @@ export function AuthoringDiffDrawer({
     : "";
   const { data } = useApi<DiffResponse>(query);
   const hunks = data?.hunks ?? [];
+  const added = hunks.filter((hunk) => hunk.kind === "add").length;
+  const removed = hunks.filter((hunk) => hunk.kind === "del").length;
 
   return (
     <Drawer open={open} title={isZh ? "版本比较" : "Compare versions"} onClose={onClose} testId="authoring-diff-drawer">
@@ -49,12 +51,18 @@ export function AuthoringDiffDrawer({
             : (isZh ? "没有可比较的修改前稿。" : "No earlier baseline to compare.")}
           {adoptedId ? (isZh ? " · 正式采用稿另有一份" : " · adopted copy is separate") : ""}
         </p>
+        {hunks.length > 0 ? (
+          <p className="text-xs text-muted-foreground" data-testid="authoring-diff-summary">
+            {isZh ? `新增 ${added} 行，删掉 ${removed} 行。绿色是加上的，划掉的是拿掉的。` : `Added ${added}, removed ${removed}.`}
+          </p>
+        ) : null}
         <div className="max-h-[55vh] overflow-auto rounded-lg border border-border bg-background p-3 font-serif text-[14px] leading-6">
           {hunks.length === 0 ? (
             <p className="text-sm text-muted-foreground">{isZh ? "没有可比较的差异。" : "No diff yet."}</p>
           ) : hunks.map((hunk, index) => (
             <div
               key={`${hunk.kind}-${index}`}
+              data-diff-kind={hunk.kind}
               className={
                 hunk.kind === "add"
                   ? "bg-[oklch(0.95_0.016_160)] px-1"

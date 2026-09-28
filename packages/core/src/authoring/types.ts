@@ -110,6 +110,8 @@ export const ReviewIssueSchema = z.object({
   reason: z.string().optional(),
   suggestion: z.string().optional(),
   suggestedScope: z.string().optional(),
+  /** Author-facing review aspect, such as 情节推进 / 人物一致 / 伏笔 / 节奏 / 文笔. */
+  dimension: z.string().min(1).optional(),
 });
 export type ReviewIssue = z.infer<typeof ReviewIssueSchema>;
 
@@ -126,6 +128,8 @@ export const AuthoringReviewReportSchema = z.object({
   stale: z.boolean().default(false),
   staleReason: z.string().optional(),
   incomplete: z.boolean().default(false),
+  /** Model text kept when the review JSON could not be parsed. */
+  rawExcerpt: z.string().optional(),
   runId: z.string().optional(),
 });
 export type AuthoringReviewReport = z.infer<typeof AuthoringReviewReportSchema>;
@@ -282,6 +286,8 @@ export interface AuthoringLlmCall {
   readonly messages: ReadonlyArray<{ role: "system" | "user" | "assistant"; content: string }>;
   readonly snapshot: Record<string, unknown>;
   readonly signal?: AbortSignal;
+  /** Ask an OpenAI-compatible endpoint for a JSON object. Unsupported relays retry without it. */
+  readonly responseFormat?: "json_object";
 }
 
 export type AuthoringLlmFn = (call: AuthoringLlmCall) => Promise<string>;

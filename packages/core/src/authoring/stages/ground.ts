@@ -11,7 +11,7 @@ import { assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from
 import { asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
+import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   loadArtifact,
   loadManifest,
@@ -266,17 +266,18 @@ export async function reviewGroundEntries(input: GroundRuntime & {
   if (chunks.length === 0) throw new Error("没有可审查的设定条目。");
   const resolved = await resolve(input.project, "ground.review", input.root.projectRoot);
   const ctx = await assembleAuthoringContext(input.root, { stage: "ground" });
-  const text = await completeRole(
+  const reviewed = await requestReviewModelText({
     resolved,
-    reviewPrompt("ground", `${chunks.length} 项设定`, chunks.join("\n\n"), `${ctx.text}\n\ntarget 必须填写条目 id。`),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+    prompt: reviewPrompt("ground", `${chunks.length} 项设定`, chunks.join("\n\n"), `${ctx.text}\n\ntarget 必须填写条目 id。`),
+    llm: input.llm,
+  });
+  const report = parseReviewPayload(reviewed.text, {
     stage: "ground",
     targetRefs: refs,
     coverage: `所选 ${chunks.length} 项设定`,
     model: resolved.modelId,
     inputRefs: refs.map((id) => ({ kind: "artifact", id })).concat(ctx.refs),
+    rawExcerpt: reviewed.rawExcerpt,
   });
   await saveReport(input.root, report);
   return report;

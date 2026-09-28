@@ -1744,6 +1744,26 @@ function toPiContext(messages: ReadonlyArray<LLMMessage>): PiContext {
   return { systemPrompt, messages: piMessages };
 }
 
+/** Attach OpenAI `response_format` on the pi-ai path. Anthropic payloads are left alone. */
+export function payloadWithJsonObjectFormat(payload: unknown, format: unknown): unknown {
+  if (!payload || typeof payload !== "object") return undefined;
+  if (!format || typeof format !== "object") return undefined;
+  if ((format as { type?: unknown }).type !== "json_object") return undefined;
+  return { ...(payload as Record<string, unknown>), response_format: format };
+}
+
+function jsonObjectFormatHook(
+  extra: Record<string, unknown>,
+  api: string,
+): { onPayload?: (payload: unknown) => unknown } {
+  if (api !== "openai-completions") return {};
+  const format = extra.response_format;
+  if (!payloadWithJsonObjectFormat({ probe: true }, format)) return {};
+  return {
+    onPayload: (payload: unknown) => payloadWithJsonObjectFormat(payload, format),
+  };
+}
+
 async function chatCompletionViaPiAi(
   client: LLMClient,
   model: string,
@@ -1764,6 +1784,7 @@ async function chatCompletionViaPiAi(
     apiKey: client._apiKey,
     headers: mergeUserAgent({ ...(piModel.headers ?? {}), ...traceHeaders }),
     signal,
+    ...jsonObjectFormatHook(resolved.extra, piModel.api),
   };
 
   if (!client.stream) {

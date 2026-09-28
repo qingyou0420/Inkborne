@@ -24,6 +24,8 @@ export interface AuthoringIssue {
   readonly evidence?: string;
   readonly suggestion?: string;
   readonly reason?: string;
+  readonly dimension?: string;
+  readonly sources?: ReadonlyArray<string>;
 }
 
 export interface AuthoringReport {
@@ -35,6 +37,7 @@ export interface AuthoringReport {
   readonly stale?: boolean;
   readonly staleReason?: string;
   readonly incomplete?: boolean;
+  readonly rawExcerpt?: string;
   readonly createdAt?: string;
   readonly targetRefs: ReadonlyArray<string>;
   readonly issues: ReadonlyArray<AuthoringIssue>;
