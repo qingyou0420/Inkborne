@@ -17,4 +17,20 @@ describe("redactSecrets", () => {
     expect(text).toContain("已隐藏");
     expect(text).toContain("普通的模型超时");
   });
+
+  it("leaves long model names and file paths alone", () => {
+    const model = "accounts/fireworks/models/llama-v3p1-405b-instruct-long-context-2024";
+    const file = "D:\\Grisia Studio\\Inkborne\\packages\\core\\src\\authoring\\stages\\write.ts";
+    const text = redactSecrets(`上游模型 ${model} 失败，文件 ${file}`);
+    expect(text).toContain(model);
+    expect(text).toContain(file);
+    expect(text).not.toContain("已隐藏");
+  });
+
+  it("still hides an unbroken high-entropy alphanumeric string", () => {
+    const secret = "AbCdEf0123456789AbCdEf0123456789AbCdEf012345";
+    const text = redactSecrets(`token ${secret} 之后`);
+    expect(text).not.toContain(secret);
+    expect(text).toContain("已隐藏");
+  });
 });

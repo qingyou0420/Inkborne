@@ -823,6 +823,7 @@ export {
   loadResearchSearchRuntime,
   migrateResearchSearchKey,
   readResearchSearchPublic,
+  RESEARCH_SEARCH_KEY_NOT_STORED,
   saveResearchSearchSettings,
   type ResearchSearchPublic,
 } from "./llm/research-search-secret.js";
