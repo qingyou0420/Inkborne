@@ -37,7 +37,9 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   onBusyChange,
   onChanged,
 }, ref) {
-  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data, loading, refetch } = useApi<AuthoringWorkspace>(
+    `/authoring/workspace?${workspaceQuery(bookId, undefined, { chapter: chapterNumber })}`,
+  );
   const candidate = currentWriteArtifact(data, chapterNumber);
   const adoptedId = data?.manifest?.adopted?.write?.[String(chapterNumber)];
   const parentId = candidate?.parentArtifactId && candidate.parentArtifactId !== candidate.artifactId
@@ -95,11 +97,12 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       lastLoadedId.current = loadKey;
       return;
     }
+    if (loading) return;
     if (lastLoadedId.current !== loadKey) {
       setBody("");
       lastLoadedId.current = loadKey;
     }
-  }, [artifactForCurrent?.body, bookId, candidate, chapterForCurrent?.content, chapterNumber]);
+  }, [artifactForCurrent?.body, bookId, candidate, chapterForCurrent?.content, chapterNumber, loading]);
 
   const persistSnapshot = async (
     pending: NonNullable<ReturnType<typeof trackChapterEdit>>,

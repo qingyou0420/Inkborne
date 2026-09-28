@@ -366,6 +366,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     deleteLatestChapter: deleteLatestChapterMock,
     executeEditTransaction: actual.executeEditTransaction,
     listChapterVersions: actual.listChapterVersions,
+    resolveChapterFile: actual.resolveChapterFile,
+    loadAuthoringWorkspaceLists: actual.loadAuthoringWorkspaceLists,
     readChapterPlanDocument: actual.readChapterPlanDocument,
     readChapterUserBrief: actual.readChapterUserBrief,
     readChapterVersion: actual.readChapterVersion,
@@ -3109,9 +3111,9 @@ describe("createStudioServer daemon lifecycle", () => {
       join(root, "books", "demo-book", "chapters", "0003_Demo.md"),
       "utf-8",
     )).resolves.toContain("人工修改后的正文");
-    const versionFiles = await (await import("node:fs/promises")).readdir(
+    const versionFiles = (await (await import("node:fs/promises")).readdir(
       join(root, "books", "demo-book", "chapters", ".versions", "0003"),
-    );
+    )).filter((file) => file.endsWith(".md"));
     expect(versionFiles).toHaveLength(1);
     expect(versionFiles[0]).toContain("_manual_");
     await expect(readFile(

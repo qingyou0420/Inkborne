@@ -128,6 +128,7 @@ import {
   deleteLatestChapter,
   executeEditTransaction,
   listChapterVersions,
+  resolveChapterFile,
   readChapterPlanDocument,
   readChapterUserBrief,
   readChapterVersion,
@@ -3498,15 +3499,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const num = parseInt(c.req.param("num"), 10);
     const bookDir = state.bookDir(id);
-    const chaptersDir = join(bookDir, "chapters");
 
     try {
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      return c.json({ chapterNumber: num, filename: match, content });
+      const located = await resolveChapterFile(bookDir, num);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
+      const content = await readFile(join(bookDir, located.relativePath), "utf-8");
+      return c.json({ chapterNumber: num, filename: located.fileName, content });
     } catch {
       return c.json({ error: "Chapter not found" }, 404);
     }
@@ -3563,15 +3561,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     try {
       const bookDir = state.bookDir(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const chapterFile = files.find((file) => file.startsWith(paddedNum) && file.endsWith(".md"));
-      if (!chapterFile) {
+      const located = await resolveChapterFile(bookDir, num);
+      if (!located) {
         return c.json({ error: "Chapter not found" }, 404);
       }
       const [chapter, persistedBrief, plan, book, pipelineConfig] = await Promise.all([
-        readFile(join(chaptersDir, chapterFile), "utf-8"),
+        readFile(join(bookDir, located.relativePath), "utf-8"),
         readChapterUserBrief(bookDir, num),
         readChapterPlanDocument(bookDir, num),
         state.loadBookConfig(id),
@@ -6424,13 +6419,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
     try {
       const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      const located = await resolveChapterFile(bookDir, chapterNum);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
 
-      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const content = await readFile(join(bookDir, located.relativePath), "utf-8");
       const currentConfig = await loadCurrentProjectConfig();
       const { ContinuityAuditor } = await import("@actalk/inkos-core");
       const auditor = new ContinuityAuditor({
@@ -6460,12 +6452,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("revise:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      const located = await resolveChapterFile(bookDir, chapterNum);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
 
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
@@ -6749,13 +6737,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookDir = state.bookDir(id);
 
     try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      const located = await resolveChapterFile(bookDir, chapterNum);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
 
-      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const content = await readFile(join(bookDir, located.relativePath), "utf-8");
       const { analyzeAITells } = await import("@actalk/inkos-core");
       const result = analyzeAITells(content);
       return c.json({ chapterNumber: chapterNum, ...result });

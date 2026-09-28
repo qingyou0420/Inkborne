@@ -31,7 +31,7 @@ export function AuthoringWeavePanel({
   readonly isZh: boolean;
   readonly onAdopted?: () => void;
 }) {
-  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { stage: "weave" })}`);
   const coverage = data?.manifest?.coverage;
   const candidate = latestArtifact(data?.artifacts, "weave");
   const lastWeave = data?.runs?.find((item) => item.stage === "weave");

@@ -43,6 +43,7 @@ async function rebuildIndexFromFiles(bookDir: string): Promise<ChapterMeta[]> {
     return [{
       number,
       title: rawTitle || `第${number}章`,
+      file,
       status: "ready-for-review" as const,
       wordCount: content.replace(/\s+/g, "").length,
       createdAt: timestamp,
@@ -112,11 +113,10 @@ export async function autosaveChapterBody(input: {
   if (typeof input.content !== "string") {
     throw indexFailure("正文没有送到，自动保存已停止。");
   }
-  const padded = String(input.chapterNumber).padStart(4, "0");
+  const located = await resolveChapterFile(input.bookDir, input.chapterNumber);
+  if (!located) throw indexFailure(`找不到第 ${input.chapterNumber} 章的正文，自动保存已停止。`);
+  const fileName = located.fileName;
   const chaptersDir = join(input.bookDir, "chapters");
-  const files = await readdir(chaptersDir).catch(() => [] as string[]);
-  const fileName = files.find((file) => file.startsWith(`${padded}_`) && file.endsWith(".md"));
-  if (!fileName) throw indexFailure(`找不到第 ${input.chapterNumber} 章的正文，自动保存已停止。`);
   const index = await readIndex(input.bookDir);
   if (!index.some((item) => item.number === input.chapterNumber)) {
     throw indexFailure(`章节目录里没有第 ${input.chapterNumber} 章，自动保存已停止，没有改写目录。`);
@@ -133,7 +133,7 @@ export async function autosaveChapterBody(input: {
   await writeFileAtomic(chapterPath, body);
   const now = savedAt.toISOString();
   const next = index.map((item) => item.number === input.chapterNumber
-    ? { ...item, wordCount: counted, updatedAt: now }
+    ? { ...item, wordCount: counted, updatedAt: now, file: fileName }
     : item);
   await writeFileAtomic(join(chaptersDir, "index.json"), `${JSON.stringify(next, null, 2)}\n`);
   return { wordCount: counted };
@@ -182,6 +182,7 @@ export async function persistAdoptedChapter(input: {
   const entry: ChapterMeta = {
     number: input.chapterNumber,
     title: input.title || `第${input.chapterNumber}章`,
+    file: destName,
     status: input.status ?? "ready-for-review",
     wordCount: wordCount(input.body),
     createdAt: existing.find((item) => item.number === input.chapterNumber)?.createdAt ?? now,
@@ -238,12 +239,27 @@ export function titleFromChapterFileName(fileName: string): string {
   return raw && raw !== "chapter" ? raw : "";
 }
 
-export async function findChapterRelativePath(
+export async function resolveChapterFile(
   bookDir: string,
   chapterNumber: number,
-): Promise<{ relativePath: string; title: string } | undefined> {
-  const padded = String(chapterNumber).padStart(4, "0");
+): Promise<{ fileName: string; relativePath: string; title: string } | undefined> {
+  if (!Number.isInteger(chapterNumber) || chapterNumber < 1) return undefined;
   const chaptersDir = join(bookDir, "chapters");
+  const indexed = readIndexedChapter(await readChapterIndexLoose(bookDir), chapterNumber);
+  if (indexed?.file && isIndexedChapterFile(indexed.file, chapterNumber)) {
+    try {
+      await stat(join(chaptersDir, indexed.file));
+      return {
+        fileName: indexed.file,
+        relativePath: `chapters/${indexed.file}`,
+        title: indexed.title || titleFromChapterFileName(indexed.file) || `第${chapterNumber}章`,
+      };
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      if (code !== "ENOENT") throw error;
+    }
+  }
+  const padded = String(chapterNumber).padStart(4, "0");
   let files: string[] = [];
   try {
     files = await readdir(chaptersDir);
@@ -252,12 +268,52 @@ export async function findChapterRelativePath(
   }
   const match = files.find((file) => file.startsWith(`${padded}_`) && file.endsWith(".md"));
   if (!match) return undefined;
-  const index = await readIndex(bookDir);
-  const titled = index.find((item) => item.number === chapterNumber)?.title?.trim();
   return {
+    fileName: match,
     relativePath: `chapters/${match}`,
-    title: titled || titleFromChapterFileName(match) || `第${chapterNumber}章`,
+    title: indexed?.title || titleFromChapterFileName(match) || `第${chapterNumber}章`,
   };
+}
+
+export async function findChapterRelativePath(
+  bookDir: string,
+  chapterNumber: number,
+): Promise<{ relativePath: string; title: string } | undefined> {
+  const located = await resolveChapterFile(bookDir, chapterNumber);
+  if (!located) return undefined;
+  return { relativePath: located.relativePath, title: located.title };
+}
+
+function isIndexedChapterFile(fileName: string, chapterNumber: number): boolean {
+  if (fileName.includes("/") || fileName.includes("\\") || fileName.includes("..")) return false;
+  const padded = String(chapterNumber).padStart(4, "0");
+  return fileName.startsWith(`${padded}_`) && fileName.endsWith(".md");
+}
+
+async function readChapterIndexLoose(bookDir: string): Promise<Array<{ number: number; title?: string; file?: string }>> {
+  try {
+    const raw = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as unknown;
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as { number?: unknown; title?: unknown; file?: unknown };
+      if (typeof record.number !== "number" || !Number.isInteger(record.number)) return [];
+      return [{
+        number: record.number,
+        ...(typeof record.title === "string" ? { title: record.title } : {}),
+        ...(typeof record.file === "string" ? { file: record.file } : {}),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function readIndexedChapter(
+  index: ReadonlyArray<{ number: number; title?: string; file?: string }>,
+  chapterNumber: number,
+): { number: number; title?: string; file?: string } | undefined {
+  return index.find((item) => item.number === chapterNumber);
 }
 
 export { chapterFileName };

@@ -1,13 +1,15 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   loadArtifact,
+  loadAuthoringWorkspaceLists,
   loadManifest,
   loadReport,
   markReportsStale,
   saveArtifact,
+  saveHandEditedArtifact,
   saveManifest,
   saveReport,
   type AuthoringStoreRoot,
@@ -79,5 +81,63 @@ describe("authoring store", () => {
     expect(reloaded?.staleReason).toContain("甲版");
     expect((await loadArtifact(store, "ask-1"))?.body).toContain("正典正文");
     expect((await loadManifest(store)).bookId).toBe("demo");
+  });
+
+  it("filters workspace lists by chapter and leaves unrelated reports untouched", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-store-"));
+    const store: AuthoringStoreRoot = { projectRoot: root, bookId: "demo" };
+    const stamp = new Date().toISOString();
+    const writeMeta = (chapter: number, artifactId: string) => saveArtifact(store, {
+      artifactId,
+      stage: "write",
+      scope: `chapter:${chapter}`,
+      version: 1,
+      source: chapter === 2 ? "hand" : "generate",
+      status: "candidate",
+      bodyPath: "body.md",
+      inputRefs: [],
+      createdAt: stamp,
+    }, `第${chapter}章`);
+    await writeMeta(1, "write-ch1");
+    await writeMeta(2, "write-ch2");
+    await writeMeta(3, "write-ch3");
+    await saveReport(store, {
+      reportId: "bound",
+      stage: "write",
+      targetRefs: ["write-ch2"],
+      coverage: "本章",
+      inputRefs: [],
+      actualReviewModel: "review",
+      createdAt: stamp,
+      summary: "本章报告",
+      issues: [],
+      stale: false,
+    });
+    await saveReport(store, {
+      reportId: "other",
+      stage: "write",
+      targetRefs: ["write-ch3"],
+      coverage: "他章",
+      inputRefs: [],
+      actualReviewModel: "review",
+      createdAt: stamp,
+      summary: "他章报告",
+      issues: [],
+      stale: false,
+    });
+    const otherPath = join(root, "books", "demo", "story", "workflow", "reviews", "other.json");
+    const before = await stat(otherPath);
+    const chapter = await loadAuthoringWorkspaceLists(store, { chapter: 2 });
+    expect(chapter.artifacts.map((item) => item.artifactId)).toEqual(["write-ch2"]);
+    expect(chapter.reports.map((item) => item.reportId)).toEqual(["bound"]);
+    expect(chapter.runs).toEqual([]);
+    const summary = await loadAuthoringWorkspaceLists(store, { summary: true });
+    expect(summary.artifacts).toEqual([]);
+    expect(summary.reports).toEqual([]);
+    await saveHandEditedArtifact(store, "write-ch2", "改过的第二章");
+    expect((await stat(otherPath)).mtimeMs).toBe(before.mtimeMs);
+    expect((await loadReport(store, "other"))?.stale).toBe(false);
+    expect((await loadReport(store, "bound"))?.stale).toBe(true);
+    expect(await readFile(otherPath, "utf-8")).toContain("他章报告");
   });
 });

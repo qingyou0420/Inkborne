@@ -20,9 +20,7 @@ import {
   generateChapterDraft,
   generateGroundEntries,
   generateWeaveRange,
-  listArtifacts,
-  listReports,
-  listRuns,
+  loadAuthoringWorkspaceLists,
   loadArtifact,
   loadCanonDocument,
   loadManifest,
@@ -146,14 +144,24 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const draftId = c.req.query("draftId") || undefined;
     const root = storeRoot(deps.root, { bookId, draftId });
     const project = await deps.loadProject();
-    const [manifest, artifacts, reports, canon, catalog, runs] = await Promise.all([
+    const chapterRaw = c.req.query("chapter");
+    const chapter = chapterRaw ? Number(chapterRaw) : undefined;
+    const stageRaw = c.req.query("stage");
+    const stage = stageRaw === "ask" || stageRaw === "ground" || stageRaw === "weave" || stageRaw === "write"
+      ? stageRaw
+      : undefined;
+    const summary = c.req.query("summary") === "1";
+    const [manifest, lists, canon, catalog] = await Promise.all([
       loadManifest(root),
-      listArtifacts(root),
-      listReports(root),
+      loadAuthoringWorkspaceLists(root, {
+        ...(Number.isInteger(chapter) && (chapter ?? 0) > 0 ? { chapter } : {}),
+        ...(stage ? { stage } : {}),
+        ...(summary ? { summary: true } : {}),
+      }),
       loadCanonDocument(root).catch(() => null),
       loadSettingsCatalog(root).catch(() => ({ categories: [], entries: [] })),
-      listRuns(root).catch(() => []),
     ]);
+    const { artifacts, reports, runs } = lists;
     const candidateAskId = manifest.candidates.ask;
     const candidateAsk = candidateAskId ? await loadArtifact(root, candidateAskId) : undefined;
     const candidateWeaveId = manifest.candidates.weave;

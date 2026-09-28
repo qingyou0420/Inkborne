@@ -1,6 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChapterManuscriptTable } from "../components/ChapterManuscriptTable";
 import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
 import { AuthoringWritePanel, type AuthoringWritePanelHandle } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
@@ -136,6 +137,7 @@ export function BookDetail({
   } | null>(null);
   const [overrideValue, setOverrideValue] = useState("");
   const [writeChapter, setWriteChapter] = useState<number | null>(null);
+  const [volumeMap, setVolumeMap] = useState("");
 
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
@@ -174,6 +176,9 @@ export function BookDetail({
     void fetchJson<{ items?: Array<{ chapterNumber: number; severity: string; category: string; description: string }> }>(`/books/${bookId}/review-queue`)
       .then((body) => setReviewQueue(body.items ?? []))
       .catch(() => setReviewQueue([]));
+    void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
+      .then((body) => setVolumeMap(body.content ?? ""))
+      .catch(() => setVolumeMap(""));
   }, [bookId, skipPreviousApproval, data?.nextChapter, activity.lastError]);
 
   const selectWriteChapter = async (chapterNumber: number) => {
@@ -518,22 +523,15 @@ export function BookDetail({
       )}
 
       <div className="rounded-xl overflow-hidden border border-border">
-        <div className="overflow-x-auto">
-          <table className="w-full text-[15px] leading-[26px] border-collapse">
-            {chapters.length > 0 && (
-              <thead>
-                <tr className="bg-muted/30 border-b border-border">
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-16">#</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground">{t("book.manuscriptTitle")}</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-28">{t("book.words")}</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-36">{t("book.status")}</th>
-                  <th className="text-right px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-32">{t("book.curate")}</th>
-                </tr>
-              </thead>
-            )}
-            <tbody className="divide-y divide-border/30">
-              {chapters.map((ch) => (
-                <tr key={ch.number} className="group hover:bg-accent/60 transition-colors h-12">
+        {chapters.length > 0 && (
+          <ChapterManuscriptTable
+            chapters={chapters}
+            nextChapter={data.nextChapter}
+            volumeMap={volumeMap}
+            isZh={isZh}
+            t={t}
+            renderChapter={(ch) => (
+                <tr key={ch.number} className="hover:bg-accent/60 transition-colors h-12">
                   <td className="px-4 py-3 text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
                   <td className="px-4 py-3">
                     <button
@@ -551,7 +549,7 @@ export function BookDetail({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex gap-1.5 justify-end">
                       {ch.status === "ready-for-review" && (
                         <button
                           type="button"
@@ -655,10 +653,9 @@ export function BookDetail({
                     </div>
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            )}
+          />
+        )}
 
         {chapters.length === 0 && (
           <LiteraryEmpty

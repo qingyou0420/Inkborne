@@ -8,7 +8,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseVolumeMapTree } from "@actalk/inkos-core/volume-map-tree";
+import {
+  buildChapterGroups,
+  defaultOpenGroupId,
+  filterChapterGroups,
+} from "../lib/chapter-table";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
+import { workspaceQuery } from "../lib/authoring-workspace";
 import { isWriteNextRequest } from "../lib/write-next-request";
 
 const studioRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -107,5 +114,35 @@ describe("authoring four-agent IA", () => {
     expect(read("src/pages/DaemonControl.tsx")).toMatch(/审稿方式/);
     expect(read("src/components/SerialCockpitStrip.tsx")).not.toMatch(/startWriteNext/);
     expect(read("src/components/SerialCockpitStrip.tsx")).not.toMatch(/startDraft/);
+  });
+});
+
+describe("large-book chapter table", () => {
+  it("folds chapters by volume, searches, and opens the current volume", () => {
+    const tree = parseVolumeMapTree([
+      "## 第1卷 上卷（1-2章）",
+      "## 第2卷 下卷（3-4章）",
+    ].join("\n"));
+    const chapters = [
+      { number: 1, title: "开篇" },
+      { number: 2, title: "夜雨" },
+      { number: 3, title: "重逢" },
+      { number: 4, title: "离城" },
+    ];
+    const groups = buildChapterGroups(chapters, tree, true);
+    expect(groups.map((group) => group.title)).toEqual(["第1卷 上卷", "第2卷 下卷"]);
+    expect(groups[0]?.chapters.map((chapter) => chapter.number)).toEqual([1, 2]);
+    expect(defaultOpenGroupId(groups, 3)).toBe(groups[1]?.id);
+    expect(filterChapterGroups(groups, "重逢").flatMap((group) => group.chapters.map((chapter) => chapter.number))).toEqual([3]);
+    expect(filterChapterGroups(groups, "4").flatMap((group) => group.chapters.map((chapter) => chapter.number))).toEqual([4]);
+  });
+
+  it("asks the workspace for one chapter on 落笔 and a summary on 书房", () => {
+    expect(workspaceQuery("demo", undefined, { chapter: 137 })).toBe("bookId=demo&chapter=137");
+    expect(workspaceQuery("demo", undefined, { summary: true })).toBe("bookId=demo&summary=1");
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/chapter: chapterNumber/);
+    expect(read("src/pages/BookStudy.tsx")).toMatch(/summary: true/);
+    expect(read("src/pages/BookDetail.tsx")).toMatch(/chapter-table-search|ChapterManuscriptTable/);
+    expect(read("src/hooks/use-hash-route.ts")).toMatch(/chapter\/\$\{route\.chapterNumber\}/);
   });
 });

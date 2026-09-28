@@ -128,10 +128,24 @@ export interface AuthoringWorkspace {
   };
 }
 
-export function workspaceQuery(bookId?: string, draftId?: string): string {
-  if (bookId) return `bookId=${encodeURIComponent(bookId)}`;
-  if (draftId) return `draftId=${encodeURIComponent(draftId)}`;
-  return "";
+export function workspaceQuery(
+  bookId?: string,
+  draftId?: string,
+  options?: {
+    readonly chapter?: number;
+    readonly summary?: boolean;
+    readonly stage?: "ask" | "ground" | "weave" | "write";
+  },
+): string {
+  const params = new URLSearchParams();
+  if (bookId) params.set("bookId", bookId);
+  else if (draftId) params.set("draftId", draftId);
+  if (options?.chapter && Number.isInteger(options.chapter) && options.chapter > 0) {
+    params.set("chapter", String(options.chapter));
+  }
+  if (options?.summary) params.set("summary", "1");
+  if (options?.stage) params.set("stage", options.stage);
+  return params.toString();
 }
 
 export function reportForArtifact(
