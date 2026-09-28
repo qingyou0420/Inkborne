@@ -129,6 +129,8 @@ export {
   reviewChapterDraft,
   reviseChapterDraft,
   adoptChapterDraft,
+  requestWriteRunCancel,
+  loadWriteChapterBasis,
   withBookWriteLock,
   readAuthoringOpenHooks,
   testAuthoringRole,

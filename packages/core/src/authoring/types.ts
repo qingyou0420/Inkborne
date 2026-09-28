@@ -158,6 +158,13 @@ export const AuthoringRunCheckpointSchema = z.object({
 });
 export type AuthoringRunCheckpoint = z.infer<typeof AuthoringRunCheckpointSchema>;
 
+export const AuthoringTokenUsageSchema = z.object({
+  promptTokens: z.number().int().nonnegative(),
+  completionTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+});
+export type AuthoringTokenUsage = z.infer<typeof AuthoringTokenUsageSchema>;
+
 export const AuthoringRunRecordSchema = z.object({
   runId: z.string().min(1),
   stage: AuthoringStageSchema,
@@ -175,6 +182,7 @@ export const AuthoringRunRecordSchema = z.object({
   reportId: z.string().optional(),
   modelSnapshot: z.record(z.unknown()),
   checkpoint: AuthoringRunCheckpointSchema.optional(),
+  usage: AuthoringTokenUsageSchema.optional(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 });
@@ -281,6 +289,11 @@ export interface ResolvedAuthoringRole {
   readonly snapshot: Record<string, unknown>;
 }
 
+export interface AuthoringLlmResult {
+  readonly content: string;
+  readonly usage?: AuthoringTokenUsage;
+}
+
 export interface AuthoringLlmCall {
   readonly roleId: AuthoringRoleId;
   readonly messages: ReadonlyArray<{ role: "system" | "user" | "assistant"; content: string }>;
@@ -288,6 +301,7 @@ export interface AuthoringLlmCall {
   readonly signal?: AbortSignal;
   /** Ask an OpenAI-compatible endpoint for a JSON object. Unsupported relays retry without it. */
   readonly responseFormat?: "json_object";
+  readonly onTextDelta?: (delta: string) => void | Promise<void>;
 }
 
-export type AuthoringLlmFn = (call: AuthoringLlmCall) => Promise<string>;
+export type AuthoringLlmFn = (call: AuthoringLlmCall) => Promise<string | AuthoringLlmResult>;

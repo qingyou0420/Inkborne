@@ -28,6 +28,7 @@ import {
   stripEngineTokens,
 } from "../lib/copy-map";
 import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
+import { formatTokenCount, sumTokenUsage } from "../lib/token-usage";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
 import {
   CheckCircle2,
@@ -200,6 +201,7 @@ export function BookStudy({
 
   const book = data.book;
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);
+  const tokenTotal = sumTokenUsage(authoring?.runs);
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
   const currentStage = stage?.stage ?? "write";
   const guide = studyGuideCopy(currentStage, isZh);
@@ -286,6 +288,13 @@ export function BookStudy({
             formatStudyWords(totalWords, isZh),
           ].filter(Boolean).join(" · ")}
         </p>
+        {tokenTotal > 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="study-token-usage">
+            {isZh
+              ? `这本书累计用了 ${formatTokenCount(tokenTotal, true)}`
+              : `This book has used ${formatTokenCount(tokenTotal, false)}`}
+          </p>
+        ) : null}
       </header>
 
       {snapshot?.volumeClose ? (

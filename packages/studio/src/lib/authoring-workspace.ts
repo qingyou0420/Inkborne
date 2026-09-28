@@ -14,6 +14,7 @@ export interface AuthoringArtifact {
   readonly parentVersion?: number;
   readonly parentArtifactId?: string;
   readonly source?: string;
+  readonly runId?: string;
 }
 
 export interface AuthoringIssue {
@@ -92,6 +93,11 @@ export interface AuthoringWorkspace {
       readonly requestedStart?: number;
       readonly requestedEnd?: number;
       readonly missingChapters?: ReadonlyArray<number>;
+    };
+    readonly usage?: {
+      readonly promptTokens?: number;
+      readonly completionTokens?: number;
+      readonly totalTokens?: number;
     };
   }>;
   readonly catalog?: {

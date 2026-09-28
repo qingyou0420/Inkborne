@@ -8,6 +8,7 @@ import { access, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { findChapterNode, findVolumeOwningNode, parseVolumeMapTree, volumeMapLeadingNotesMarkdown } from "../utils/volume-map-tree.js";
+import { splitChapterHeading } from "./chapter-heading.js";
 import { parseCanon, canonFromCompat, serializeCanon } from "./canon.js";
 import { loadWriteMemory, pickSettingsByMention } from "./serial-ledger.js";
 import { loadArtifact, loadManifest, loadSettingsCatalog, type AuthoringStoreRoot } from "./store.js";
@@ -353,6 +354,82 @@ export async function assembleAuthoringContext(
 
 export async function assembleStageContext(root: AuthoringStoreRoot, chapterNumber?: number): Promise<string> {
   return (await assembleAuthoringContext(root, { chapterNumber })).text;
+}
+
+export interface WriteChapterBasis {
+  readonly chapterNumber: number;
+  readonly title: string;
+  readonly summary: string;
+  readonly goal: string;
+  readonly previousEnding: string;
+  readonly progress: string;
+  readonly targetWordCount?: number;
+}
+
+function previousEndingText(raw: string): string {
+  const split = splitChapterHeading(raw);
+  const text = (split.body || raw).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= 300) return text;
+  return `…${text.slice(-300)}`;
+}
+
+/** Read-only "what this chapter is supposed to do" for the writing panel. */
+export async function loadWriteChapterBasis(
+  root: AuthoringStoreRoot,
+  chapterNumber: number,
+): Promise<WriteChapterBasis> {
+  const outline = await loadOutlineText(root);
+  const tree = outline.trim() ? parseVolumeMapTree(outline) : undefined;
+  const node = tree ? findChapterNode(tree, chapterNumber) : undefined;
+  const volume = node && tree ? findVolumeOwningNode(tree, node.id) : undefined;
+  const planned = node?.title?.trim();
+  const located = root.bookId
+    ? await findChapterTitle(root, chapterNumber)
+    : undefined;
+  const title = planned || located || "";
+  const summary = node?.summary?.trim() || "";
+  const goal = volume?.okr?.replace(/\s+/g, " ").trim().slice(0, 180) || "";
+  const previous = chapterNumber > 1 ? await loadChapterText(root, chapterNumber - 1) : "";
+  let progress = "";
+  if (volume) {
+    const volumeName = `${volume.volumeNumber ? `第${volume.volumeNumber}卷 ` : ""}${volume.title}`.trim();
+    if (volume.startChapter && volume.endChapter && volume.endChapter >= volume.startChapter) {
+      const index = chapterNumber - volume.startChapter + 1;
+      const total = volume.endChapter - volume.startChapter + 1;
+      progress = `${volumeName}，这是本卷的第 ${index} 章，这一卷一共 ${total} 章`;
+    } else {
+      progress = volumeName;
+    }
+  }
+  let targetWordCount: number | undefined;
+  if (root.bookId) {
+    const book = await loadBookJson(join(root.projectRoot, "books", root.bookId)).catch(() => undefined);
+    if (book?.chapterWordCount && book.chapterWordCount >= 100) targetWordCount = book.chapterWordCount;
+  }
+  return {
+    chapterNumber,
+    title,
+    summary,
+    goal,
+    previousEnding: previousEndingText(previous),
+    progress,
+    ...(targetWordCount ? { targetWordCount } : {}),
+  };
+}
+
+async function findChapterTitle(root: AuthoringStoreRoot, chapterNumber: number): Promise<string> {
+  const planned = await resolvePlannedChapterTitle(root, chapterNumber);
+  if (planned) return planned;
+  if (!root.bookId) return "";
+  const bookDir = join(root.projectRoot, "books", root.bookId);
+  const indexPath = join(bookDir, "chapters", "index.json");
+  try {
+    const index = JSON.parse(await readFile(indexPath, "utf-8")) as Array<{ number?: number; title?: string }>;
+    return index.find((item) => item.number === chapterNumber)?.title?.trim() || "";
+  } catch {
+    return "";
+  }
 }
 
 export async function loadCandidateOrAdoptedBody(
