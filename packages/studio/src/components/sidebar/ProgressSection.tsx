@@ -4,6 +4,7 @@ import { Loader2, Check } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { tr } from "../../lib/app-language";
 import { SidebarCard } from "./SidebarCard";
+import { displayProgressLabel } from "../../lib/progress-label";
 
 // 每个步骤的 zh 文案同时也是与后台 SSE log 消息匹配的键（后台目前发中文消息）。
 // 展示时按当前语言取 zh/en，匹配时 zh、en 都认，后台消息以后双语化也不用改这里。
@@ -100,7 +101,7 @@ export function ProgressSection({ sse }: ProgressSectionProps) {
                 status === "active" && "text-foreground font-medium",
                 status === "pending" && "text-muted-foreground/50",
               )}>
-                {tr(step.zh, step.en)}
+                {displayProgressLabel(tr(step.zh, step.en))}
               </span>
             </li>
           );

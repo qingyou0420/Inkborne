@@ -47,6 +47,8 @@ interface ResearchSearchDraft {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyEnv: string;
+  readonly configured?: boolean;
+  readonly last4?: string;
 }
 
 const DEFAULT_RESEARCH_SEARCH: ResearchSearchDraft = {
@@ -99,7 +101,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const isZh = lang !== "en";
   const { data: projectData, refetch: refetchProject } = useApi<{ language?: string }>("/project");
   const { data: overridesData, refetch: refetchOverrides } = useApi<{ overrides: Record<string, unknown> }>("/project/model-overrides");
-  const { data: researchSearchData, refetch: refetchResearchSearch } = useApi<{ researchSearch: Partial<ResearchSearchDraft> }>("/project/research-search");
+  const { data: researchSearchData, refetch: refetchResearchSearch } = useApi<{ researchSearch: Partial<ResearchSearchDraft> & { configured?: boolean; last4?: string } }>("/project/research-search");
   const { data: notifyData, refetch: refetchNotify } = useApi<{ channels: unknown[] }>("/project/notify");
   const { data: detectionData, refetch: refetchDetection } = useApi<{ detection: unknown | null }>("/project/detection");
   const { data: skillsData, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
@@ -138,8 +140,10 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
       ...raw,
       provider: raw.provider === "custom" ? "custom" : "tavily",
       baseUrl: raw.baseUrl ?? "",
-      apiKey: raw.apiKey ?? "",
+      apiKey: "",
       apiKeyEnv: raw.apiKeyEnv ?? "TAVILY_API_KEY",
+      configured: raw.configured,
+      last4: raw.last4,
     });
   }, [researchSearchData]);
 
@@ -515,7 +519,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
 
       <SettingsCard
         title={isZh ? "联网研究搜索服务" : "Research Search Provider"}
-        description={isZh ? "给 research_web 配置外部搜索 API。未配置时仍可用服务器环境变量 TAVILY_API_KEY 作为兜底。" : "Configure the external search API used by research_web. If unset, the server may still use TAVILY_API_KEY as a fallback."}
+        description={isZh ? "给 research_web 配置外部搜索 API。密钥放在本机用户数据目录，和模型密钥放在一起。未配置时仍可用环境变量 TAVILY_API_KEY。" : "Configure the external search API used by research_web. The key stays in this machine's user data folder, with the model keys. If unset, TAVILY_API_KEY can still be used."}
         icon={<Search size={18} />}
       >
         <label className="flex items-center gap-2 text-sm">
@@ -563,7 +567,9 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
                 value={researchSearch.apiKey}
                 onChange={(e) => setResearchSearch((prev) => ({ ...prev, apiKey: e.target.value }))}
                 type="password"
-                placeholder={isZh ? "可直接填 key，或只填环境变量名" : "Paste key, or use env var only"}
+                placeholder={researchSearch.configured
+                  ? (isZh ? `已配置，末四位 ${researchSearch.last4 || "····"}。留空则保留` : `Saved, last 4 ${researchSearch.last4 || "····"}. Leave blank to keep`)
+                  : (isZh ? "可直接填 key，或只填环境变量名" : "Paste key, or use env var only")}
                 className={`${fieldClass} font-mono`}
               />
             </label>

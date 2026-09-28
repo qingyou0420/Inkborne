@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { buildApiUrl } from "../../hooks/use-api";
 import { tr } from "../../lib/app-language";
+import { displayProgressLabel } from "../../lib/progress-label";
 import { formatReviewIssueCopy, humanizeReviewDescription, mapAuditSeverity } from "../../lib/copy-map";
 import { chatSelectors, useChatStore } from "../../store/chat";
 import { usePreferencesStore } from "../../store/preferences";
@@ -88,7 +89,7 @@ function PipelineStageList({ stages }: { stages: NonNullable<ToolExecution["stag
         >
           <StageIcon status={stage.status} />
           <div className="min-w-0 flex-1">
-            <div className="truncate font-medium">{stage.label}</div>
+            <div className="truncate font-medium">{displayProgressLabel(stage.label)}</div>
             {stage.progress && (
               <div className="mt-0.5 text-[10px] text-muted-foreground/70">
                 {formatProgress(stage.progress)}

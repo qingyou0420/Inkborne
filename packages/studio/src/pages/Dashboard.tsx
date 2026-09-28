@@ -20,6 +20,7 @@ import { bookManuscriptExportPath, shortManuscriptExportPath } from "../lib/work
 import type { AuthorPublic } from "../lib/author-profile";
 import { formatStartedOn, isInProgressBookStatus, isInProgressShortStatus, shelfEmptyCopy } from "../lib/stage-copy";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
+import { CorruptBookCard } from "../components/CorruptBookCard";
 import { Pencil, ChevronRight, MoreHorizontal, FolderOpen, Download, Trash2, Feather } from "lucide-react";
 import {
   DropdownMenu,
@@ -38,6 +39,9 @@ interface BookSummary {
   readonly targetChapters?: number;
   readonly createdAt?: string;
   readonly coverImagePath?: string;
+  readonly corrupt?: boolean;
+  readonly message?: string;
+  readonly snapshotPath?: string | null;
 }
 
 interface Nav {
@@ -93,11 +97,13 @@ export function Dashboard({ nav, sse, t }: {
     void refetchShorts();
   }, [bookDataVersion, refetch, refetchShorts]);
 
-  const inProgressBooks = useMemo(() => books.filter((book) => isInProgressBookStatus(book.status)), [books]);
-  const pausedBooks = useMemo(() => books.filter((book) => book.status === "paused"), [books]);
+  const corruptBooks = useMemo(() => books.filter((book) => book.corrupt), [books]);
+  const shelfBooks = useMemo(() => books.filter((book) => !book.corrupt), [books]);
+  const inProgressBooks = useMemo(() => shelfBooks.filter((book) => isInProgressBookStatus(book.status)), [shelfBooks]);
+  const pausedBooks = useMemo(() => shelfBooks.filter((book) => book.status === "paused"), [shelfBooks]);
   const completedBooks = useMemo(
-    () => books.filter((book) => book.status === "completed" || book.status === "dropped"),
-    [books],
+    () => shelfBooks.filter((book) => book.status === "completed" || book.status === "dropped"),
+    [shelfBooks],
   );
   const inProgressShorts = useMemo(() => shorts.filter((short) => isInProgressShortStatus(short.status)), [shorts]);
   const doneShorts = useMemo(() => shorts.filter((short) => !isInProgressShortStatus(short.status)), [shorts]);
@@ -260,6 +266,15 @@ export function Dashboard({ nav, sse, t }: {
         <div className="space-y-8">
           <section className="space-y-4">
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" data-testid="home-shelf-active">
+              {corruptBooks.map((book) => (
+                <CorruptBookCard
+                  key={`corrupt-${book.id}`}
+                  testId={`home-corrupt-book-${book.id}`}
+                  message={book.message || "这本书的 book.json 坏了。"}
+                  snapshotPath={book.snapshotPath}
+                  onOpen={() => nav.toBook(book.id)}
+                />
+              ))}
               {inProgressBooks.map((book) => (
                 <HomeBookCard
                   key={book.id}
@@ -282,7 +297,7 @@ export function Dashboard({ nav, sse, t }: {
                 />
               ))}
             </div>
-            {inProgressBooks.length === 0 && inProgressShorts.length === 0 && (
+            {inProgressBooks.length === 0 && inProgressShorts.length === 0 && corruptBooks.length === 0 && (
               <p className="text-sm text-muted-foreground">{t("dash.noBooks")}</p>
             )}
           </section>

@@ -335,6 +335,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   return {
     StateManager: MockStateManager,
     BookWriteLockError: actual.BookWriteLockError,
+    CorruptBookJsonError: actual.CorruptBookJsonError,
+    redactSecrets: actual.redactSecrets,
+    sanitizeAuthoringRuns: actual.sanitizeAuthoringRuns,
+    migrateResearchSearchKey: actual.migrateResearchSearchKey,
+    readResearchSearchPublic: actual.readResearchSearchPublic,
+    saveResearchSearchSettings: actual.saveResearchSearchSettings,
     WritePreflightError: actual.WritePreflightError,
     ApproveBlockedError: actual.ApproveBlockedError,
     TruthRevisionConflictError: actual.TruthRevisionConflictError,
@@ -2416,7 +2422,15 @@ describe("createStudioServer daemon lifecycle", () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
-    const first = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?apiKey=sk-shared-tail");
+    const leaked = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?apiKey=sk-query-leak&refresh=1");
+    expect(leaked.status).toBe(200);
+    expect(listModelsForServiceMock.mock.calls.some((call) => call[1] === "sk-query-leak")).toBe(false);
+
+    const first = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?refresh=1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-shared-tail", refresh: true }),
+    });
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({
       models: [{ id: "model-a", name: "model-a" }],
@@ -2431,7 +2445,11 @@ describe("createStudioServer daemon lifecycle", () => {
       },
     }, null, 2), "utf-8");
 
-    const second = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?apiKey=sk-shared-tail");
+    const second = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-shared-tail", refresh: true }),
+    });
     expect(second.status).toBe(200);
     await expect(second.json()).resolves.toMatchObject({
       models: [{ id: "model-b", name: "model-b" }],

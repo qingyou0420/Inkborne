@@ -1,5 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
+import { CorruptBookCard } from "../components/CorruptBookCard";
+import { fanqieRangeProblem } from "../lib/fanqie-range";
 import { showToast } from "../lib/toast";
 import { FanqieExportFields } from "../components/FanqieExportFields";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -372,6 +374,9 @@ export function BookDetail({
     </div>
   );
 
+  if (error && /book\.json|快照/.test(error)) {
+    return <CorruptBookCard message={pageErrorText(error)} />;
+  }
   if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
   if (!data) return null;
 
@@ -387,7 +392,11 @@ export function BookDetail({
     isZh,
   });
 
-  const fanqieQuery: FanqieExportQuery | undefined = exportFormat === "fanqie" ? {
+  const fanqieChapterCount = chapters.reduce((max, chapter) => Math.max(max, chapter.number), chapters.length);
+  const fanqieProblem = exportFormat === "fanqie"
+    ? fanqieRangeProblem(fanqieFrom, fanqieTo, fanqieChapterCount, isZh)
+    : "";
+  const fanqieQuery: FanqieExportQuery | undefined = exportFormat === "fanqie" && !fanqieProblem ? {
     ...(positiveChapter(fanqieFrom) ? { fromChapter: positiveChapter(fanqieFrom) } : {}),
     ...(positiveChapter(fanqieTo) ? { toChapter: positiveChapter(fanqieTo) } : {}),
     layout: fanqieLayout,
@@ -446,17 +455,31 @@ export function BookDetail({
                   }}
                 />
               ) : null}
+              {fanqieProblem ? (
+                <p className="text-xs text-destructive" data-testid="fanqie-range-error">{fanqieProblem}</p>
+              ) : null}
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
                 {t("book.approvedOnly")}
               </label>
               <div className="flex flex-col gap-1 pt-1">
-                <a href={exportHref} download data-testid="book-export-manuscript" className="btn-secondary text-center">
+                <a
+                  href={fanqieProblem ? undefined : exportHref}
+                  download
+                  aria-disabled={fanqieProblem ? true : undefined}
+                  data-testid="book-export-manuscript"
+                  className={`btn-secondary text-center ${fanqieProblem ? "pointer-events-none opacity-40" : ""}`}
+                  onClick={(event) => {
+                    if (fanqieProblem) event.preventDefault();
+                  }}
+                >
                   {t("book.download")}
                 </a>
                 <button
                   type="button"
+                  disabled={Boolean(fanqieProblem)}
                   onClick={async () => {
+                    if (fanqieProblem) return;
                     try {
                       const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
                         method: "POST",
@@ -577,25 +600,25 @@ export function BookDetail({
             isZh={isZh}
             t={t}
             renderChapter={(ch) => (
-                <tr key={ch.number} className="hover:bg-accent/60 transition-colors h-12">
-                  <td className="px-4 py-3 text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
-                  <td className="px-4 py-3">
+                <tr key={ch.number} data-chapter={ch.number} className="h-12 overflow-hidden hover:bg-accent/60 transition-colors" style={{ height: 48 }}>
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle">
                     <button
                       onClick={() => nav.toChapter(bookId, ch.number)}
-                      className="font-serif text-lg font-medium text-left underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal"
+                      className="block max-w-full truncate text-left font-serif text-base font-medium underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal"
                     >
                       {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
                     </button>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground font-medium tabular-nums text-[13px]">{(ch.wordCount ?? 0).toLocaleString()}</td>
-                  <td className="px-4 py-3">
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-muted-foreground font-medium tabular-nums text-[13px]">{(ch.wordCount ?? 0).toLocaleString()}</td>
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle">
                     <div className={`inline-flex items-center gap-1.5 text-[13px] font-medium ${statusTone(ch.status)}`}>
                       <StageDot state={statusDotState(ch.status)} />
                       {translateChapterStatus(ch.status, t)}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex gap-1.5 justify-end">
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-right">
+                    <div className="flex h-12 items-center gap-1.5 justify-end">
                       {ch.status === "ready-for-review" && (
                         <button
                           type="button"

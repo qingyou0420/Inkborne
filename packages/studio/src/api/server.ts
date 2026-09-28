@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import {
   StateManager,
   BookWriteLockError,
+  CorruptBookJsonError,
   BOOK_LOCK_INTERACTIVE_WAIT_MS,
   formatBookWriteLockCopy,
   readAuthoringOpenHooks,
@@ -64,7 +65,9 @@ import {
   evaluateBookQuality,
   ConsolidatorAgent,
   DetectionConfigSchema,
-  ResearchSearchConfigSchema,
+  migrateResearchSearchKey,
+  readResearchSearchPublic,
+  saveResearchSearchSettings,
   GLOBAL_ENV_PATH,
   COVER_PROVIDER_PRESETS,
   createPlayDB,
@@ -1894,6 +1897,25 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
   return null;
 }
 
+function asCorruptBookError(error: unknown): CorruptBookJsonError | undefined {
+  if (error instanceof CorruptBookJsonError) return error;
+  if (error instanceof Error && error.name === "CorruptBookJsonError") return error as CorruptBookJsonError;
+  return undefined;
+}
+
+function corruptBookListEntry(id: string, error: CorruptBookJsonError) {
+  return {
+    id,
+    title: id,
+    genre: "",
+    status: "corrupt",
+    chaptersWritten: 0,
+    corrupt: true,
+    message: error.message,
+    snapshotPath: error.snapshotPath ?? null,
+  };
+}
+
 async function loadStudioBookListSummary(
   state: StateManager,
   bookId: string,
@@ -2104,6 +2126,7 @@ function syncTopLevelLlmMirror(llm: Record<string, unknown>): void {
 }
 
 async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
+  await migrateResearchSearchKey(root).catch(() => undefined);
   const configPath = join(root, "inkos.json");
   const raw = await readFile(configPath, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
@@ -3203,7 +3226,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books", async (c) => {
     const bookIds = await state.listBooks();
-    const books = await Promise.all(bookIds.map((id) => loadStudioBookListSummary(state, id)));
+    const books = await Promise.all(bookIds.map(async (id) => {
+      try {
+        return await loadStudioBookListSummary(state, id);
+      } catch (error) {
+        const corrupt = asCorruptBookError(error);
+        if (!corrupt) throw error;
+        return corruptBookListEntry(id, corrupt);
+      }
+    }));
     return c.json({ books });
   });
 
@@ -3214,7 +3245,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
       return c.json({ book, chapters, nextChapter });
-    } catch {
+    } catch (error) {
+      const corrupt = asCorruptBookError(error);
+      if (corrupt) {
+        return c.json({
+          error: corrupt.message,
+          message: corrupt.message,
+          snapshotPath: corrupt.snapshotPath ?? null,
+          corrupt: true,
+        }, 409);
+      }
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
   });
@@ -4963,7 +5003,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const service = c.req.param("service");
     const refresh = c.req.query("refresh") === "1";
     const secrets = await loadSecrets(root);
-    const apiKey = c.req.query("apiKey") || secrets.services[service]?.apiKey || "";
+    const apiKey = secrets.services[service]?.apiKey || "";
     const configuredEntry = await resolveConfiguredServiceEntry(root, service);
     const configuredModels = configuredEntry?.models ?? [];
 
@@ -4991,6 +5031,49 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
 
     // B13: 走 listModelsForService 走 live probe + bank 交叉，返回带元数据的 models
+    const enriched = await listModelsForService(
+      isCustomServiceId(service) ? "custom" : service,
+      apiKey,
+      isCustomServiceId(service) ? resolvedBaseUrl ?? undefined : undefined,
+    );
+    const liveModels = filterTextChatModels(enriched).map((m) => ({
+      id: m.id,
+      name: m.name,
+      ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+      ...(m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
+    }));
+    const models = mergeServiceModelIds(liveModels.map((model) => model.id), configuredModels)
+      .map((id) => liveModels.find((model) => model.id.toLowerCase() === id.toLowerCase()) ?? { id, name: id });
+    modelListCache.set(cacheKey, { models, at: Date.now() });
+    return c.json({ models });
+  });
+
+  app.post("/api/v1/services/:service/models", async (c) => {
+    const service = c.req.param("service");
+    const body = await c.req.json<{ apiKey?: string; refresh?: boolean }>().catch(() => ({} as { apiKey?: string; refresh?: boolean }));
+    const refresh = body.refresh === true || c.req.query("refresh") === "1";
+    const secrets = await loadSecrets(root);
+    const apiKey = body.apiKey?.trim() || secrets.services[service]?.apiKey || "";
+    const configuredEntry = await resolveConfiguredServiceEntry(root, service);
+    const configuredModels = configuredEntry?.models ?? [];
+    const resolvedBaseUrl = await resolveConfiguredServiceBaseUrl(root, service);
+    const baseService = isCustomServiceId(service) ? "custom" : service;
+    const apiKeyOptional = isApiKeyOptionalForEndpoint({
+      provider: resolveServiceProviderFamily(baseService) ?? "openai",
+      baseUrl: resolvedBaseUrl,
+    });
+    if (!apiKey && !apiKeyOptional) {
+      return c.json({ models: configuredModels.map((id) => ({ id, name: id })) });
+    }
+    const cacheKey = `${service}::${resolvedBaseUrl ?? ""}::${apiKey.slice(-8)}`;
+    if (!refresh) {
+      const cached = modelListCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
+        const models = mergeServiceModelIds(cached.models.map((model) => model.id), configuredModels)
+          .map((id) => cached.models.find((model) => model.id.toLowerCase() === id.toLowerCase()) ?? { id, name: id });
+        return c.json({ models });
+      }
+    }
     const enriched = await listModelsForService(
       isCustomServiceId(service) ? "custom" : service,
       apiKey,
@@ -6675,16 +6758,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Research search provider ---
 
   app.get("/api/v1/project/research-search", async (c) => {
-    const raw = await loadRawConfig(root);
-    return c.json({ researchSearch: ResearchSearchConfigSchema.parse(raw.researchSearch ?? {}) });
+    const researchSearch = await readResearchSearchPublic(root);
+    return c.json({ researchSearch });
   });
 
   app.put("/api/v1/project/research-search", async (c) => {
-    const body = await c.req.json<{ researchSearch?: unknown }>();
-    const researchSearch = ResearchSearchConfigSchema.parse(body.researchSearch ?? {});
-    const raw = await loadRawConfig(root);
-    raw.researchSearch = researchSearch;
-    await saveRawConfig(root, raw);
+    const body = await c.req.json<{ researchSearch?: {
+      enabled?: boolean;
+      provider?: "tavily" | "custom";
+      baseUrl?: string;
+      apiKeyEnv?: string;
+      apiKey?: string;
+    } }>();
+    const incoming = body.researchSearch ?? {};
+    const researchSearch = await saveResearchSearchSettings(root, {
+      enabled: incoming.enabled,
+      provider: incoming.provider,
+      baseUrl: incoming.baseUrl,
+      apiKeyEnv: incoming.apiKeyEnv,
+      ...(Object.prototype.hasOwnProperty.call(incoming, "apiKey") ? { apiKey: incoming.apiKey } : {}),
+    });
     return c.json({ ok: true, researchSearch });
   });
 

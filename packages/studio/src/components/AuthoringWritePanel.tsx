@@ -7,8 +7,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { collapseDuplicateChapterHeadings } from "@actalk/inkos-core/chapter-heading";
 import { postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
-import { postAuthoringStream, type AuthoringStreamResult } from "../lib/authoring-stream";
-import { estimateTokenCost, firstPricePerMillion, formatTokenCount, type TokenUsage } from "../lib/token-usage";
+import { AuthoringStreamError, postAuthoringStream, type AuthoringStreamResult } from "../lib/authoring-stream";
+import { estimateTokenCost, formatPassUsage, priceForServiceRef, usageTotal, type TokenUsage } from "../lib/token-usage";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { showToast } from "../lib/toast";
@@ -107,7 +107,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   const { data: basis } = useApi<WriteBasis>(
     `/authoring/write/basis?bookId=${encodeURIComponent(bookId)}&chapterNumber=${chapterNumber}`,
   );
-  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ pricePerMillion?: number }> }>("/services/config");
+  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
   const artifactForCurrent = artifact?.meta?.artifactId === candidate?.artifactId ? artifact : undefined;
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
   const rawSaved = artifactForCurrent?.body ?? (!candidate ? chapterForCurrent?.content ?? "" : "");
@@ -305,7 +305,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         setBody(result.body || streamed);
         dirtyRef.current = false;
         pendingEditRef.current = null;
-        if (result.usage?.totalTokens) setUsage(result.usage);
+        if (usageTotal(result.usage)) setUsage(result.usage);
         setLengthNote(result.lengthNote ?? "");
         if (result.lengthNote) showToast(result.lengthNote, "info");
         if (result.status === "cancelled") {
@@ -316,9 +316,17 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       onChanged?.();
       return result;
     } catch (error) {
-      setBody(snapshot);
-      dirtyRef.current = false;
-      pendingEditRef.current = null;
+      const explicitMiss = error instanceof AuthoringStreamError && error.draftSaved === false;
+      if (explicitMiss) {
+        setBody(snapshot);
+        dirtyRef.current = false;
+        pendingEditRef.current = null;
+      } else if (streamed) {
+        setBody(streamed);
+        await refetch();
+      } else {
+        await refetch();
+      }
       showToast(error instanceof Error ? error.message : String(error), "error");
       return undefined;
     } finally {
@@ -372,12 +380,13 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   const progressLabel = editorLocked
     ? `${stopping ? (isZh ? "正在停下" : "Stopping") : (busy === "revise" ? (isZh ? "正在按意见改" : "Revising") : (isZh ? "正在写" : "Writing"))} · ${elapsedLabel} · ${isZh ? `已写 ${liveCount.toLocaleString("zh-CN")} 字` : `${liveCount.toLocaleString("en-US")} chars`}`
     : "";
-  const runUsage = data?.runs?.find((run) => run.runId && run.runId === candidate?.runId)?.usage;
+  const shownRun = data?.runs?.find((run) => run.runId && run.runId === candidate?.runId);
+  const runUsage = shownRun?.usage;
   const shownUsage = usage ?? runUsage;
-  const usageLabel = shownUsage?.totalTokens ? formatTokenCount(shownUsage.totalTokens, isZh) : "";
-  const usageCost = shownUsage?.totalTokens
-    ? estimateTokenCost(shownUsage.totalTokens, firstPricePerMillion(serviceConfig?.services))
+  const usageCost = usageTotal(shownUsage)
+    ? estimateTokenCost(usageTotal(shownUsage), priceForServiceRef(shownRun?.modelSnapshot?.serviceRef, serviceConfig?.services))
     : "";
+  const usageLabel = formatPassUsage(shownUsage, isZh, usageCost);
   const leftId = parentId && parentId !== candidate?.artifactId ? parentId : undefined;
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
   const activeReport = report ?? workspaceReport;
@@ -454,7 +463,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
         {usageLabel ? (
           <p className="text-xs text-muted-foreground" data-testid="write-token-usage">
-            {isZh ? `这次用了 ${usageLabel}${usageCost ? `（${usageCost}）` : ""}` : `This pass used ${usageLabel}${usageCost ? ` (${usageCost})` : ""}`}
+            {usageLabel}
           </p>
         ) : null}
       {generateChoice ? (

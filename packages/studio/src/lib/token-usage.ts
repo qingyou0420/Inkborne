@@ -10,6 +10,15 @@ export interface TokenUsage {
   readonly totalTokens?: number;
 }
 
+export function usageTotal(usage?: TokenUsage | null): number {
+  if (!usage) return 0;
+  if (typeof usage.totalTokens === "number" && usage.totalTokens > 0) return usage.totalTokens;
+  const prompt = typeof usage.promptTokens === "number" ? usage.promptTokens : 0;
+  const completion = typeof usage.completionTokens === "number" ? usage.completionTokens : 0;
+  const sum = prompt + completion;
+  return sum > 0 ? sum : 0;
+}
+
 export function formatTokenCount(total: number, isZh: boolean): string {
   if (!Number.isFinite(total) || total <= 0) return "";
   const rounded = Math.round(total);
@@ -22,7 +31,62 @@ export function formatTokenCount(total: number, isZh: boolean): string {
 }
 
 export function sumTokenUsage(runs: ReadonlyArray<{ usage?: TokenUsage }> | undefined): number {
-  return (runs ?? []).reduce((sum, run) => sum + (run.usage?.totalTokens ?? 0), 0);
+  return (runs ?? []).reduce((sum, run) => sum + usageTotal(run.usage), 0);
+}
+
+export interface PricedService {
+  readonly service?: string;
+  readonly name?: string;
+  readonly pricePerMillion?: number;
+}
+
+export function serviceConfigKey(entry: PricedService): string {
+  if (entry.service === "custom") return `custom:${entry.name ?? "Custom"}`;
+  return entry.service ?? "";
+}
+
+/** Price of the connection this run actually used. Missing price stays unpriced. */
+export function priceForServiceRef(
+  serviceRef: string | undefined,
+  services: readonly PricedService[] | undefined,
+): number | undefined {
+  const ref = serviceRef?.trim();
+  if (!ref || !services?.length) return undefined;
+  const match = services.find((entry) => serviceConfigKey(entry) === ref || entry.service === ref);
+  const price = match?.pricePerMillion;
+  return typeof price === "number" && price > 0 ? price : undefined;
+}
+
+export function estimateRunsCost(
+  runs: ReadonlyArray<{ usage?: TokenUsage; modelSnapshot?: { serviceRef?: string } }> | undefined,
+  services: readonly PricedService[] | undefined,
+): string {
+  let yuan = 0;
+  let priced = false;
+  let missing = false;
+  for (const run of runs ?? []) {
+    const tokens = usageTotal(run.usage);
+    if (tokens <= 0) continue;
+    const price = priceForServiceRef(run.modelSnapshot?.serviceRef, services);
+    if (!price) {
+      missing = true;
+      continue;
+    }
+    yuan += (tokens / 1_000_000) * price;
+    priced = true;
+  }
+  if (!priced) return "";
+  const amount = yuan < 0.01 ? "不到 0.01 元" : `约 ${yuan.toFixed(2)} 元`;
+  return missing ? `${amount}（没标价的连接没算进去）` : amount;
+}
+
+export function formatPassUsage(usage: TokenUsage | undefined, isZh: boolean, cost = ""): string {
+  const total = usageTotal(usage);
+  if (total <= 0) return "";
+  const label = formatTokenCount(total, isZh);
+  if (!label) return "";
+  if (isZh) return `这次用了 ${label}${cost ? `（${cost}）` : ""}`;
+  return `This pass used ${label}${cost ? ` (${cost})` : ""}`;
 }
 
 export function firstPricePerMillion(

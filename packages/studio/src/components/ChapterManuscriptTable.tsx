@@ -34,6 +34,9 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
   isZh,
   t,
   renderChapter,
+  forcedScrollTop,
+  forcedViewport,
+  forceOpenAll,
 }: {
   readonly chapters: readonly T[];
   readonly nextChapter: number;
@@ -41,12 +44,15 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
   readonly isZh: boolean;
   readonly t: TFunction;
   readonly renderChapter: (chapter: T) => ReactNode;
+  readonly forcedScrollTop?: number;
+  readonly forcedViewport?: number;
+  readonly forceOpenAll?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [opened, setOpened] = useState<ReadonlySet<string> | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewport, setViewport] = useState(640);
+  const [scrollTopState, setScrollTop] = useState(0);
+  const [viewportState, setViewport] = useState(640);
   const tree = useMemo(() => (volumeMap.trim() ? parseVolumeMapTree(volumeMap) : null), [volumeMap]);
   const groups = useMemo(
     () => filterChapterGroups(buildChapterGroups(chapters, tree, isZh), query),
@@ -55,7 +61,7 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
   const searching = query.trim().length > 0;
   const focusChapter = nextChapter > 0 ? nextChapter : chapters[chapters.length - 1]?.number ?? 1;
   const defaultId = defaultOpenGroupId(groups, focusChapter);
-  const openIds = searching
+  const openIds = searching || forceOpenAll
     ? new Set(groups.map((group) => group.id))
     : opened ?? new Set(defaultId ? [defaultId] : []);
   const rows: Array<FlatRow<T>> = [];
@@ -67,6 +73,8 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
     }
   }
   const virtual = chapters.length > CHAPTER_TABLE_VIRTUAL_THRESHOLD;
+  const scrollTop = forcedScrollTop ?? scrollTopState;
+  const viewport = forcedViewport ?? viewportState;
   const start = virtual ? Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN) : 0;
   const visibleCount = virtual ? Math.ceil(viewport / ROW_HEIGHT) + OVERSCAN * 2 : rows.length;
   const visible = rows.slice(start, start + visibleCount);
@@ -102,23 +110,40 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
           className="w-full max-w-sm rounded-[10px] border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </div>
+      {chapters.length > 0 && (
+        <table className="w-full table-fixed border-collapse text-[13px]" data-testid="chapter-table-head">
+          <colgroup>
+            <col className="w-16" />
+            <col />
+            <col className="w-28" />
+            <col className="w-36" />
+            <col className="w-32" />
+          </colgroup>
+          <thead>
+            <tr className="h-12 border-b border-border bg-muted/30">
+              <th className="h-12 px-4 text-left align-middle font-medium text-[13px] text-muted-foreground">#</th>
+              <th className="h-12 px-4 text-left align-middle font-medium text-[13px] text-muted-foreground">{t("book.manuscriptTitle")}</th>
+              <th className="h-12 px-4 text-left align-middle font-medium text-[13px] text-muted-foreground">{t("book.words")}</th>
+              <th className="h-12 px-4 text-left align-middle font-medium text-[13px] text-muted-foreground">{t("book.status")}</th>
+              <th className="h-12 px-4 text-right align-middle font-medium text-[13px] text-muted-foreground">{t("book.curate")}</th>
+            </tr>
+          </thead>
+        </table>
+      )}
       <div
         ref={scrollerRef}
+        data-testid="chapter-table-scroll"
         className={virtual ? "max-h-[70vh] overflow-auto" : "overflow-x-auto"}
         onScroll={virtual ? (event: UIEvent<HTMLDivElement>) => setScrollTop(event.currentTarget.scrollTop) : undefined}
       >
-        <table className="w-full text-[15px] leading-[26px] border-collapse">
-          {chapters.length > 0 && (
-            <thead>
-              <tr className="bg-muted/30 border-b border-border">
-                <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-16">#</th>
-                <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground">{t("book.manuscriptTitle")}</th>
-                <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-28">{t("book.words")}</th>
-                <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-36">{t("book.status")}</th>
-                <th className="text-right px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-32">{t("book.curate")}</th>
-              </tr>
-            </thead>
-          )}
+        <table className="w-full table-fixed border-collapse text-sm leading-5">
+          <colgroup>
+            <col className="w-16" />
+            <col />
+            <col className="w-28" />
+            <col className="w-36" />
+            <col className="w-32" />
+          </colgroup>
           <tbody className="divide-y divide-border/30">
             {topPad > 0 && (
               <tr aria-hidden>
@@ -126,11 +151,11 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
               </tr>
             )}
             {visible.map((row) => row.kind === "header" ? (
-              <tr key={`volume-${row.id}`} className="bg-muted/20" data-testid={`chapter-volume-${row.id}`}>
-                <td colSpan={5} className="px-4 py-2">
+              <tr key={`volume-${row.id}`} className="h-12 bg-muted/20" data-testid={`chapter-volume-${row.id}`} style={{ height: ROW_HEIGHT }}>
+                <td colSpan={5} className="h-12 overflow-hidden px-4 py-0 align-middle">
                   <button
                     type="button"
-                    className="inline-flex items-center gap-2 text-sm font-medium"
+                    className="inline-flex h-12 max-w-full items-center gap-2 overflow-hidden text-sm font-medium"
                     aria-expanded={row.open}
                     onClick={() => toggle(row.id)}
                   >

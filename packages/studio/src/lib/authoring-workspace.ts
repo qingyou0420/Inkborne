@@ -99,6 +99,7 @@ export interface AuthoringWorkspace {
       readonly completionTokens?: number;
       readonly totalTokens?: number;
     };
+    readonly modelSnapshot?: { readonly serviceRef?: string };
   }>;
   readonly catalog?: {
     readonly categories: ReadonlyArray<string>;

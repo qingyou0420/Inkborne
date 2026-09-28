@@ -6,6 +6,7 @@
 
 import { fetchJson, useApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
+import { CorruptBookCard } from "../components/CorruptBookCard";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
 import { readLastChapter } from "../lib/last-chapter";
@@ -28,7 +29,7 @@ import {
   stripEngineTokens,
 } from "../lib/copy-map";
 import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
-import { estimateTokenCost, firstPricePerMillion, formatTokenCount, sumTokenUsage } from "../lib/token-usage";
+import { estimateRunsCost, formatTokenCount, sumTokenUsage } from "../lib/token-usage";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
 import {
   CheckCircle2,
@@ -112,7 +113,7 @@ export function BookStudy({
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
   const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
-  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ pricePerMillion?: number }> }>("/services/config");
+  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
@@ -197,13 +198,16 @@ export function BookStudy({
       </div>
     );
   }
+  if (error && /book\.json|快照/.test(error)) {
+    return <CorruptBookCard message={pageErrorText(error)} />;
+  }
   if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const book = data.book;
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);
   const tokenTotal = sumTokenUsage(authoring?.runs);
-  const tokenCost = estimateTokenCost(tokenTotal, firstPricePerMillion(serviceConfig?.services));
+  const tokenCost = estimateRunsCost(authoring?.runs, serviceConfig?.services);
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
   const currentStage = stage?.stage ?? "write";
   const guide = studyGuideCopy(currentStage, isZh);

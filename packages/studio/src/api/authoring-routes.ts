@@ -25,6 +25,8 @@ import {
   loadWriteChapterBasis,
   generateWeaveRange,
   loadAuthoringWorkspaceLists,
+  redactSecrets,
+  sanitizeAuthoringRuns,
   loadArtifact,
   loadCanonDocument,
   loadManifest,
@@ -65,15 +67,22 @@ interface AuthoringRouteDeps {
 }
 
 function streamFailure(error: unknown): string {
+  const record = error && typeof error === "object" ? error as { artifactId?: unknown; saved?: unknown } : {};
+  const artifactId = typeof record.artifactId === "string" ? record.artifactId : "";
+  const saved = artifactId ? true : record.saved === false ? false : undefined;
   if (isBookWriteLockError(error)) {
     return JSON.stringify({
       code: "BOOK_BUSY",
-      message: formatBookWriteLockCopy(error, "zh"),
+      message: redactSecrets(formatBookWriteLockCopy(error, "zh")),
       owner: error.owner,
+      saved: false,
     });
   }
+  const message = redactSecrets(error instanceof Error ? error.message : String(error));
   return JSON.stringify({
-    message: error instanceof Error ? error.message : String(error),
+    message,
+    ...(saved === undefined ? {} : { saved }),
+    ...(artifactId ? { artifactId } : {}),
   });
 }
 
@@ -179,7 +188,8 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       loadCanonDocument(root).catch(() => null),
       loadSettingsCatalog(root).catch(() => ({ categories: [], entries: [] })),
     ]);
-    const { artifacts, reports, runs } = lists;
+    const { artifacts, reports } = lists;
+    const runs = sanitizeAuthoringRuns(lists.runs);
     const candidateAskId = manifest.candidates.ask;
     const candidateAsk = candidateAskId ? await loadArtifact(root, candidateAskId) : undefined;
     const candidateWeaveId = manifest.candidates.weave;

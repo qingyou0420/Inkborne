@@ -11,6 +11,25 @@ import {
   deriveInvalidationPaths,
   invalidateApiPaths,
 } from "../hooks/use-api";
+
+export class AuthoringStreamError extends StudioApiError {
+  readonly draftSaved: boolean | null;
+  readonly artifactId?: string;
+
+  constructor(
+    message: string,
+    draftSaved: boolean | null,
+    artifactId?: string,
+    code?: string,
+    status?: number,
+    owner?: StudioApiError["owner"],
+  ) {
+    super(message, code, status, owner);
+    this.name = "AuthoringStreamError";
+    this.draftSaved = draftSaved;
+    this.artifactId = artifactId;
+  }
+}
 import type { TokenUsage } from "./token-usage";
 
 export interface AuthoringStreamResult {
@@ -61,7 +80,20 @@ export async function readAuthoringSse(
       if (event === "error") {
         const code = typeof data.code === "string" ? data.code : undefined;
         const message = typeof data.message === "string" ? data.message : "写作中断了";
-        const error = new StudioApiError(message, code, code === "BOOK_BUSY" ? 409 : 500, data.owner as StudioApiError["owner"]);
+        const artifactId = typeof data.artifactId === "string" ? data.artifactId : "";
+        const draftSaved = data.saved === true || artifactId.length > 0
+          ? true
+          : data.saved === false
+            ? false
+            : null;
+        const error = new AuthoringStreamError(
+          message,
+          draftSaved,
+          artifactId || undefined,
+          code,
+          code === "BOOK_BUSY" ? 409 : 500,
+          data.owner as StudioApiError["owner"],
+        );
         if (code === "BOOK_BUSY" && typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(BOOK_BUSY_EVENT, { detail: error }));
         }

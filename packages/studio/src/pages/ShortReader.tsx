@@ -9,6 +9,7 @@ import { AlertCircle, Copy, Download, Feather, Loader2, MoreHorizontal } from "l
 import { useState } from "react";
 import { Streamdown } from "streamdown";
 import { FanqieExportFields } from "../components/FanqieExportFields";
+import { fanqieRangeProblem } from "../lib/fanqie-range";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
 import {
@@ -280,7 +281,8 @@ function ShortPlainTextBar({
   readonly onChange: (patch: { from?: string; to?: string; layout?: "combined" | "per-chapter"; blankLine?: boolean; indent?: boolean }) => void;
 }) {
   const shape = describeFanqieManuscript(content, title);
-  const query: FanqieExportQuery = {
+  const rangeProblem = fanqieRangeProblem(from, to, shape.chapters.length, isZh);
+  const query: FanqieExportQuery = rangeProblem ? { layout, blankLine, indent } : {
     ...(positiveChapter(from) ? { fromChapter: positiveChapter(from) } : {}),
     ...(positiveChapter(to) ? { toChapter: positiveChapter(to) } : {}),
     layout,
@@ -288,6 +290,10 @@ function ShortPlainTextBar({
     indent,
   };
   const copyPlain = () => {
+    if (rangeProblem) {
+      showToast(rangeProblem, "error");
+      return;
+    }
     try {
       const manuscript = renderFanqieManuscript({
         title,
@@ -310,11 +316,16 @@ function ShortPlainTextBar({
           <Copy size={14} />
           {shape.numbered && shape.chapters.length > 1 ? (isZh ? "复制所选纯文本" : "Copy selection") : (isZh ? "复制纯文本" : "Copy plain text")}
         </button>
+        {rangeProblem ? <p className="text-xs text-destructive" data-testid="fanqie-range-error">{rangeProblem}</p> : null}
         <a
-          className="btn-secondary"
+          className={`btn-secondary ${rangeProblem ? "pointer-events-none opacity-40" : ""}`}
           data-testid="short-fanqie-download"
-          href={shortManuscriptExportPath(storyId, "fanqie", query)}
+          href={rangeProblem ? undefined : shortManuscriptExportPath(storyId, "fanqie", query)}
+          aria-disabled={rangeProblem ? true : undefined}
           download
+          onClick={(event) => {
+            if (rangeProblem) event.preventDefault();
+          }}
         >
           <Download size={14} />
           {isZh ? "下载番茄纯文本" : "Download Tomato text"}
