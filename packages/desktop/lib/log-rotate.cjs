@@ -18,6 +18,17 @@ function copyThenTruncate(filePath, dest) {
   fs.truncateSync(filePath, 0);
 }
 
+/** Park the live log beside an unsaved `.1`. An existing overflow is left untouched. */
+function spillCurrentToOverflow(filePath) {
+  const overflow = `${filePath}.overflow`;
+  if (fs.existsSync(overflow)) {
+    warnOnce(filePath, new Error("已有 overflow 备份，不再覆盖"));
+    return false;
+  }
+  copyThenTruncate(filePath, overflow);
+  return true;
+}
+
 function rotateLogIfNeeded(filePath, maxBytes, keep = 2) {
   const limit = Number(maxBytes);
   const copies = Math.max(1, Number(keep) || 2);
@@ -46,8 +57,7 @@ function rotateLogIfNeeded(filePath, maxBytes, keep = 2) {
   const primaryBackup = `${filePath}.1`;
   if (shiftFailed && fs.existsSync(primaryBackup)) {
     try {
-      copyThenTruncate(filePath, `${filePath}.overflow`);
-      return true;
+      return spillCurrentToOverflow(filePath);
     } catch (error) {
       warnOnce(filePath, error);
       return false;
@@ -59,8 +69,7 @@ function rotateLogIfNeeded(filePath, maxBytes, keep = 2) {
   } catch (error) {
     if (fs.existsSync(primaryBackup)) {
       try {
-        copyThenTruncate(filePath, `${filePath}.overflow`);
-        return true;
+        return spillCurrentToOverflow(filePath);
       } catch (copyError) {
         warnOnce(filePath, copyError);
         return false;

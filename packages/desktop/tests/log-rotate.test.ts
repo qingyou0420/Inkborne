@@ -105,6 +105,37 @@ describe("rotateLogIfNeeded", () => {
       fs.renameSync = rename;
     }
   });
+
+  it("does not overwrite an existing .overflow when renaming .1 to .2 fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-log-overflow-"));
+    temps.push(dir);
+    const file = join(dir, "server.log");
+    const current = "c".repeat(30);
+    const backup = "BACKUP-ONE-original";
+    const parked = "OVERFLOW-original";
+    writeFileSync(file, current);
+    writeFileSync(`${file}.1`, backup);
+    writeFileSync(`${file}.2`, "BACKUP-TWO");
+    writeFileSync(`${file}.overflow`, parked);
+    const fs = require("node:fs") as typeof import("node:fs");
+    const rename = fs.renameSync;
+    fs.renameSync = ((src, dest) => {
+      if (String(src).endsWith(".1") && String(dest).endsWith(".2")) throw new Error("EPERM");
+      return rename(src, dest);
+    }) as typeof fs.renameSync;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(rotateLogIfNeeded(file, 20, 2)).toBe(false);
+      expect(rotateLogIfNeeded(file, 20, 2)).toBe(false);
+      expect(readFileSync(`${file}.1`, "utf8")).toBe(backup);
+      expect(readFileSync(`${file}.overflow`, "utf8")).toBe(parked);
+      expect(readFileSync(file, "utf8")).toBe(current);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.renameSync = rename;
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("writingStatusMessage", () => {
