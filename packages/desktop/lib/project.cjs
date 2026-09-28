@@ -164,7 +164,7 @@ function nonEmptySecretKeys(data) {
 function writeSecretsAtomic(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${Date.now().toString(36)}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify({ services: data.services || {} }, null, 2)}\n`, "utf8");
+  fs.writeFileSync(tmp, `${JSON.stringify({ services: data.services || {} }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -237,9 +237,8 @@ function writeSecrets(root, service, apiKey, opts) {
     }
     return userFile;
   } catch (error) {
-    if (legacy.corrupt) throw error;
-    writeSecretsAtomic(legacyFile, merged);
-    return legacyFile;
+    // User-dir write or verify failed. Leave the project file untouched.
+    throw error;
   }
 }
 

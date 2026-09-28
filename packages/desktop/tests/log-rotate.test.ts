@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const { rotateLogIfNeeded } = require("../lib/log-rotate.cjs") as {
@@ -39,6 +39,46 @@ describe("rotateLogIfNeeded", () => {
     expect(readFileSync(`${file}.2`, "utf8")).toBe("b".repeat(20));
     expect(() => statSync(`${file}.3`)).toThrow();
     expect(rotateLogIfNeeded(file, 20, 2)).toBe(false);
+  });
+
+  it("copies and truncates when rename fails, and warns once if that also fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-log-busy-"));
+    temps.push(dir);
+    const file = join(dir, "server.log");
+    const fs = require("node:fs") as typeof import("node:fs");
+    const rename = fs.renameSync;
+    const copy = fs.copyFileSync;
+    writeFileSync(file, "z".repeat(30));
+    fs.renameSync = (() => {
+      throw new Error("EBUSY");
+    }) as typeof fs.renameSync;
+    try {
+      expect(rotateLogIfNeeded(file, 20, 2)).toBe(true);
+      expect(readFileSync(file, "utf8")).toBe("");
+      expect(readFileSync(`${file}.1`, "utf8")).toBe("z".repeat(30));
+    } finally {
+      fs.renameSync = rename;
+    }
+
+    const stuck = join(dir, "stuck.log");
+    writeFileSync(stuck, "keep");
+    fs.renameSync = (() => {
+      throw new Error("EBUSY");
+    }) as typeof fs.renameSync;
+    fs.copyFileSync = (() => {
+      throw new Error("EBUSY");
+    }) as typeof fs.copyFileSync;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(rotateLogIfNeeded(stuck, 2, 2)).toBe(false);
+      expect(rotateLogIfNeeded(stuck, 2, 2)).toBe(false);
+      expect(readFileSync(stuck, "utf8")).toBe("keep");
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.renameSync = rename;
+      fs.copyFileSync = copy;
+      warn.mockRestore();
+    }
   });
 });
 

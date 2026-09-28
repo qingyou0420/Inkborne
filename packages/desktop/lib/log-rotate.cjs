@@ -4,6 +4,13 @@
  */
 const fs = require("fs");
 
+const warned = new Set();
+
+function copyThenTruncate(filePath) {
+  fs.copyFileSync(filePath, `${filePath}.1`);
+  fs.truncateSync(filePath, 0);
+}
+
 function rotateLogIfNeeded(filePath, maxBytes, keep = 2) {
   const limit = Number(maxBytes);
   const copies = Math.max(1, Number(keep) || 2);
@@ -25,10 +32,20 @@ function rotateLogIfNeeded(filePath, maxBytes, keep = 2) {
   }
   try {
     fs.renameSync(filePath, `${filePath}.1`);
-  } catch {
-    return false;
+    return true;
+  } catch (error) {
+    try {
+      copyThenTruncate(filePath);
+      return true;
+    } catch {
+      if (!warned.has(filePath)) {
+        warned.add(filePath);
+        const detail = error instanceof Error ? error.message : String(error);
+        console.warn(`[inkos] 日志轮转失败，已停止往超大日志追加：${filePath}（${detail}）`);
+      }
+      return false;
+    }
   }
-  return true;
 }
 
 module.exports = { rotateLogIfNeeded };

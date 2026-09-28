@@ -251,13 +251,11 @@ describe("first-run Studio service listing", () => {
     const previous = process.env.INKOS_USER_DATA;
     delete process.env.INKOS_USER_DATA;
     try {
-      const file = writeSecrets(root, "custom:自定义", "sk-new", { userDataDir: join(blocker, "child") });
-      expect(file).toBe(join(root, ".inkos", "secrets.json"));
-      const secrets = JSON.parse(readFileSync(file, "utf8")) as {
-        services: Record<string, { apiKey: string }>;
-      };
-      expect(secrets.services["custom:自定义"]?.apiKey).toBe("sk-new");
-      expect(secrets.services.deepseek?.apiKey).toBe("sk-keep");
+      const before = readFileSync(join(root, ".inkos", "secrets.json"), "utf8");
+      expect(() => writeSecrets(root, "custom:自定义", "sk-new", { userDataDir: join(blocker, "child") })).toThrow();
+      expect(readFileSync(join(root, ".inkos", "secrets.json"), "utf8")).toBe(before);
+      expect(before).toContain("sk-keep");
+      expect(before).not.toContain("sk-new");
       expect(existsSync(join(blocker, "child", "secrets.json"))).toBe(false);
     } finally {
       if (previous === undefined) delete process.env.INKOS_USER_DATA;

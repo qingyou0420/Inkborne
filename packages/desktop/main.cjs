@@ -151,7 +151,14 @@ function appendLog(line) {
   if (serverLog.length > 500) serverLog.shift();
   try {
     const logPath = getLogPath();
-    rotateLogIfNeeded(logPath, LOG_MAX_BYTES, 2);
+    let oversized = false;
+    try {
+      oversized = fs.statSync(logPath).size >= LOG_MAX_BYTES;
+    } catch {
+      oversized = false;
+    }
+    const rotated = rotateLogIfNeeded(logPath, LOG_MAX_BYTES, 2);
+    if (oversized && !rotated) return;
     fs.appendFileSync(logPath, `${text}\n`, "utf8");
   } catch {
     /* ignore */
