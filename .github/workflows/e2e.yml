@@ -1,0 +1,25 @@
+# Playwright 不进每次 push。每周日跑一遍，也可以在 Actions 里手动触发。
+# 发版机是 Windows，装浏览器不合适，所以单独放在 ubuntu 定时任务里。
+name: e2e
+
+on:
+  schedule:
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm --filter @actalk/inkos-studio exec playwright install --with-deps chromium
+      - name: Playwright e2e
+        run: pnpm --filter @actalk/inkos-studio test:e2e

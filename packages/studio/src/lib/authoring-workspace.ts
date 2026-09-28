@@ -14,6 +14,7 @@ export interface AuthoringArtifact {
   readonly parentVersion?: number;
   readonly parentArtifactId?: string;
   readonly source?: string;
+  readonly runId?: string;
 }
 
 export interface AuthoringIssue {
@@ -24,6 +25,8 @@ export interface AuthoringIssue {
   readonly evidence?: string;
   readonly suggestion?: string;
   readonly reason?: string;
+  readonly dimension?: string;
+  readonly sources?: ReadonlyArray<string>;
 }
 
 export interface AuthoringReport {
@@ -35,6 +38,7 @@ export interface AuthoringReport {
   readonly stale?: boolean;
   readonly staleReason?: string;
   readonly incomplete?: boolean;
+  readonly rawExcerpt?: string;
   readonly createdAt?: string;
   readonly targetRefs: ReadonlyArray<string>;
   readonly issues: ReadonlyArray<AuthoringIssue>;
@@ -90,6 +94,12 @@ export interface AuthoringWorkspace {
       readonly requestedEnd?: number;
       readonly missingChapters?: ReadonlyArray<number>;
     };
+    readonly usage?: {
+      readonly promptTokens?: number;
+      readonly completionTokens?: number;
+      readonly totalTokens?: number;
+    };
+    readonly modelSnapshot?: { readonly serviceRef?: string };
   }>;
   readonly catalog?: {
     readonly categories: ReadonlyArray<string>;
@@ -128,10 +138,24 @@ export interface AuthoringWorkspace {
   };
 }
 
-export function workspaceQuery(bookId?: string, draftId?: string): string {
-  if (bookId) return `bookId=${encodeURIComponent(bookId)}`;
-  if (draftId) return `draftId=${encodeURIComponent(draftId)}`;
-  return "";
+export function workspaceQuery(
+  bookId?: string,
+  draftId?: string,
+  options?: {
+    readonly chapter?: number;
+    readonly summary?: boolean;
+    readonly stage?: "ask" | "ground" | "weave" | "write";
+  },
+): string {
+  const params = new URLSearchParams();
+  if (bookId) params.set("bookId", bookId);
+  else if (draftId) params.set("draftId", draftId);
+  if (options?.chapter && Number.isInteger(options.chapter) && options.chapter > 0) {
+    params.set("chapter", String(options.chapter));
+  }
+  if (options?.summary) params.set("summary", "1");
+  if (options?.stage) params.set("stage", options.stage);
+  return params.toString();
 }
 
 export function reportForArtifact(

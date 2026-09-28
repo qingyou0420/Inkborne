@@ -9,7 +9,7 @@ import { postApi, putApi, useApi } from "../hooks/use-api";
 import { showToast } from "../lib/toast";
 import { chatSelectors, useChatStore } from "../store/chat";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
-import { reportForArtifact, resolveAdoptArtifactId } from "../lib/authoring-workspace";
+import { reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
 import { Drawer } from "./ui/drawer";
 
 interface CanonDoc {
@@ -37,9 +37,9 @@ export function AskCanonPanel({
   const messages = useChatStore(chatSelectors.activeMessages);
   const [draftId, setDraftId] = useState<string | undefined>(undefined);
   const query = bookId
-    ? `bookId=${encodeURIComponent(bookId)}`
+    ? workspaceQuery(bookId, undefined, { stage: "ask" })
     : draftId
-      ? `draftId=${encodeURIComponent(draftId)}`
+      ? workspaceQuery(undefined, draftId, { stage: "ask" })
       : "";
   const { data, refetch } = useApi<AuthoringWorkspace>(query ? `/authoring/workspace?${query}` : "");
   const [busy, setBusy] = useState<string | null>(null);

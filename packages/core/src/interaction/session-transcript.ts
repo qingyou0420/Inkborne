@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { TranscriptEventSchema, type TranscriptEvent } from "./session-transcript-schema.js";
@@ -46,8 +46,7 @@ export async function readTranscriptEvents(
 }
 
 export async function nextTranscriptSeq(projectRoot: string, sessionId: string): Promise<number> {
-  const events = await readTranscriptEvents(projectRoot, sessionId);
-  return events.reduce((max, event) => Math.max(max, event.seq), 0) + 1;
+  return (await readLastTranscriptSeq(projectRoot, sessionId)) + 1;
 }
 
 export async function appendTranscriptEvent(
@@ -70,13 +69,23 @@ export async function appendTranscriptEvents(
   let result: TranscriptEvent[] = [];
 
   const next = previous.then(async () => {
-    const events = await readTranscriptEvents(projectRoot, sessionId);
-    const nextSeq = events.reduce((max, event) => Math.max(max, event.seq), 0) + 1;
+    const needsEvents = callbackReadsEvents(buildEvents);
+    const events = needsEvents ? await readTranscriptEvents(projectRoot, sessionId) : [];
+    const lastSeq = needsEvents
+      ? events.reduce((max, event) => Math.max(max, event.seq), 0)
+      : await readLastTranscriptSeq(projectRoot, sessionId);
+    const nextSeq = lastSeq + 1;
     const built = await buildEvents({ events, nextSeq });
     result = built.map((event) => TranscriptEventSchema.parse(event));
-    if (result.length === 0) return;
+    if (result.length === 0) {
+      if (needsEvents) await writeLastTranscriptSeq(projectRoot, sessionId, lastSeq);
+      return;
+    }
 
+    const maxSeq = result.reduce((max, event) => Math.max(max, event.seq), lastSeq);
     await mkdir(sessionsDir(projectRoot), { recursive: true });
+    // Claim the sequence before the append so a crash cannot reuse it.
+    await writeLastTranscriptSeq(projectRoot, sessionId, maxSeq);
     await appendFile(
       transcriptPath(projectRoot, sessionId),
       `${result.map((event) => JSON.stringify(event)).join("\n")}\n`,
@@ -87,6 +96,69 @@ export async function appendTranscriptEvents(
   appendQueues.set(key, next.catch(() => undefined));
   await next;
   return result;
+}
+
+function seqPath(projectRoot: string, sessionId: string): string {
+  return join(sessionsDir(projectRoot), `${sessionId}.seq`);
+}
+
+function callbackReadsEvents(buildEvents: { toString(): string }): boolean {
+  const source = Function.prototype.toString.call(buildEvents);
+  if (!source || source.includes("[native code]")) return true;
+  return /\bevents\b/.test(source);
+}
+
+async function readLastTranscriptSeq(projectRoot: string, sessionId: string): Promise<number> {
+  try {
+    const raw = await readFile(seqPath(projectRoot, sessionId), "utf-8");
+    const seq = Number(raw.trim());
+    if (Number.isInteger(seq) && seq >= 0) return seq;
+  } catch {
+    // Sidecar is missing until the next append, or this session only has a jsonl.
+  }
+  return readLastSeqFromTail(projectRoot, sessionId);
+}
+
+async function writeLastTranscriptSeq(projectRoot: string, sessionId: string, seq: number): Promise<void> {
+  await mkdir(sessionsDir(projectRoot), { recursive: true });
+  await writeFile(seqPath(projectRoot, sessionId), `${seq}\n`, "utf-8");
+}
+
+async function readLastSeqFromTail(projectRoot: string, sessionId: string): Promise<number> {
+  const path = transcriptPath(projectRoot, sessionId);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    const info = await handle.stat();
+    if (info.size === 0) return 0;
+    const chunkSize = Math.min(info.size, 256 * 1024);
+    const buffer = Buffer.alloc(chunkSize);
+    await handle.read(buffer, 0, chunkSize, info.size - chunkSize);
+    let text = buffer.toString("utf8");
+    if (info.size > chunkSize) {
+      const newline = text.indexOf("\n");
+      text = newline >= 0 ? text.slice(newline + 1) : "";
+    }
+    const lines = text.split("\n");
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]?.trim();
+      if (!line) continue;
+      try {
+        const parsed = JSON.parse(line) as { seq?: unknown };
+        if (typeof parsed.seq === "number" && Number.isInteger(parsed.seq) && parsed.seq >= 0) {
+          return parsed.seq;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return 0;
+  } finally {
+    await handle?.close();
+  }
+  const events = await readTranscriptEvents(projectRoot, sessionId);
+  return events.reduce((max, event) => Math.max(max, event.seq), 0);
 }
 
 function transcriptRoleForMessage(message: AgentMessage): TranscriptRole | null {

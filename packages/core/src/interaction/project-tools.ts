@@ -11,7 +11,7 @@ import { runWorkerAgent } from "../agent/worker-agent.js";
 import { executeEditTransaction } from "./edit-controller.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
 import type { InteractionRuntimeTools } from "./runtime.js";
-import { writeExportArtifact } from "./export-artifact.js";
+import { writeExportArtifact, type BookExportOptions } from "./export-artifact.js";
 import { deriveBookIdFromTitle } from "../utils/book-id.js";
 import { normalizePlatformOrOther } from "../models/book.js";
 import { commitOrStageTruthFile, requiresCanonDiffGate } from "./truth-proposals.js";
@@ -174,11 +174,7 @@ export function buildChapterFileLookup(files: ReadonlyArray<string>): ReadonlyMa
   return lookup;
 }
 
-async function exportBookToPath(state: StateLike, bookId: string, options: {
-  readonly format?: "txt" | "md" | "epub";
-  readonly approvedOnly?: boolean;
-  readonly outputPath?: string;
-}) {
+async function exportBookToPath(state: StateLike, bookId: string, options: BookExportOptions) {
   return writeExportArtifact(state, bookId, options);
 }
 

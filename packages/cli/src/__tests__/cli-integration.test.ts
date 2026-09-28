@@ -3,8 +3,28 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { StateManager } from "@actalk/inkos-core";
+
+const require = createRequire(import.meta.url);
+
+function hasNodeSqliteFts5(): boolean {
+  try {
+    const { DatabaseSync } = require("node:sqlite") as {
+      DatabaseSync: new (path: string) => { exec(sql: string): void; close(): void };
+    };
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("CREATE VIRTUAL TABLE __inkos_fts5_probe USING fts5(content)");
+      return true;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(testDir, "..", "..");
@@ -849,7 +869,8 @@ describe("CLI integration", () => {
     });
   });
 
-  describe("inkos plan/compose", () => {
+  // compose chapter builds a LocalSearchIndex. System Node usually has no FTS5.
+  describe.skipIf(!hasNodeSqliteFts5())("inkos plan/compose", () => {
     beforeAll(async () => {
       const configPath = join(projectDir, "inkos.json");
       const initialized = await stat(configPath).then(() => true).catch(() => false);

@@ -335,6 +335,14 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   return {
     StateManager: MockStateManager,
     BookWriteLockError: actual.BookWriteLockError,
+    CorruptBookJsonError: actual.CorruptBookJsonError,
+    redactSecrets: actual.redactSecrets,
+    sanitizeAuthoringRun: actual.sanitizeAuthoringRun,
+    sanitizeAuthoringRuns: actual.sanitizeAuthoringRuns,
+    migrateResearchSearchKey: actual.migrateResearchSearchKey,
+    readResearchSearchPublic: actual.readResearchSearchPublic,
+    RESEARCH_SEARCH_KEY_NOT_STORED: actual.RESEARCH_SEARCH_KEY_NOT_STORED,
+    saveResearchSearchSettings: actual.saveResearchSearchSettings,
     WritePreflightError: actual.WritePreflightError,
     ApproveBlockedError: actual.ApproveBlockedError,
     TruthRevisionConflictError: actual.TruthRevisionConflictError,
@@ -366,6 +374,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     deleteLatestChapter: deleteLatestChapterMock,
     executeEditTransaction: actual.executeEditTransaction,
     listChapterVersions: actual.listChapterVersions,
+    resolveChapterFile: actual.resolveChapterFile,
+    loadAuthoringWorkspaceLists: actual.loadAuthoringWorkspaceLists,
     readChapterPlanDocument: actual.readChapterPlanDocument,
     readChapterUserBrief: actual.readChapterUserBrief,
     readChapterVersion: actual.readChapterVersion,
@@ -438,6 +448,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     isApiKeyOptionalForEndpoint: actual.isApiKeyOptionalForEndpoint,
     loadSecrets: loadSecretsMock,
     saveSecrets: saveSecretsMock,
+    maskApiKey: actual.maskApiKey,
+    describeSecretsLocation: actual.describeSecretsLocation,
+    listInProcessBookLocks: actual.listInProcessBookLocks,
+    atomicWritesInFlight: actual.atomicWritesInFlight,
     getServiceApiKey: getServiceApiKeyMock,
     listModelsForService: listModelsForServiceMock,
     getAllEndpoints: getAllEndpointsMock,
@@ -2410,7 +2424,15 @@ describe("createStudioServer daemon lifecycle", () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
-    const first = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?apiKey=sk-shared-tail");
+    const leaked = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?apiKey=sk-query-leak&refresh=1");
+    expect(leaked.status).toBe(200);
+    expect(listModelsForServiceMock.mock.calls.some((call) => call[1] === "sk-query-leak")).toBe(false);
+
+    const first = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?refresh=1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-shared-tail", refresh: true }),
+    });
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({
       models: [{ id: "model-a", name: "model-a" }],
@@ -2425,7 +2447,11 @@ describe("createStudioServer daemon lifecycle", () => {
       },
     }, null, 2), "utf-8");
 
-    const second = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models?apiKey=sk-shared-tail");
+    const second = await app.request("http://localhost/api/v1/services/custom%3ASwitcher/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-shared-tail", refresh: true }),
+    });
     expect(second.status).toBe(200);
     await expect(second.json()).resolves.toMatchObject({
       models: [{ id: "model-b", name: "model-b" }],
@@ -2444,7 +2470,19 @@ describe("createStudioServer daemon lifecycle", () => {
 
     const response = await app.request("http://localhost/api/v1/services/moonshot/secret");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ apiKey: "sk-moon" });
+    await expect(response.json()).resolves.toEqual({
+      configured: true,
+      last4: "moon",
+      apiKey: "",
+      locationHint: expect.any(String),
+    });
+    const revealed = await app.request("http://localhost/api/v1/services/moonshot/secret?reveal=1");
+    expect(revealed.status).toBe(200);
+    await expect(revealed.json()).resolves.toMatchObject({
+      configured: true,
+      last4: "moon",
+      apiKey: "sk-moon",
+    });
   });
 
   it("rejects non-header-safe service secrets instead of persisting diagnostic text", async () => {
@@ -3093,9 +3131,9 @@ describe("createStudioServer daemon lifecycle", () => {
       join(root, "books", "demo-book", "chapters", "0003_Demo.md"),
       "utf-8",
     )).resolves.toContain("人工修改后的正文");
-    const versionFiles = await (await import("node:fs/promises")).readdir(
+    const versionFiles = (await (await import("node:fs/promises")).readdir(
       join(root, "books", "demo-book", "chapters", ".versions", "0003"),
-    );
+    )).filter((file) => file.endsWith(".md"));
     expect(versionFiles).toHaveLength(1);
     expect(versionFiles[0]).toContain("_manual_");
     await expect(readFile(

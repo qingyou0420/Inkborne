@@ -18,7 +18,7 @@ export function AuthoringGroundPanel({
   readonly bookId: string;
   readonly isZh: boolean;
 }) {
-  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { stage: "ground" })}`);
   const entries = data?.catalog?.entries ?? [];
   const coverage = data?.manifest?.coverage;
   const [selected, setSelected] = useState<string[]>([]);

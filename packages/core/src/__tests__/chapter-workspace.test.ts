@@ -2,8 +2,10 @@ import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveChapterFile } from "../authoring/chapter-index.js";
 import {
   archiveChapterVersion,
+  CHAPTER_VERSION_KEEP,
   listChapterVersions,
   readChapterPlanDocument,
   readChapterUserBrief,
@@ -98,5 +100,91 @@ describe("chapter workspace", () => {
       join(bookDir, "chapters", ".versions", "0001", `${version.id}.md`),
       "utf-8",
     )).resolves.toBe("# 第1章");
+  });
+
+  it("lists version metadata without rereading the chapter text", async () => {
+    const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    const saved = await archiveChapterVersion(
+      bookDir,
+      6,
+      "原文五字",
+      "manual",
+      new Date("2026-07-04T00:00:00.000Z"),
+    );
+    await listChapterVersions(bookDir, 6);
+    await writeFile(
+      join(bookDir, "chapters", ".versions", "0006", `${saved.id}.md`),
+      "被换掉的更长正文",
+      "utf-8",
+    );
+    const listed = await listChapterVersions(bookDir, 6);
+    expect(listed[0]?.characterCount).toBe("原文五字".length);
+    expect(listed[0]?.source).toBe("manual");
+  });
+
+  it("caps autosaves but keeps the manual baseline and the only original autosave", async () => {
+    const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    const manual = await archiveChapterVersion(
+      bookDir,
+      9,
+      "改前原文",
+      "manual",
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+    for (let index = 0; index < CHAPTER_VERSION_KEEP + 5; index += 1) {
+      await archiveChapterVersion(
+        bookDir,
+        9,
+        `自动${index}`,
+        "autosave",
+        new Date(Date.UTC(2026, 1, 1, 0, index)),
+      );
+    }
+    const kept = await listChapterVersions(bookDir, 9);
+    expect(kept.some((version) => version.id === manual.id)).toBe(true);
+    expect(kept.filter((version) => version.source === "autosave")).toHaveLength(CHAPTER_VERSION_KEEP);
+    await expect(readChapterVersion(bookDir, 9, manual.id)).resolves.toBe("改前原文");
+
+    const autosaveOnly = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    const oldest = await archiveChapterVersion(
+      autosaveOnly,
+      2,
+      "唯一原文",
+      "autosave",
+      new Date("2026-01-02T00:00:00.000Z"),
+    );
+    for (let index = 0; index < CHAPTER_VERSION_KEEP + 4; index += 1) {
+      await archiveChapterVersion(
+        autosaveOnly,
+        2,
+        `后续${index}`,
+        "autosave",
+        new Date(Date.UTC(2026, 3, 1, 0, index + 1)),
+      );
+    }
+    const autosaves = await listChapterVersions(autosaveOnly, 2);
+    expect(autosaves.some((version) => version.id === oldest.id)).toBe(true);
+    await expect(readChapterVersion(autosaveOnly, 2, oldest.id)).resolves.toBe("唯一原文");
+  });
+
+  it("opens a chapter from the index file name", async () => {
+    const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    await writeFile(join(bookDir, "chapters", "0007_aaa.md"), "甲", "utf-8");
+    await writeFile(join(bookDir, "chapters", "0007_zzz.md"), "乙", "utf-8");
+    await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify([{
+      number: 7,
+      title: "乙章",
+      file: "0007_zzz.md",
+      status: "approved",
+      wordCount: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }]), "utf-8");
+    await expect(resolveChapterFile(bookDir, 7)).resolves.toMatchObject({
+      fileName: "0007_zzz.md",
+      relativePath: "chapters/0007_zzz.md",
+      title: "乙章",
+    });
   });
 });

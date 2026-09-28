@@ -9,9 +9,10 @@ import { withBookWriteLock } from "../book-lock.js";
 import { parseCanon, serializeCanon } from "../canon.js";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { asNumber, asString, asStringArray, extractJsonObject } from "../json.js";
-import { completeRole } from "../llm.js";
+import { completeRoleObserved } from "../llm.js";
+import { redactSecrets } from "../../utils/redact-secrets.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
+import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   loadArtifact,
   loadManifest,
@@ -28,6 +29,7 @@ import { createLightweightBook, syncBookJsonTitle } from "../book-create.js";
 import type {
   AuthoringLlmFn,
   AuthoringReviewReport,
+  AuthoringTokenUsage,
   CanonDocument,
   ResolvedAuthoringRole,
 } from "../types.js";
@@ -110,8 +112,11 @@ export async function generateAskCanon(input: AskRuntime & {
     "对话：",
     input.conversation.slice(0, 12000),
   ].filter(Boolean).join("\n");
+  let usage: AuthoringTokenUsage | undefined;
   try {
-    const text = await completeRole(resolved, prompt, input.llm);
+    const observed = await completeRoleObserved(resolved, prompt, { llm: input.llm });
+    usage = observed.usage;
+    const text = observed.content;
     const canon = canonFromJson(extractJsonObject(text), baseCanon?.title || "未命名");
     const body = serializeCanon(canon);
     const version = (parent?.meta.version ?? 0) + 1;
@@ -147,6 +152,7 @@ export async function generateAskCanon(input: AskRuntime & {
       draftId: input.root.draftId,
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: [artifactId],
+      ...(usage ? { usage } : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -158,11 +164,12 @@ export async function generateAskCanon(input: AskRuntime & {
       operation: "generate",
       roleId: "ask.main",
       status: "failed",
-      error: error instanceof Error ? error.message : String(error),
+      error: redactSecrets(error instanceof Error ? error.message : String(error)),
       bookId: input.root.bookId,
       draftId: input.root.draftId,
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: [],
+      ...(usage ? { usage } : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -181,12 +188,12 @@ export async function reviewAskCanon(input: AskRuntime & {
   const extras = [
     input.conversation ? `【作者对话】\n${input.conversation.slice(0, 8000)}` : "",
   ].filter(Boolean).join("\n");
-  const text = await completeRole(
+  const reviewed = await requestReviewModelText({
     resolved,
-    reviewPrompt("ask", "故事正典全文", loaded.body, extras),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+    prompt: reviewPrompt("ask", "故事正典全文", loaded.body, extras),
+    llm: input.llm,
+  });
+  const report = parseReviewPayload(reviewed.text, {
     stage: "ask",
     targetRefs: [loaded.meta.artifactId],
     coverage: "故事正典全文",
@@ -196,6 +203,7 @@ export async function reviewAskCanon(input: AskRuntime & {
       { kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version },
       ...(input.conversation ? [{ kind: "conversation", id: "ask-chat" }] : []),
     ],
+    rawExcerpt: reviewed.rawExcerpt,
   });
   await saveReport(input.root, report);
   await saveRun(input.root, {
@@ -209,6 +217,7 @@ export async function reviewAskCanon(input: AskRuntime & {
     draftId: input.root.draftId,
     modelSnapshot: resolved.snapshot,
     producedArtifactIds: [],
+    ...(reviewed.usage ? { usage: reviewed.usage } : {}),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
@@ -237,7 +246,8 @@ export async function reviseAskCanon(input: AskRuntime & {
     "当前正典：",
     loaded.body,
   ].filter(Boolean).join("\n");
-  const text = await completeRole(resolved, prompt, input.llm);
+  const observed = await completeRoleObserved(resolved, prompt, { llm: input.llm });
+  const text = observed.content;
   const canon = canonFromJson(extractJsonObject(text), parseCanon(loaded.body).title);
   const version = loaded.meta.version + 1;
   const artifactId = newArtifactId("ask", "canon");

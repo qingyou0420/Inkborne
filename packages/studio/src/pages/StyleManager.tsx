@@ -4,6 +4,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { Upload, BarChart3 } from "lucide-react";
+import { actionErrorText, isActionError } from "../lib/error-copy";
 
 interface StyleProfile {
   readonly sourceName: string;
@@ -30,7 +31,7 @@ export interface StyleStatusNotice {
 export function buildStyleStatusNotice(analyzeStatus: string, importStatus: string): StyleStatusNotice | null {
   const message = analyzeStatus.trim() || importStatus.trim();
   if (!message) return null;
-  if (message.startsWith("Error:")) {
+  if (isActionError(message)) {
     return { tone: "error", message };
   }
   if (message.endsWith("...")) {
@@ -64,19 +65,19 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       });
       setProfile(data);
     } catch (e) {
-      setAnalyzeStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setAnalyzeStatus(actionErrorText(e));
     }
     setLoading(false);
   };
 
   const handleImport = async () => {
     if (!importBookId || !text.trim()) return;
-    setImportStatus("Importing...");
+    setImportStatus("正在导入…");
     try {
       await postApi(`/books/${importBookId}/style/import`, { text, sourceName: sourceName || "sample" });
-      setImportStatus("Style guide imported successfully!");
+      setImportStatus("文风已导入");
     } catch (e) {
-      setImportStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setImportStatus(actionErrorText(e));
     }
   };
 

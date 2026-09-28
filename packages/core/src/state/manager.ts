@@ -9,9 +9,10 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
+import { bookDirHasCorruptBookJson, readBookJsonFile } from "./book-json.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
@@ -88,6 +89,34 @@ export function setBookLockLivenessCheck(check?: BookLockLivenessCheck): void {
   bookLockLivenessCheck = check;
 }
 
+/** In-process locks for this project, without forcing the caller to know book ids. */
+export function listInProcessBookLocks(projectRoot: string): BookLockOwnerInfo[] {
+  const booksRoot = resolve(projectRoot, "books");
+  const prefix = `${process.platform === "win32" ? booksRoot.toLowerCase() : booksRoot}${sep}`;
+  const listed: BookLockOwnerInfo[] = [];
+  for (const [lockKey, owner] of processBookLocks) {
+    const normalized = process.platform === "win32" ? lockKey.toLowerCase() : lockKey;
+    if (!normalized.startsWith(prefix)) continue;
+    const parts = lockKey.split(/[/\\]/);
+    const bookId = parts[parts.length - 2];
+    if (!bookId || bookId === "books") continue;
+    const taskId = owner.holder?.taskId ?? owner.metadata.taskId;
+    const stage = owner.holder?.stage ?? owner.metadata.stage;
+    listed.push({
+      bookId,
+      lockPath: lockKey,
+      pid: owner.metadata.pid,
+      startedAt: owner.metadata.startedAt,
+      heartbeatAt: owner.metadata.heartbeatAt,
+      heldMs: Math.max(0, Date.now() - owner.metadata.startedAt),
+      ...(taskId ? { taskId } : {}),
+      ...(stage ? { stage } : {}),
+      inProcess: true,
+    });
+  }
+  return listed;
+}
+
 /** Test-only: drop every in-process lock and the liveness hook. */
 export function resetProcessBookLocksForTest(): void {
   for (const owner of processBookLocks.values()) {
@@ -154,20 +183,14 @@ export function formatBookWriteLockCopy(
 ): string {
   if (language === "en") return error.message;
   const stage = error.owner?.stage;
-  const taskId = error.owner?.taskId;
   const heldMs = error.owner?.heldMs;
   const held = typeof heldMs === "number" && heldMs >= 0
     ? heldMs < 60_000
       ? `${Math.max(1, Math.round(heldMs / 1000))} 秒`
       : `${Math.round(heldMs / 60_000)} 分钟`
     : undefined;
-  const extras = [
-    stage ? `阶段 ${stage}` : undefined,
-    taskId ? `任务 ${taskId}` : undefined,
-    held ? `已持续 ${held}` : undefined,
-  ].filter((part): part is string => Boolean(part));
-  const detail = extras.length > 0 ? `（${extras.join("，")}）` : "";
-  return `写入被占用：书「${error.bookId}」正在被写作任务写入${detail}。请等待当前任务结束，或确认没有进行中的任务后使用「强制释放」。`;
+  const where = [error.bookId, stage, held ? `已 ${held}` : ""].filter(Boolean).join("，");
+  return `写入被占用：这本书正在被写入${where ? `（${where}）` : ""}。请等它写完，或确认没有别的写作任务后再强制放开。`;
 }
 
 export class StateManager {
@@ -706,12 +729,7 @@ export class StateManager {
   }
 
   async loadBookConfig(bookId: string): Promise<BookConfig> {
-    const configPath = join(this.bookDir(bookId), "book.json");
-    const raw = await readFile(configPath, "utf-8");
-    if (!raw.trim()) {
-      throw new Error(`book.json is empty for book "${bookId}"`);
-    }
-    return JSON.parse(raw) as BookConfig;
+    return await readBookJsonFile(this.bookDir(bookId)) as BookConfig;
   }
 
   async saveBookConfig(bookId: string, config: BookConfig): Promise<void> {
@@ -744,7 +762,7 @@ export class StateManager {
           await stat(bookJsonPath);
           bookIds.push(entry);
         } catch {
-          // not a book directory
+          if (await bookDirHasCorruptBookJson(join(this.booksDir, entry))) bookIds.push(entry);
         }
       }
       return bookIds;
@@ -830,6 +848,7 @@ export class StateManager {
       return [{
         number,
         title: rawTitle || `第${number}章`,
+        file,
         status: "ready-for-review" as const,
         wordCount: content.replace(/\s+/g, "").length,
         createdAt: timestamp,

@@ -7,6 +7,7 @@ import { useServiceStore } from "../store/service";
 import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { ServiceConfigSourceCard } from "../components/ServiceConfigSourceCard";
+import { SimpleModelSettings } from "../components/SimpleModelSettings";
 
 interface Nav {
   toDashboard: () => void;
@@ -74,6 +75,8 @@ function CoverConfigCard() {
   const [model, setModel] = useState("gpt-image-2");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [keyConfigured, setKeyConfigured] = useState(false);
+  const [keyLast4, setKeyLast4] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
   const [message, setMessage] = useState("");
@@ -104,13 +107,19 @@ function CoverConfigCard() {
   useEffect(() => {
     if (!service) return;
     let cancelled = false;
-    void fetchJson<{ apiKey?: string }>(`/cover/secret/${encodeURIComponent(service)}`)
+    void fetchJson<{ apiKey?: string; configured?: boolean; last4?: string }>(`/cover/secret/${encodeURIComponent(service)}`)
       .then((payload) => {
         if (cancelled) return;
         setApiKey(payload.apiKey ?? "");
+        setKeyConfigured(Boolean(payload.configured) || Boolean(payload.apiKey));
+        setKeyLast4(payload.last4 || (payload.apiKey ? payload.apiKey.slice(-4) : ""));
       })
       .catch(() => {
-        if (!cancelled) setApiKey("");
+        if (!cancelled) {
+          setApiKey("");
+          setKeyConfigured(false);
+          setKeyLast4("");
+        }
       });
     return () => { cancelled = true; };
   }, [service]);
@@ -130,11 +139,13 @@ function CoverConfigCard() {
     setStatus("saving");
     setMessage("");
     try {
-      await fetchJson(`/cover/secret/${encodeURIComponent(provider.service)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      });
+      if (apiKey.trim() || !keyConfigured) {
+        await fetchJson(`/cover/secret/${encodeURIComponent(provider.service)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey: apiKey.trim() }),
+        });
+      }
       await fetchJson("/cover/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -224,12 +235,24 @@ function CoverConfigCard() {
             type={showKey ? "text" : "password"}
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            placeholder="sk-..."
+            placeholder={keyConfigured ? tr(`已保存，末四位 ${keyLast4 || "····"}`, `Saved, last 4 ${keyLast4 || "····"}`) : "sk-..."}
             className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
           />
           <button
             type="button"
-            onClick={() => setShowKey((value) => !value)}
+            onClick={() => {
+              if (!showKey && !apiKey && keyConfigured) {
+                void fetchJson<{ apiKey?: string; last4?: string }>(`/cover/secret/${encodeURIComponent(service)}?reveal=1`)
+                  .then((payload) => {
+                    setApiKey(payload.apiKey ?? "");
+                    if (payload.last4) setKeyLast4(payload.last4);
+                    setShowKey(true);
+                  })
+                  .catch(() => setShowKey(true));
+                return;
+              }
+              setShowKey((value) => !value);
+            }}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground"
           >
             {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -334,6 +357,14 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
   return (
     <div className="space-y-6">
       <h1 className="font-serif text-[32px] font-medium leading-10">{tr("模型配置", "Model Config")}</h1>
+
+      <SimpleModelSettings />
+
+      <details className="space-y-6">
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+          {tr("高级：其它服务商和封面", "Advanced: other providers and covers")}
+        </summary>
+        <div className="space-y-6 pt-4">
 
       <ServiceConfigSourceCard onChange={() => { void refreshServices(); }} />
 
@@ -475,6 +506,8 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           {tr("没有匹配的服务商", "No matching providers")}
         </div>
       )}
+        </div>
+      </details>
     </div>
   );
 }

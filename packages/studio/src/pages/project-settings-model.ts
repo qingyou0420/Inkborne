@@ -116,6 +116,22 @@ export function detectionDraftFromConfig(value: unknown): DetectionDraft {
   };
 }
 
+const LEGACY_AGENT_LABELS: Readonly<Record<string, string>> = {
+  writer: "落笔",
+  reviser: "落笔",
+  settler: "落笔",
+  architect: "研墨",
+  planner: "织卷",
+  composer: "织卷",
+  auditor: "审查",
+  continuity: "审查",
+};
+
+export function legacyAgentLabel(agent: string): string {
+  const trimmed = agent.trim();
+  return LEGACY_AGENT_LABELS[trimmed] ?? trimmed;
+}
+
 export function buildDetectionConfig(det: DetectionDraft): Record<string, unknown> | null {
   if (!det.enabled) return null;
   return {

@@ -36,6 +36,8 @@ const {
   shouldUseRemoteUpdateCheck,
 } = require("./lib/update-search.cjs");
 const { resolveStudioEntry, resolveEngineRoot } = require("./lib/studio-entry.cjs");
+const { rotateLogIfNeeded } = require("./lib/log-rotate.cjs");
+const { writingStatusBusy, writingStatusMessage } = require("./lib/quit-writing.cjs");
 
 app.setName("fantawriter");
 app.setPath("userData", path.join(app.getPath("appData"), "fantawriter"));
@@ -54,7 +56,9 @@ let engineHandle = emptyEngineHandle();
 let mainWindow = null;
 let quitting = false;
 let allowClose = false;
+let leaveConfirmed = false;
 let quitDeciding = false;
+let quitFlowStarted = false;
 
 // Covers the autosave busy-retry budget (350+700+1050ms) plus the requests themselves.
 const UNSAVED_CHECK_TIMEOUT_MS = 3000;
@@ -146,7 +150,16 @@ function appendLog(line) {
   serverLog.push(text);
   if (serverLog.length > 500) serverLog.shift();
   try {
-    fs.appendFileSync(getLogPath(), `${text}\n`, "utf8");
+    const logPath = getLogPath();
+    let oversized = false;
+    try {
+      oversized = fs.statSync(logPath).size >= LOG_MAX_BYTES;
+    } catch {
+      oversized = false;
+    }
+    const rotated = rotateLogIfNeeded(logPath, LOG_MAX_BYTES, 2);
+    if (oversized && !rotated) return;
+    fs.appendFileSync(logPath, `${text}\n`, "utf8");
   } catch {
     /* ignore */
   }
@@ -239,6 +252,7 @@ function engineEnv(listenPort, root) {
     FW_INSTANCE_TOKEN: instanceToken,
     INKOS_DISABLE_VITE_BUILD: "1",
     INKOS_PACKAGED: app.isPackaged ? "1" : "0",
+    INKOS_USER_DATA: app.getPath("userData"),
   };
 }
 
@@ -344,6 +358,108 @@ function startEngine(listenPort, root) {
   return `http://${HOST}:${listenPort}`;
 }
 
+function fetchJson(url, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const req = http.request(url, { method: "GET", timeout: timeoutMs }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(null);
+    });
+    req.end();
+  });
+}
+
+function engineBaseUrl() {
+  const port = engineHandle.port || enginePort;
+  if (!port) return "";
+  return `http://${HOST}:${port}`;
+}
+
+async function fetchWriteStatus() {
+  const base = engineBaseUrl();
+  if (!base) return null;
+  return fetchJson(`${base}/api/v1/engine/write-status`, 2000);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForWrites({ maxMs, requireLocksClear }) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const status = await fetchWriteStatus();
+    if (!status) return true;
+    const locks = Array.isArray(status.locks) ? status.locks.length : 0;
+    const atomicWrites = Number(status.atomicWrites) || 0;
+    if (atomicWrites === 0 && (!requireLocksClear || locks === 0)) return true;
+    await sleep(400);
+  }
+  return false;
+}
+
+function askWriting(status) {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  return dialog.showMessageBoxSync(parent, {
+    type: "warning",
+    buttons: ["等它写完", "立即中止", "留下"],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+    title: "正在写入",
+    message: writingStatusMessage(status) || "这本书正在写入。",
+    detail: "等它写完会先把这一次写完再退出。立即中止会停掉写作；已经开始的落盘会尽量写完。",
+  });
+}
+
+function askStillWriting() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  return dialog.showMessageBoxSync(parent, {
+    type: "warning",
+    buttons: ["立即中止", "留下"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: "还在写入",
+    message: "等了大约 3 分钟，这一次还没写完。",
+    detail: "立即中止会停掉写作。已经开始的落盘会尽量写完。留下可以继续等你自己关窗。",
+  });
+}
+
+async function confirmLeave() {
+  if (leaveConfirmed || allowClose) return true;
+  if (quitDeciding) return false;
+  quitDeciding = true;
+  try {
+    if (await pageHasUnsavedEdits() && !askLeaveWithUnsaved()) return false;
+    const status = await fetchWriteStatus();
+    if (writingStatusBusy(status)) {
+      const choice = askWriting(status);
+      if (choice === 2) return false;
+      if (choice === 0) {
+        const settled = await waitForWrites({ maxMs: 180000, requireLocksClear: true });
+        if (!settled && askStillWriting() !== 0) return false;
+      }
+    }
+    leaveConfirmed = true;
+    allowClose = true;
+    return true;
+  } finally {
+    quitDeciding = false;
+  }
+}
+
 function postJson(url, timeoutMs = 4000) {
   return new Promise((resolve) => {
     const req = http.request(url, { method: "POST", timeout: timeoutMs }, (res) => {
@@ -367,7 +483,7 @@ async function stopEngine({ graceful = true } = {}) {
   if (graceful && port) {
     try {
       await postJson(`http://${HOST}:${port}/api/v1/engine/shutdown`, 4000);
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await waitForWrites({ maxMs: 8000, requireLocksClear: false });
     } catch {
       /* still kill */
     }
@@ -488,21 +604,16 @@ function createWindow(targetUrl) {
     }).catch(() => undefined);
   });
   mainWindow.on("close", (event) => {
-    if (allowClose || quitting) return;
+    if (allowClose || quitting || leaveConfirmed) return;
     event.preventDefault();
-    void (async () => {
-      if (await pageHasUnsavedEdits() && !askLeaveWithUnsaved()) return;
-      allowClose = true;
-      mainWindow?.close();
-    })();
+    if (quitDeciding) return;
+    void confirmLeave().then((ok) => {
+      if (ok) mainWindow?.close();
+    });
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
-}
-
-function firstRunFileUrl() {
-  return `file://${path.join(__dirname, "first-run.html")}`;
 }
 
 /** @type {Electron.BrowserWindow | null} */
@@ -609,6 +720,9 @@ function buildMenu() {
       label: "帮助",
       submenu: [
         { label: "检查更新", click: () => { openCheckUpdateUi(); } },
+        { type: "separator" },
+        { label: "打开日志目录", click: () => { void openKnownDir(app.getPath("userData")); } },
+        { label: "打开项目目录", click: () => { void openKnownDir(projectRoot); } },
         { type: "separator" },
         { label: "关于墨生万象", click: () => showAbout() },
       ],
@@ -996,6 +1110,7 @@ function registerIpc() {
         baseUrl: payload?.baseUrl,
         model: payload?.model,
         apiKey: payload?.apiKey,
+        userDataDir: app.getPath("userData"),
       });
       saveShellConfig({
         INKOS_PROJECT_ROOT: root,
@@ -1105,9 +1220,20 @@ function registerIpc() {
     const err = await shell.openPath(dir);
     return { ok: !err, path: dir, message: err || undefined };
   });
+  ipcMain.handle("app:openLogDir", async () => openKnownDir(app.getPath("userData")));
+  ipcMain.handle("app:openProjectDir", async () => openKnownDir(projectRoot));
+}
+
+async function openKnownDir(dir) {
+  const target = String(dir || "").trim();
+  if (!target) return { ok: false, message: "目录还不存在" };
+  ensureDir(target);
+  const err = await shell.openPath(target);
+  return err ? { ok: false, message: err, path: target } : { ok: true, path: target };
 }
 
 async function boot() {
+  process.env.INKOS_USER_DATA = app.getPath("userData");
   registerIpc();
   buildMenu();
   try {
@@ -1134,15 +1260,17 @@ if (!gotLock) {
   app.on("before-quit", (event) => {
     if (quitting) return;
     event.preventDefault();
-    if (quitDeciding) return;
-    quitDeciding = true;
+    if (quitDeciding || quitFlowStarted) return;
+    quitFlowStarted = true;
     void (async () => {
       try {
-        if (!allowClose && await pageHasUnsavedEdits() && !askLeaveWithUnsaved()) {
-          quitDeciding = false;
-          return;
+        if (!leaveConfirmed && !allowClose) {
+          const ok = await confirmLeave();
+          if (!ok) {
+            quitFlowStarted = false;
+            return;
+          }
         }
-        allowClose = true;
         quitting = true;
         await stopEngine({ graceful: true });
       } finally {
@@ -1151,7 +1279,6 @@ if (!gotLock) {
     })();
   });
   app.on("window-all-closed", () => {
-    quitting = true;
-    stopEngine({ graceful: true }).finally(() => app.quit());
+    if (!quitting) app.quit();
   });
 }

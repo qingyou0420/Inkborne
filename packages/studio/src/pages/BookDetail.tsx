@@ -1,5 +1,11 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
+import { CorruptBookCard } from "../components/CorruptBookCard";
+import { fanqieRangeProblem } from "../lib/fanqie-range";
+import { showToast } from "../lib/toast";
+import { FanqieExportFields } from "../components/FanqieExportFields";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChapterManuscriptTable } from "../components/ChapterManuscriptTable";
 import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
 import { AuthoringWritePanel, type AuthoringWritePanelHandle } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
@@ -10,7 +16,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
-import { bookManuscriptExportPath } from "../lib/work-export";
+import { bookManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
 import { formatReviewIssueCopy, hasPreviousChapterUnapprovedReason, isMustFixSeverity } from "../lib/copy-map";
 import { formatStudyWords, writeEmptyCopy } from "../lib/stage-copy";
 import type { BookStepState } from "../lib/book-stage";
@@ -54,7 +60,13 @@ interface BookData {
 }
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
-type ExportFormat = "txt" | "md" | "epub";
+type ExportFormat = "txt" | "md" | "epub" | "fanqie";
+
+function positiveChapter(value: string): number | undefined {
+  if (!/^\d+$/.test(value.trim())) return undefined;
+  const number = Number(value);
+  return number >= 1 ? number : undefined;
+}
 
 interface Nav extends BookWorkspaceNavTarget {
   toDashboard: () => void;
@@ -115,6 +127,11 @@ export function BookDetail({
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
+  const [fanqieFrom, setFanqieFrom] = useState("");
+  const [fanqieTo, setFanqieTo] = useState("");
+  const [fanqieLayout, setFanqieLayout] = useState<"combined" | "per-chapter">("combined");
+  const [fanqieBlankLine, setFanqieBlankLine] = useState(true);
+  const [fanqieIndent, setFanqieIndent] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   const [generateNonce, setGenerateNonce] = useState(0);
   const [panelBusy, setPanelBusy] = useState(false);
@@ -135,6 +152,7 @@ export function BookDetail({
   } | null>(null);
   const [overrideValue, setOverrideValue] = useState("");
   const [writeChapter, setWriteChapter] = useState<number | null>(null);
+  const [volumeMap, setVolumeMap] = useState("");
 
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
@@ -173,6 +191,9 @@ export function BookDetail({
     void fetchJson<{ items?: Array<{ chapterNumber: number; severity: string; category: string; description: string }> }>(`/books/${bookId}/review-queue`)
       .then((body) => setReviewQueue(body.items ?? []))
       .catch(() => setReviewQueue([]));
+    void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
+      .then((body) => setVolumeMap(body.content ?? ""))
+      .catch(() => setVolumeMap(""));
   }, [bookId, skipPreviousApproval, data?.nextChapter, activity.lastError]);
 
   const selectWriteChapter = async (chapterNumber: number) => {
@@ -353,7 +374,10 @@ export function BookDetail({
     </div>
   );
 
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">Error: {error}</div>;
+  if (error && /book\.json|快照/.test(error)) {
+    return <CorruptBookCard message={pageErrorText(error)} />;
+  }
+  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const { book, chapters } = data;
@@ -368,7 +392,18 @@ export function BookDetail({
     isZh,
   });
 
-  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly);
+  const fanqieChapterCount = chapters.reduce((max, chapter) => Math.max(max, chapter.number), chapters.length);
+  const fanqieProblem = exportFormat === "fanqie"
+    ? fanqieRangeProblem(fanqieFrom, fanqieTo, fanqieChapterCount, isZh)
+    : "";
+  const fanqieQuery: FanqieExportQuery | undefined = exportFormat === "fanqie" && !fanqieProblem ? {
+    ...(positiveChapter(fanqieFrom) ? { fromChapter: positiveChapter(fanqieFrom) } : {}),
+    ...(positiveChapter(fanqieTo) ? { toChapter: positiveChapter(fanqieTo) } : {}),
+    layout: fanqieLayout,
+    blankLine: fanqieBlankLine,
+    indent: fanqieIndent,
+  } : undefined;
+  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly, fanqieQuery);
   const briefDialog = briefPrompt ? briefCopy(briefPrompt.kind) : null;
 
   return (
@@ -389,38 +424,78 @@ export function BookDetail({
               {t("book.exportMenu")}
               <ChevronDown size={14} />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 p-3 space-y-3">
-              {(["txt", "md", "epub"] as const).map((format) => (
+            <DropdownMenuContent align="end" className="w-80 p-3 space-y-3">
+              {(["txt", "md", "epub", "fanqie"] as const).map((format) => (
                 <label key={format} className="flex items-center gap-2 text-sm">
                   <input
                     type="radio"
                     name="export-format"
                     checked={exportFormat === format}
                     onChange={() => setExportFormat(format)}
+                    data-testid={format === "fanqie" ? "export-format-fanqie" : undefined}
                   />
-                  {format.toUpperCase()}
+                  {format === "fanqie" ? (isZh ? "番茄纯文本" : "Tomato plain text") : format.toUpperCase()}
                 </label>
               ))}
+              {exportFormat === "fanqie" ? (
+                <FanqieExportFields
+                  isZh={isZh}
+                  showRange
+                  from={fanqieFrom}
+                  to={fanqieTo}
+                  layout={fanqieLayout}
+                  blankLine={fanqieBlankLine}
+                  indent={fanqieIndent}
+                  onChange={(patch) => {
+                    if (patch.from !== undefined) setFanqieFrom(patch.from);
+                    if (patch.to !== undefined) setFanqieTo(patch.to);
+                    if (patch.layout !== undefined) setFanqieLayout(patch.layout);
+                    if (patch.blankLine !== undefined) setFanqieBlankLine(patch.blankLine);
+                    if (patch.indent !== undefined) setFanqieIndent(patch.indent);
+                  }}
+                />
+              ) : null}
+              {fanqieProblem ? (
+                <p className="text-xs text-destructive" data-testid="fanqie-range-error">{fanqieProblem}</p>
+              ) : null}
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
                 {t("book.approvedOnly")}
               </label>
               <div className="flex flex-col gap-1 pt-1">
-                <a href={exportHref} download data-testid="book-export-manuscript" className="btn-secondary text-center">
+                <a
+                  href={fanqieProblem ? undefined : exportHref}
+                  download
+                  aria-disabled={fanqieProblem ? true : undefined}
+                  data-testid="book-export-manuscript"
+                  className={`btn-secondary text-center ${fanqieProblem ? "pointer-events-none opacity-40" : ""}`}
+                  onClick={(event) => {
+                    if (fanqieProblem) event.preventDefault();
+                  }}
+                >
                   {t("book.download")}
                 </a>
                 <button
                   type="button"
+                  disabled={Boolean(fanqieProblem)}
                   onClick={async () => {
+                    if (fanqieProblem) return;
                     try {
                       const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
+                        body: JSON.stringify({
+                          format: exportFormat,
+                          approvedOnly: exportApprovedOnly,
+                          ...(fanqieQuery ?? {}),
+                        }),
                       });
                       setBookActionPending(`saved:${exported.path ?? ""}`);
+                      showToast(isZh ? "已保存到这本书的导出文件夹。" : "Saved in the book export folder.", "success");
                     } catch (e) {
-                      setBookActionPending(e instanceof Error ? e.message : "Export failed");
+                      const message = e instanceof Error ? e.message : "导出失败";
+                      setBookActionPending(message);
+                      showToast(message, "error");
                     }
                   }}
                   className="btn-ghost w-full"
@@ -517,40 +592,33 @@ export function BookDetail({
       )}
 
       <div className="rounded-xl overflow-hidden border border-border">
-        <div className="overflow-x-auto">
-          <table className="w-full text-[15px] leading-[26px] border-collapse">
-            {chapters.length > 0 && (
-              <thead>
-                <tr className="bg-muted/30 border-b border-border">
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-16">#</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground">{t("book.manuscriptTitle")}</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-28">{t("book.words")}</th>
-                  <th className="text-left px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-36">{t("book.status")}</th>
-                  <th className="text-right px-4 py-3 font-medium text-[13px] leading-5 text-muted-foreground w-32">{t("book.curate")}</th>
-                </tr>
-              </thead>
-            )}
-            <tbody className="divide-y divide-border/30">
-              {chapters.map((ch) => (
-                <tr key={ch.number} className="group hover:bg-accent/60 transition-colors h-12">
-                  <td className="px-4 py-3 text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
-                  <td className="px-4 py-3">
+        {chapters.length > 0 && (
+          <ChapterManuscriptTable
+            chapters={chapters}
+            nextChapter={data.nextChapter}
+            volumeMap={volumeMap}
+            isZh={isZh}
+            t={t}
+            renderChapter={(ch) => (
+                <tr key={ch.number} data-chapter={ch.number} className="h-12 overflow-hidden hover:bg-accent/60 transition-colors" style={{ height: 48 }}>
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle">
                     <button
                       onClick={() => nav.toChapter(bookId, ch.number)}
-                      className="font-serif text-lg font-medium text-left underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal"
+                      className="block max-w-full truncate text-left font-serif text-base font-medium underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal"
                     >
                       {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
                     </button>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground font-medium tabular-nums text-[13px]">{(ch.wordCount ?? 0).toLocaleString()}</td>
-                  <td className="px-4 py-3">
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-muted-foreground font-medium tabular-nums text-[13px]">{(ch.wordCount ?? 0).toLocaleString()}</td>
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle">
                     <div className={`inline-flex items-center gap-1.5 text-[13px] font-medium ${statusTone(ch.status)}`}>
                       <StageDot state={statusDotState(ch.status)} />
                       {translateChapterStatus(ch.status, t)}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-right">
+                    <div className="flex h-12 items-center gap-1.5 justify-end">
                       {ch.status === "ready-for-review" && (
                         <button
                           type="button"
@@ -654,10 +722,9 @@ export function BookDetail({
                     </div>
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            )}
+          />
+        )}
 
         {chapters.length === 0 && (
           <LiteraryEmpty

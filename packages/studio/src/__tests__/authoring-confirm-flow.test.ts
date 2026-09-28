@@ -5,11 +5,26 @@ import { join } from "node:path";
 import { createStudioServer } from "../api/server.js";
 import { createAndPersistBookSession, loadStoryGraph } from "@actalk/inkos-core";
 
+// Studio 会把缺 service 的旧配置收成 service "custom"。custom 没有预置
+// baseUrl，解析模型时就会抛 "no baseUrl available"。这里写成带地址的命名
+// custom 服务，并在 secrets 里放一把假钥匙，让解析走完；真正的模型调用仍由
+// INKOS_AGENT_LLM_STUB 拦住，不会打到 example.invalid。
 const INKOS_CONFIG = JSON.stringify({
   name: "test-project",
   version: "0.1.0",
   language: "zh",
-  llm: { model: "test-model", provider: "anthropic" },
+  llm: {
+    provider: "openai",
+    service: "custom:Stub",
+    configSource: "studio",
+    baseUrl: "https://example.invalid/v1",
+    model: "test-model",
+    apiFormat: "chat",
+    stream: true,
+    services: [
+      { service: "custom", name: "Stub", baseUrl: "https://example.invalid/v1" },
+    ],
+  },
   notify: [],
 });
 
@@ -24,6 +39,12 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-confirm-"));
     await writeFile(join(root, "inkos.json"), INKOS_CONFIG, "utf-8");
+    await mkdir(join(root, ".inkos"), { recursive: true });
+    await writeFile(
+      join(root, ".inkos", "secrets.json"),
+      JSON.stringify({ services: { "custom:Stub": { apiKey: "sk-test-not-real" } } }),
+      "utf-8",
+    );
     await mkdir(join(root, "interactive-films", "p"), { recursive: true });
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });

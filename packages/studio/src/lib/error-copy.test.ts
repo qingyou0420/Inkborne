@@ -5,16 +5,16 @@ describe("localizeKnownRuntimeMessage", () => {
   it("localizes the state-degraded continuation blocker", () => {
     expect(localizeKnownRuntimeMessage(
       "Latest chapter 1 is state-degraded. Repair state or rewrite that chapter before continuing.",
-    )).toBe("最新第 1 章处于状态降级（state-degraded）。继续写下一章前，请先修复状态，或重写这一章。");
+    )).toBe("最新第 1 章状态待修。继续写下一章前，请先修复这一章的状态，或重写这一章。");
   });
 
   it("localizes related state repair errors while preserving unknown messages", () => {
     expect(localizeKnownRuntimeMessage("Chapter 3 is not state-degraded.")).toBe(
-      "第 3 章不是状态降级（state-degraded），无需按状态修复。",
+      "第 3 章不是状态待修，不用按状态修复。",
     );
     expect(localizeKnownRuntimeMessage(
       "Only the latest state-degraded chapter can be repaired safely (latest is 5).",
-    )).toBe("只能安全修复最新的状态降级（state-degraded）章节；当前最新章是第 5 章。");
+    )).toBe("只能安全修复最新一章的状态待修；当前最新章是第 5 章。");
     expect(localizeKnownRuntimeMessage("Bad request")).toBe("Bad request");
   });
 
@@ -22,21 +22,27 @@ describe("localizeKnownRuntimeMessage", () => {
     const studioMessage = localizeKnownRuntimeMessage(
       "Studio LLM API key not set. Open Studio services and save an API key for the selected service.",
     );
-    expect(studioMessage).toContain("Studio 模型 API Key 未设置");
+    expect(studioMessage).toContain("还没有保存模型密钥");
     expect(studioMessage).not.toMatch(/kkaiapi/i);
 
     const cliMessage = localizeKnownRuntimeMessage(
       "INKOS_LLM_API_KEY not set. Run 'inkos config set-global' or add it to project .env file.",
     );
-    expect(cliMessage).toContain("INKOS_LLM_API_KEY 未设置");
+    expect(cliMessage).toContain("还没有设置模型密钥");
     expect(cliMessage).not.toMatch(/kkaiapi/i);
   });
 
   it("localizes P1 write-preflight and approve-blocked messages", () => {
-    expect(localizeKnownRuntimeMessage("volume_map.md has no entry for chapter 2.")).toContain("第 2 章");
-    expect(localizeKnownRuntimeMessage(
+    const volume = localizeKnownRuntimeMessage("volume_map.md has no entry for chapter 2.");
+    expect(volume).toContain("第 2 章");
+    expect(volume).toContain("卷纲");
+    expect(volume).not.toContain("volume_map");
+    const critical = localizeKnownRuntimeMessage(
       "Chapter 4 has 3 critical audit issue(s) and cannot be approved without an explicit override.",
-    )).toContain("第 4 章");
+    );
+    expect(critical).toContain("第 4 章");
+    expect(critical).toContain("严重");
+    expect(critical).not.toContain("critical");
   });
 
   it("localizes leftover English stream-idle errors", () => {
@@ -54,5 +60,10 @@ describe("localizeKnownRuntimeMessage", () => {
     expect(message).toContain("醉词");
     expect(message).not.toContain("读取");
     expect(message).not.toContain("force-release");
+    expect(message).not.toMatch(/pid/i);
+  });
+
+  it("strips a leading Error: prefix", () => {
+    expect(localizeKnownRuntimeMessage("Error: Bad request")).toBe("Bad request");
   });
 });

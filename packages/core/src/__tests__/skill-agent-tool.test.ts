@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSkillRegistry } from "../skills/index.js";
 import { createUseSkillTool } from "../agent/skill-tool.js";
+import { hasNodeSqliteFts5 } from "./sqlite-fts5.js";
+
+const ftsIt = hasNodeSqliteFts5() ? it : it.skip;
 
 describe("use_skill agent tool", () => {
   let root: string;
@@ -91,7 +94,7 @@ describe("use_skill agent tool", () => {
     expect(activated).toEqual(["writer-distillation"]);
   });
 
-  it("retrieves relevant Skill references by natural-language query", async () => {
+  ftsIt("retrieves relevant Skill references by natural-language query", async () => {
     const baseDir = join(root, "long-writing");
     await mkdir(join(baseDir, "references"), { recursive: true });
     await writeFile(
@@ -135,13 +138,19 @@ describe("use_skill agent tool", () => {
     });
   });
 
-  it("rejects resources reached through a symlinked parent directory", async () => {
+  it("rejects resources reached through a symlinked parent directory", async (ctx) => {
     const baseDir = join(root, "writer-distillation");
     const outsideDir = join(root, "outside");
     await mkdir(baseDir, { recursive: true });
     await mkdir(outsideDir, { recursive: true });
     await writeFile(join(outsideDir, "secret.md"), "outside secret", "utf-8");
-    await symlink(outsideDir, join(baseDir, "references"));
+    try {
+      await symlink(outsideDir, join(baseDir, "references"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "ENOTSUP") ctx.skip();
+      throw error;
+    }
     const registry = createSkillRegistry({
       skills: [{
         id: "writer-distillation",
@@ -160,12 +169,18 @@ describe("use_skill agent tool", () => {
     })).rejects.toThrow(/symbolic link/i);
   });
 
-  it("rejects a symlinked skill root before reading resources", async () => {
+  it("rejects a symlinked skill root before reading resources", async (ctx) => {
     const realDir = join(root, "real-skill");
     const linkedDir = join(root, "linked-skill");
     await mkdir(join(realDir, "references"), { recursive: true });
     await writeFile(join(realDir, "references", "secret.md"), "outside secret", "utf-8");
-    await symlink(realDir, linkedDir);
+    try {
+      await symlink(realDir, linkedDir);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "ENOTSUP") ctx.skip();
+      throw error;
+    }
     const registry = createSkillRegistry({
       skills: [{
         id: "linked-skill",

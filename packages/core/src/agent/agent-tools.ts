@@ -46,6 +46,7 @@ import {
   shortRunCharsPerChapterRange,
   type ActionPayload,
 } from "../interaction/action-envelope.js";
+import { loadResearchSearchRuntime } from "../llm/research-search-secret.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
 import { searchWeb } from "../utils/web-search.js";
 import {
@@ -2121,8 +2122,7 @@ function slugResearchTopic(topic: string): string {
 
 async function readResearchSearchConfig(projectRoot: string) {
   try {
-    const raw = JSON.parse(await readFile(join(projectRoot, "inkos.json"), "utf-8")) as Record<string, unknown>;
-    return ResearchSearchConfigSchema.parse(raw.researchSearch ?? {});
+    return await loadResearchSearchRuntime(projectRoot);
   } catch {
     return ResearchSearchConfigSchema.parse({});
   }

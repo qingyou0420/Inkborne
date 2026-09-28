@@ -25,6 +25,10 @@ describe("desktop update chrome", () => {
     expect(preload).toMatch(/installUpdate:/);
     expect(preload).toMatch(/app:installUpdate/);
     expect(preload).toMatch(/openUpdatePanel:/);
+    expect(preload).toMatch(/openLogDir:/);
+    expect(preload).toMatch(/app:openLogDir/);
+    expect(preload).toMatch(/openProjectDir:/);
+    expect(preload).toMatch(/app:openProjectDir/);
     expect(preload).toMatch(/exposeInMainWorld\("fantaWriter"/);
     expect(preload).not.toMatch(/window\.fw\b/);
   });
@@ -33,11 +37,12 @@ describe("desktop update chrome", () => {
     const main = read("main.cjs");
     const panel = read("update-panel.html");
     const yml = read("electron-builder.yml");
-    const firstRun = read("first-run.html");
 
     expect(existsSync(join(desktopDir, "update-panel.html"))).toBe(true);
     expect(main).toMatch(/label: "帮助"/);
     expect(main).toMatch(/label: "检查更新"/);
+    expect(main).toMatch(/label: "打开日志目录"/);
+    expect(main).toMatch(/label: "打开项目目录"/);
     expect(main).toMatch(/openUpdatePanel/);
     expect(main).toMatch(/openCheckUpdateUi/);
     expect(main).toMatch(/buttons: \["检查更新", "关闭"\]/);
@@ -60,7 +65,9 @@ describe("desktop update chrome", () => {
     expect(panel).not.toMatch(/silent:\s*true/);
 
     expect(yml).toMatch(/^\s*- update-panel\.html$/m);
-    expect(firstRun).toMatch(/系统 → 检查更新/);
+    expect(yml).not.toMatch(/first-run\.html/);
+    expect(main).not.toMatch(/first-run\.html/);
+    expect(existsSync(join(desktopDir, "first-run.html"))).toBe(false);
     expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Inkborne");
   });
 });

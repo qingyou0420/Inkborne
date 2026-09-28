@@ -8,10 +8,12 @@ import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
+import { isExcludedFromProjectArchive } from "../lib/archive-exclude.js";
 import { randomUUID } from "node:crypto";
 import {
   StateManager,
   BookWriteLockError,
+  CorruptBookJsonError,
   BOOK_LOCK_INTERACTIVE_WAIT_MS,
   formatBookWriteLockCopy,
   readAuthoringOpenHooks,
@@ -47,6 +49,10 @@ import {
   resolveServiceModel,
   loadSecrets,
   saveSecrets,
+  maskApiKey,
+  describeSecretsLocation,
+  listInProcessBookLocks,
+  atomicWritesInFlight,
   listModelsForService,
   isApiKeyOptionalForEndpoint,
   getAllEndpoints,
@@ -55,10 +61,14 @@ import {
   chatCompletion,
   runWorkerAgent,
   buildExportArtifact,
+  fanqieOptionsFromQuery,
   evaluateBookQuality,
   ConsolidatorAgent,
   DetectionConfigSchema,
-  ResearchSearchConfigSchema,
+  migrateResearchSearchKey,
+  readResearchSearchPublic,
+  RESEARCH_SEARCH_KEY_NOT_STORED,
+  saveResearchSearchSettings,
   GLOBAL_ENV_PATH,
   COVER_PROVIDER_PRESETS,
   createPlayDB,
@@ -123,6 +133,7 @@ import {
   deleteLatestChapter,
   executeEditTransaction,
   listChapterVersions,
+  resolveChapterFile,
   readChapterPlanDocument,
   readChapterUserBrief,
   readChapterVersion,
@@ -391,8 +402,8 @@ async function listArchiveFiles(dir: string, prefix = ""): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
-    if (entry.name === ".DS_Store") continue;
     const relativePath = prefix ? join(prefix, entry.name) : entry.name;
+    if (isExcludedFromProjectArchive(relativePath)) continue;
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...await listArchiveFiles(fullPath, relativePath));
@@ -440,6 +451,21 @@ function writeTarOctal(header: Buffer, offset: number, length: number, value: nu
   const text = value.toString(8).padStart(length - 1, "0").slice(-(length - 1));
   header.write(text, offset, length - 1, "ascii");
   header[offset + length - 1] = 0;
+}
+
+function publicSecretView(apiKey: string | undefined, reveal: boolean): {
+  configured: boolean;
+  last4: string;
+  apiKey: string;
+  locationHint: string;
+} {
+  const masked = maskApiKey(apiKey);
+  return {
+    configured: masked.configured,
+    last4: masked.last4,
+    apiKey: reveal ? (apiKey?.trim() ?? "") : "",
+    locationHint: describeSecretsLocation().hint,
+  };
 }
 
 function isHeaderSafeApiKey(value: string): boolean {
@@ -1781,6 +1807,7 @@ interface ServiceConfigEntry {
   temperature?: number;
   apiFormat?: "chat" | "responses";
   stream?: boolean;
+  pricePerMillion?: number;
 }
 
 type LLMConfigSource = "env" | "studio";
@@ -1869,6 +1896,25 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
     return details.bookId.trim();
   }
   return null;
+}
+
+function asCorruptBookError(error: unknown): CorruptBookJsonError | undefined {
+  if (error instanceof CorruptBookJsonError) return error;
+  if (error instanceof Error && error.name === "CorruptBookJsonError") return error as CorruptBookJsonError;
+  return undefined;
+}
+
+function corruptBookListEntry(id: string, error: CorruptBookJsonError) {
+  return {
+    id,
+    title: id,
+    genre: "",
+    status: "corrupt",
+    chaptersWritten: 0,
+    corrupt: true,
+    message: error.message,
+    snapshotPath: error.snapshotPath ?? null,
+  };
 }
 
 async function loadStudioBookListSummary(
@@ -1971,6 +2017,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+      ...priceField(value.pricePerMillion),
     };
   }
 
@@ -1980,7 +2027,18 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+    ...priceField(value.pricePerMillion),
   };
+}
+
+function readPricePerMillion(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
+}
+
+function priceField(value: unknown): { pricePerMillion?: number } {
+  const price = readPricePerMillion(value);
+  return price === undefined ? {} : { pricePerMillion: price };
 }
 
 function normalizeConfigSource(value: unknown): LLMConfigSource {
@@ -1999,6 +2057,7 @@ function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
         ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
         ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" ? { apiFormat: entry.apiFormat } : {}),
         ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
+        ...priceField(entry.pricePerMillion),
       }));
   }
 
@@ -2016,11 +2075,15 @@ function mergeServiceConfig(existing: ServiceConfigEntry[], updates: ServiceConf
   for (const update of updates) {
     const key = serviceConfigKey(update);
     const previous = merged.get(key);
-    merged.set(key, {
+    const next: ServiceConfigEntry = {
       ...previous,
       ...update,
       ...(update.models === undefined && previous?.models ? { models: previous.models } : {}),
-    });
+    };
+    if ("pricePerMillion" in update && !(typeof update.pricePerMillion === "number" && update.pricePerMillion > 0)) {
+      delete next.pricePerMillion;
+    }
+    merged.set(key, next);
   }
   return [...merged.values()];
 }
@@ -2064,6 +2127,7 @@ function syncTopLevelLlmMirror(llm: Record<string, unknown>): void {
 }
 
 async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
+  await migrateResearchSearchKey(root).catch(() => undefined);
   const configPath = join(root, "inkos.json");
   const raw = await readFile(configPath, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
@@ -2863,6 +2927,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     });
   });
 
+  app.get("/api/v1/engine/write-status", (c) => {
+    const locks = listInProcessBookLocks(root).map((lock) => ({
+      bookId: lock.bookId,
+      stage: lock.stage ?? "",
+      heldMs: lock.heldMs,
+    }));
+    const atomicWrites = atomicWritesInFlight();
+    return c.json({
+      locks,
+      atomicWrites,
+      busy: locks.length > 0 || atomicWrites > 0,
+    });
+  });
+
   app.post("/api/v1/engine/shutdown", async (c) => {
     for (const controller of activeConfirmedTasks.values()) {
       try {
@@ -3149,7 +3227,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books", async (c) => {
     const bookIds = await state.listBooks();
-    const books = await Promise.all(bookIds.map((id) => loadStudioBookListSummary(state, id)));
+    const books = await Promise.all(bookIds.map(async (id) => {
+      try {
+        return await loadStudioBookListSummary(state, id);
+      } catch (error) {
+        const corrupt = asCorruptBookError(error);
+        if (!corrupt) throw error;
+        return corruptBookListEntry(id, corrupt);
+      }
+    }));
     return c.json({ books });
   });
 
@@ -3160,7 +3246,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
       return c.json({ book, chapters, nextChapter });
-    } catch {
+    } catch (error) {
+      const corrupt = asCorruptBookError(error);
+      if (corrupt) {
+        return c.json({
+          error: corrupt.message,
+          message: corrupt.message,
+          snapshotPath: corrupt.snapshotPath ?? null,
+          corrupt: true,
+        }, 409);
+      }
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
   });
@@ -3464,15 +3559,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const num = parseInt(c.req.param("num"), 10);
     const bookDir = state.bookDir(id);
-    const chaptersDir = join(bookDir, "chapters");
 
     try {
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      return c.json({ chapterNumber: num, filename: match, content });
+      const located = await resolveChapterFile(bookDir, num);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
+      const content = await readFile(join(bookDir, located.relativePath), "utf-8");
+      return c.json({ chapterNumber: num, filename: located.fileName, content });
     } catch {
       return c.json({ error: "Chapter not found" }, 404);
     }
@@ -3529,15 +3621,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     try {
       const bookDir = state.bookDir(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const chapterFile = files.find((file) => file.startsWith(paddedNum) && file.endsWith(".md"));
-      if (!chapterFile) {
+      const located = await resolveChapterFile(bookDir, num);
+      if (!located) {
         return c.json({ error: "Chapter not found" }, 404);
       }
       const [chapter, persistedBrief, plan, book, pipelineConfig] = await Promise.all([
-        readFile(join(chaptersDir, chapterFile), "utf-8"),
+        readFile(join(bookDir, located.relativePath), "utf-8"),
         readChapterUserBrief(bookDir, num),
         readChapterPlanDocument(bookDir, num),
         state.loadBookConfig(id),
@@ -4677,7 +4766,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "Unsupported cover service" }, 400);
     }
     const secrets = await loadSecrets(root);
-    return c.json({ apiKey: secrets.services[coverSecretKey(service)]?.apiKey ?? "" });
+    return c.json(publicSecretView(secrets.services[coverSecretKey(service)]?.apiKey, c.req.query("reveal") === "1"));
   });
 
   app.put("/api/v1/cover/secret/:service", async (c) => {
@@ -4754,7 +4843,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       provider: resolveServiceProviderFamily(baseService) ?? "openai",
       baseUrl: resolvedBaseUrl,
     });
-    if (!apiKey?.trim() && !apiKeyOptional) {
+    let resolvedKey = apiKey?.trim() ?? "";
+    if (!resolvedKey) {
+      const secrets = await loadSecrets(root);
+      resolvedKey = secrets.services[service]?.apiKey?.trim() ?? "";
+    }
+    if (!resolvedKey && !apiKeyOptional) {
       return c.json({
         ok: false,
         error: pick(language, "API Key 不能为空", "API Key must not be empty"),
@@ -4766,7 +4860,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const probe = await probeServiceCapabilities({
       root,
       service,
-      apiKey: apiKey?.trim() ?? "",
+      apiKey: resolvedKey,
       baseUrl: resolvedBaseUrl,
       preferredApiFormat: apiFormat,
       preferredStream: stream,
@@ -4835,9 +4929,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/services/:service/secret", async (c) => {
     const service = c.req.param("service");
     const secrets = await loadSecrets(root);
-    return c.json({
-      apiKey: secrets.services[service]?.apiKey ?? "",
-    });
+    return c.json(publicSecretView(secrets.services[service]?.apiKey, c.req.query("reveal") === "1"));
   });
 
   app.get("/api/v1/services/models", async (c) => {
@@ -4912,7 +5004,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const service = c.req.param("service");
     const refresh = c.req.query("refresh") === "1";
     const secrets = await loadSecrets(root);
-    const apiKey = c.req.query("apiKey") || secrets.services[service]?.apiKey || "";
+    const apiKey = secrets.services[service]?.apiKey || "";
     const configuredEntry = await resolveConfiguredServiceEntry(root, service);
     const configuredModels = configuredEntry?.models ?? [];
 
@@ -4940,6 +5032,49 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
 
     // B13: 走 listModelsForService 走 live probe + bank 交叉，返回带元数据的 models
+    const enriched = await listModelsForService(
+      isCustomServiceId(service) ? "custom" : service,
+      apiKey,
+      isCustomServiceId(service) ? resolvedBaseUrl ?? undefined : undefined,
+    );
+    const liveModels = filterTextChatModels(enriched).map((m) => ({
+      id: m.id,
+      name: m.name,
+      ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+      ...(m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
+    }));
+    const models = mergeServiceModelIds(liveModels.map((model) => model.id), configuredModels)
+      .map((id) => liveModels.find((model) => model.id.toLowerCase() === id.toLowerCase()) ?? { id, name: id });
+    modelListCache.set(cacheKey, { models, at: Date.now() });
+    return c.json({ models });
+  });
+
+  app.post("/api/v1/services/:service/models", async (c) => {
+    const service = c.req.param("service");
+    const body = await c.req.json<{ apiKey?: string; refresh?: boolean }>().catch(() => ({} as { apiKey?: string; refresh?: boolean }));
+    const refresh = body.refresh === true || c.req.query("refresh") === "1";
+    const secrets = await loadSecrets(root);
+    const apiKey = body.apiKey?.trim() || secrets.services[service]?.apiKey || "";
+    const configuredEntry = await resolveConfiguredServiceEntry(root, service);
+    const configuredModels = configuredEntry?.models ?? [];
+    const resolvedBaseUrl = await resolveConfiguredServiceBaseUrl(root, service);
+    const baseService = isCustomServiceId(service) ? "custom" : service;
+    const apiKeyOptional = isApiKeyOptionalForEndpoint({
+      provider: resolveServiceProviderFamily(baseService) ?? "openai",
+      baseUrl: resolvedBaseUrl,
+    });
+    if (!apiKey && !apiKeyOptional) {
+      return c.json({ models: configuredModels.map((id) => ({ id, name: id })) });
+    }
+    const cacheKey = `${service}::${resolvedBaseUrl ?? ""}::${apiKey.slice(-8)}`;
+    if (!refresh) {
+      const cached = modelListCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
+        const models = mergeServiceModelIds(cached.models.map((model) => model.id), configuredModels)
+          .map((id) => cached.models.find((model) => model.id.toLowerCase() === id.toLowerCase()) ?? { id, name: id });
+        return c.json({ models });
+      }
+    }
     const enriched = await listModelsForService(
       isCustomServiceId(service) ? "custom" : service,
       apiKey,
@@ -6387,13 +6522,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
     try {
       const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      const located = await resolveChapterFile(bookDir, chapterNum);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
 
-      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const content = await readFile(join(bookDir, located.relativePath), "utf-8");
       const currentConfig = await loadCurrentProjectConfig();
       const { ContinuityAuditor } = await import("@actalk/inkos-core");
       const auditor = new ContinuityAuditor({
@@ -6423,12 +6555,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("revise:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      const located = await resolveChapterFile(bookDir, chapterNum);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
 
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
@@ -6456,9 +6584,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
+      const fanqie = format === "fanqie" ? fanqieOptionsFromQuery({
+        from: c.req.query("from"),
+        to: c.req.query("to"),
+        layout: c.req.query("layout"),
+        blankLine: c.req.query("blankLine"),
+        indent: c.req.query("indent"),
+      }) : {};
       const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub",
+        format: format as "txt" | "md" | "epub" | "fanqie",
         approvedOnly,
+        ...fanqie,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -6466,11 +6602,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(responseBody, {
         headers: {
           "Content-Type": artifact.contentType,
-          "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
+          "Content-Disposition": attachmentDisposition(artifact.fileName),
         },
       });
-    } catch {
-      return c.json({ error: "Export failed" }, 500);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed";
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -6478,22 +6615,41 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format, approvedOnly } = await c.req.json<{ format?: string; approvedOnly?: boolean }>().catch(() => ({ format: "txt", approvedOnly: false }));
-    const fmt = format ?? "txt";
+    const body: {
+      format?: string;
+      approvedOnly?: boolean;
+      fromChapter?: number;
+      toChapter?: number;
+      layout?: "combined" | "per-chapter";
+      blankLine?: boolean;
+      indent?: boolean;
+    } = await c.req.json().catch(() => ({ format: "txt", approvedOnly: false }));
+    const fmt = body.format ?? "txt";
+    const approvedOnly = body.approvedOnly;
 
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
-      const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
+      const perChapter = fmt === "fanqie" && body.layout === "per-chapter";
+      const outputPath = fmt === "fanqie"
+        ? join(bookDir, "exports", perChapter ? "番茄" : "番茄.txt")
+        : join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
       const result = await processProjectInteractionRequest({
         projectRoot: root,
         request: {
           intent: "export_book",
           bookId: id,
-          format: fmt as "txt" | "md" | "epub",
+          format: fmt as "txt" | "md" | "epub" | "fanqie",
           approvedOnly,
           outputPath,
+          ...(fmt === "fanqie" ? {
+            fromChapter: body.fromChapter,
+            toChapter: body.toChapter,
+            layout: body.layout,
+            blankLine: body.blankLine,
+            indent: body.indent,
+          } : {}),
         },
         tools,
         activeBookId: id,
@@ -6505,7 +6661,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
       });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      const message = e instanceof Error ? e.message : String(e);
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -6602,17 +6759,35 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Research search provider ---
 
   app.get("/api/v1/project/research-search", async (c) => {
-    const raw = await loadRawConfig(root);
-    return c.json({ researchSearch: ResearchSearchConfigSchema.parse(raw.researchSearch ?? {}) });
+    const researchSearch = await readResearchSearchPublic(root);
+    return c.json({ researchSearch });
   });
 
   app.put("/api/v1/project/research-search", async (c) => {
-    const body = await c.req.json<{ researchSearch?: unknown }>();
-    const researchSearch = ResearchSearchConfigSchema.parse(body.researchSearch ?? {});
-    const raw = await loadRawConfig(root);
-    raw.researchSearch = researchSearch;
-    await saveRawConfig(root, raw);
-    return c.json({ ok: true, researchSearch });
+    const body = await c.req.json<{ researchSearch?: {
+      enabled?: boolean;
+      provider?: "tavily" | "custom";
+      baseUrl?: string;
+      apiKeyEnv?: string;
+      apiKey?: string;
+    } }>();
+    const incoming = body.researchSearch ?? {};
+    try {
+      const researchSearch = await saveResearchSearchSettings(root, {
+        enabled: incoming.enabled,
+        provider: incoming.provider,
+        baseUrl: incoming.baseUrl,
+        apiKeyEnv: incoming.apiKeyEnv,
+        ...(Object.prototype.hasOwnProperty.call(incoming, "apiKey") ? { apiKey: incoming.apiKey } : {}),
+      });
+      return c.json({ ok: true, researchSearch });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === RESEARCH_SEARCH_KEY_NOT_STORED) {
+        return c.json({ ok: false, error: message, keyStorage: "project" }, 400);
+      }
+      throw error;
+    }
   });
 
   // --- Chapter review mode (C4a: auto pipeline vs manual checkpoint) ---
@@ -6712,13 +6887,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookDir = state.bookDir(id);
 
     try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      const located = await resolveChapterFile(bookDir, chapterNum);
+      if (!located) return c.json({ error: "Chapter not found" }, 404);
 
-      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const content = await readFile(join(bookDir, located.relativePath), "utf-8");
       const { analyzeAITells } = await import("@actalk/inkos-core");
       const result = analyzeAITells(content);
       return c.json({ chapterNumber: chapterNum, ...result });
@@ -7423,15 +7595,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: { code: "INVALID_ID", message: `Invalid short id: "${id}"` } }, 400);
     }
     const format = (c.req.query("format") ?? "txt") as string;
-    if (format !== "txt" && format !== "md") {
-      return c.json({ error: { code: "INVALID_FORMAT", message: "Short export format must be txt or md" } }, 400);
+    if (format !== "txt" && format !== "md" && format !== "fanqie") {
+      return c.json({ error: { code: "INVALID_FORMAT", message: "导出格式只能是 txt、md 或番茄纯文本" } }, 400);
     }
     try {
-      const artifact = await exportStudioShortManuscript(root, id, format);
+      const fanqie = format === "fanqie" ? fanqieOptionsFromQuery({
+        from: c.req.query("from"),
+        to: c.req.query("to"),
+        layout: c.req.query("layout"),
+        blankLine: c.req.query("blankLine"),
+        indent: c.req.query("indent"),
+      }) : undefined;
+      const artifact = await exportStudioShortManuscript(root, id, format, fanqie);
       if (!artifact) {
         return c.json({ error: { code: "NOT_FOUND", message: `Short "${id}" not found` } }, 404);
       }
-      return new Response(artifact.payload, {
+      const payload = typeof artifact.payload === "string" ? artifact.payload : new Uint8Array(artifact.payload);
+      return new Response(payload, {
         headers: {
           "Content-Type": artifact.contentType,
           "Content-Disposition": attachmentDisposition(artifact.fileName),

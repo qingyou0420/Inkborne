@@ -66,13 +66,16 @@ describe("weave stage", () => {
       const match = /第 (\d+)-(\d+) 章/.exec(call.messages.map((message) => message.content).join("\n"));
       const start = Number(match?.[1] ?? 1);
       const end = Number(match?.[2] ?? 4);
-      return JSON.stringify({
-        chapters: Array.from({ length: end - start + 1 }, (_, index) => ({
-          chapterNumber: start + index,
-          title: `章${start + index}`,
-          summary: `第${start + index}章发生关键转折。`,
-        })),
-      });
+      return {
+        content: JSON.stringify({
+          chapters: Array.from({ length: end - start + 1 }, (_, index) => ({
+            chapterNumber: start + index,
+            title: `章${start + index}`,
+            summary: `第${start + index}章发生关键转折。`,
+          })),
+        }),
+        usage: { promptTokens: 3, completionTokens: 2, totalTokens: 5 },
+      };
     };
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
     const generated = await generateWeaveRange({
@@ -88,6 +91,7 @@ describe("weave stage", () => {
     expect(manifest.coverage.chaptersTarget).toBe(12);
     const run = await loadRun(ctx.root, generated.runId);
     expect(run?.status).toBe("completed");
+    expect(run?.usage?.totalTokens).toBeGreaterThan(0);
     const report = await reviewWeave({
       ...ctx,
       artifactId: generated.artifactId,

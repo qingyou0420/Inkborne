@@ -20,9 +20,11 @@ import {
 } from "../../utils/volume-map-tree.js";
 import { assembleAuthoringContext, loadCanonDocument, loadOutlineText, serializeCanonBrief } from "../context.js";
 import { asNumber, asString, extractJsonObject } from "../json.js";
-import { completeRole } from "../llm.js";
+import { completeRoleObserved } from "../llm.js";
+import { combineAuthoringUsage } from "../token-usage.js";
+import { redactSecrets } from "../../utils/redact-secrets.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { assertReportReusable, parseReviewPayload, reviewPrompt } from "../review.js";
+import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   authoringRootDir,
   loadArtifact,
@@ -39,7 +41,7 @@ import {
   saveRun,
   type AuthoringStoreRoot,
 } from "../store.js";
-import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringRunRecord } from "../types.js";
+import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringRunRecord, AuthoringTokenUsage } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
 
 export interface WeaveRuntime {
@@ -557,6 +559,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   }
   const collected = new Map(existingMap);
   const createdAt = resume?.createdAt ?? new Date().toISOString();
+  let usage: AuthoringTokenUsage | undefined;
   let artifactId = resume?.producedArtifactIds.at(-1) ?? "";
   await saveRun(input.root, {
     runId,
@@ -605,7 +608,8 @@ export async function generateWeaveRange(input: WeaveRuntime & {
       progressDone: completed.length,
       progressTotal: requestedEnd - requestedStart + 1,
       progressLabel: `本次 ${completed.length}/${requestedEnd - requestedStart + 1}`,
-      error: extra?.error,
+      error: extra?.error ? redactSecrets(extra.error) : undefined,
+      ...(usage ? { usage } : {}),
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: artifactId ? [artifactId] : [],
       checkpoint: {
@@ -658,7 +662,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
       }
       const contiguous = batch.every((num, index) => index === 0 || num === batch[index - 1]! + 1);
       const rangeLabel = contiguous ? `${batchStart}-${batchEnd}` : batch.join("、");
-      const text = await completeRole(resolved, [
+      const observed = await completeRoleObserved(resolved, [
         `规划第 ${rangeLabel} 章概要。全书目标 ${input.targetChapters ?? requestedEnd} 章。`,
         contiguous ? "" : "只改列出的章号，不要改未列出的章。",
         "只输出 JSON：{ bookOutline, volumes: [{ volumeNumber, title, startChapter, endChapter, body }], chapters: [{ chapterNumber, title, summary }] }。",
@@ -670,7 +674,9 @@ export async function generateWeaveRange(input: WeaveRuntime & {
         bookOutline && `已有全书大纲：\n${bookOutline}`,
         volumes.length ? `已有分卷：\n${volumes.map((volume) => `第${volume.volumeNumber}卷 ${volume.title}（${volume.startChapter}-${volume.endChapter}） ${volume.body}`).join("\n")}` : "",
         priorBeatsText(batchStart) && `已生成章概要：\n${priorBeatsText(batchStart)}`,
-      ].filter(Boolean).join("\n"), input.llm);
+      ].filter(Boolean).join("\n"), { llm: input.llm });
+      usage = combineAuthoringUsage(usage, observed.usage);
+      const text = observed.content;
       const allowStructure = requestedStart === 1 && batchStart === 1 && !input.resumeRunId && !volumes.length;
       const nextBook = parseBookOutline(text);
       if (nextBook && (allowStructure || !bookOutline)) bookOutline = nextBook;
@@ -718,17 +724,18 @@ export async function reviewWeave(input: WeaveRuntime & {
   if (!loaded) throw new Error("找不到规划成果。");
   const resolved = await resolve(input.project, "weave.review", input.root.projectRoot);
   const ctx = await assembleAuthoringContext(input.root, { stage: "weave" });
-  const text = await completeRole(
+  const reviewed = await requestReviewModelText({
     resolved,
-    reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
-    input.llm,
-  );
-  const report = parseReviewPayload(text, {
+    prompt: reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
+    llm: input.llm,
+  });
+  const report = parseReviewPayload(reviewed.text, {
     stage: "weave",
     targetRefs: [loaded.meta.artifactId],
     coverage: input.coverage,
     model: resolved.modelId,
     inputRefs: [{ kind: "artifact", id: loaded.meta.artifactId, version: loaded.meta.version }, ...ctx.refs],
+    rawExcerpt: reviewed.rawExcerpt,
   });
   await saveReport(input.root, report);
   return report;
@@ -773,13 +780,14 @@ export async function reviseWeave(input: WeaveRuntime & {
   const selected = report.issues.filter((issue) => input.selectedIssueIds.includes(issue.issueId));
   const resolved = await resolve(input.project, "weave.main", input.root.projectRoot);
   const ctx = await assembleAuthoringContext(input.root, { stage: "weave", outlineOverride: loaded.body });
-  const text = await completeRole(resolved, [
+  const observed = await completeRoleObserved(resolved, [
     `只改第 ${input.startChapter}-${input.endChapter} 章概要。输出 JSON：{ chapters: [{ chapterNumber, title, summary }] }。`,
     "不要改范围外的章节。",
     ...selected.map((issue) => `- ${issue.title}: ${issue.suggestion ?? ""}`),
     ctx.text,
     loaded.body,
-  ].join("\n"), input.llm);
+  ].join("\n"), { llm: input.llm });
+  const text = observed.content;
   const updated = parseReturnedBeats(text);
   let markdown = loaded.body;
   let applied = 0;

@@ -5,16 +5,41 @@
  */
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { collapseDuplicateChapterHeadings } from "@actalk/inkos-core/chapter-heading";
 import { postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
+import { AuthoringStreamError, postAuthoringStream, type AuthoringStreamResult } from "../lib/authoring-stream";
+import { estimateTokenCost, formatPassUsage, priceForServiceRef, usageTotal, type TokenUsage } from "../lib/token-usage";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { showToast } from "../lib/toast";
+import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
 import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { currentWriteArtifact, reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
 import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
 
 const AUTOSAVE_MS = 1500;
+
+interface WriteBasis {
+  readonly title?: string;
+  readonly summary?: string;
+  readonly goal?: string;
+  readonly previousEnding?: string;
+  readonly progress?: string;
+  readonly targetWordCount?: number;
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes <= 0) return `已用 ${rest} 秒`;
+  return `已用 ${minutes} 分 ${rest} 秒`;
+}
+
+function countChars(text: string): number {
+  return text.replace(/\s+/g, "").length;
+}
 
 export interface AuthoringWritePanelHandle {
   flush: () => Promise<void>;
@@ -37,7 +62,9 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   onBusyChange,
   onChanged,
 }, ref) {
-  const { data, refetch } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data, loading, refetch } = useApi<AuthoringWorkspace>(
+    `/authoring/workspace?${workspaceQuery(bookId, undefined, { chapter: chapterNumber })}`,
+  );
   const candidate = currentWriteArtifact(data, chapterNumber);
   const adoptedId = data?.manifest?.adopted?.write?.[String(chapterNumber)];
   const parentId = candidate?.parentArtifactId && candidate.parentArtifactId !== candidate.artifactId
@@ -51,7 +78,13 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   const [body, setBody] = useState("");
   const [lengthNote, setLengthNote] = useState("");
   const [generateChoice, setGenerateChoice] = useState(false);
+  const [usage, setUsage] = useState<TokenUsage | undefined>();
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [stopping, setStopping] = useState(false);
   const dirtyRef = useRef(false);
+  const composingRef = useRef(false);
+  const runIdRef = useRef("");
   const pendingEditRef = useRef<ReturnType<typeof trackChapterEdit>>(null);
   const inflightRef = useRef<Promise<string | undefined> | null>(null);
   const bodyRef = useRef("");
@@ -71,9 +104,14 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     ? `/books/${encodeURIComponent(bookId)}/chapters/${chapterNumber}`
     : "";
   const { data: existingChapter } = useApi<{ content?: string; title?: string; chapterNumber?: number }>(chapterUrl);
+  const { data: basis } = useApi<WriteBasis>(
+    `/authoring/write/basis?bookId=${encodeURIComponent(bookId)}&chapterNumber=${chapterNumber}`,
+  );
+  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
   const artifactForCurrent = artifact?.meta?.artifactId === candidate?.artifactId ? artifact : undefined;
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
-  const savedBody = artifactForCurrent?.body ?? (!candidate ? chapterForCurrent?.content ?? "" : "");
+  const rawSaved = artifactForCurrent?.body ?? (!candidate ? chapterForCurrent?.content ?? "" : "");
+  const savedBody = collapseDuplicateChapterHeadings(rawSaved, { chapterNumber, title: chapterTitle });
 
   useEffect(() => {
     onBusyChange?.(Boolean(busy));
@@ -82,24 +120,35 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   useEffect(() => registerUnsavedCheck(() => dirtyRef.current || pendingEditRef.current !== null), []);
 
   useEffect(() => {
+    if (!startedAt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+
+  useEffect(() => {
+    setUsage(undefined);
+  }, [bookId, chapterNumber]);
+
+  useEffect(() => {
     const loadKey = candidate?.artifactId ?? `empty:${bookId}:${chapterNumber}`;
-    if (dirtyRef.current) return;
+    if (dirtyRef.current || composingRef.current) return;
     if (candidate) {
       if (artifactForCurrent?.body == null) return;
-      setBody(artifactForCurrent.body);
+      setBody(collapseDuplicateChapterHeadings(artifactForCurrent.body, { chapterNumber, title: chapterTitle }));
       lastLoadedId.current = loadKey;
       return;
     }
     if (chapterForCurrent?.content) {
-      setBody(chapterForCurrent.content);
+      setBody(collapseDuplicateChapterHeadings(chapterForCurrent.content, { chapterNumber, title: chapterTitle }));
       lastLoadedId.current = loadKey;
       return;
     }
+    if (loading) return;
     if (lastLoadedId.current !== loadKey) {
       setBody("");
       lastLoadedId.current = loadKey;
     }
-  }, [artifactForCurrent?.body, bookId, candidate, chapterForCurrent?.content, chapterNumber]);
+  }, [artifactForCurrent?.body, bookId, candidate, chapterForCurrent?.content, chapterNumber, chapterTitle, loading]);
 
   const persistSnapshot = async (
     pending: NonNullable<ReturnType<typeof trackChapterEdit>>,
@@ -176,7 +225,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   }), []);
 
   useEffect(() => {
-    if (!dirtyRef.current) return;
+    if (!dirtyRef.current || composingRef.current) return;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       void persistIfDirty().catch((error) => {
@@ -195,6 +244,10 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
 
   useEffect(() => {
     return () => {
+      const runId = runIdRef.current;
+      if (composingRef.current && runId) {
+        void postApi(`/authoring/runs/${encodeURIComponent(runId)}/cancel`, { bookId }).catch(() => undefined);
+      }
       void persistRef.current();
     };
   }, [bookId, chapterNumber]);
@@ -214,28 +267,96 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     }
   };
 
-  const startGenerate = (mode: "hand" | "fresh") => {
-    setGenerateChoice(false);
-    void run("generate", async () => {
-      const snapshot = bodyRef.current;
-      const hand = mode === "hand";
-      const parentArtifactId = await persistIfDirty();
-      const result = await postApi<{ lengthNote?: string; message?: string }>("/authoring/write/generate", {
-        bookId,
-        chapterNumber,
-        title: chapterTitle,
-        requirements: requirement || undefined,
-        ...(hand && snapshot.trim() ? { baseBody: snapshot } : {}),
-        ...(parentArtifactId ? { parentArtifactId } : {}),
+  const stopWriting = () => {
+    const runId = runIdRef.current;
+    if (!runId) return;
+    setStopping(true);
+    void postApi(`/authoring/runs/${encodeURIComponent(runId)}/cancel`, { bookId }).catch((error) => {
+      showToast(error instanceof Error ? error.message : String(error), "error");
+    });
+  };
+
+  const runStream = async (
+    label: "generate" | "revise",
+    path: string,
+    payload: unknown,
+    snapshot: string,
+  ): Promise<AuthoringStreamResult | undefined> => {
+    setBusy(label);
+    setStopping(false);
+    setStartedAt(Date.now());
+    composingRef.current = true;
+    runIdRef.current = "";
+    let streamed = "";
+    try {
+      const result = await postAuthoringStream(path, payload, {
+        onStart: (runId) => {
+          runIdRef.current = runId;
+        },
+        onDelta: (delta) => {
+          streamed += delta;
+          setBody(streamed);
+        },
       });
-      setLengthNote(result.lengthNote ?? "");
-      if (result.lengthNote) showToast(result.lengthNote, "info");
-      if (bodyRef.current === snapshot) {
+      if (result.status === "cancelled" && !result.artifactId) {
+        setBody(snapshot);
+        showToast(isZh ? "已停下。还没写出字，没有留下半截稿。" : "Stopped before any words were written.", "info");
+      } else {
+        setBody(result.body || streamed);
         dirtyRef.current = false;
         pendingEditRef.current = null;
+        if (usageTotal(result.usage)) setUsage(result.usage);
+        setLengthNote(result.lengthNote ?? "");
+        if (result.lengthNote) showToast(result.lengthNote, "info");
+        if (result.status === "cancelled") {
+          showToast(isZh ? "已停下。写到这里的内容留在候选稿里，这本书没有锁住。" : "Stopped. The words so far stay in the draft.", "info");
+        }
       }
+      await refetch();
+      onChanged?.();
       return result;
-    }, true);
+    } catch (error) {
+      const explicitMiss = error instanceof AuthoringStreamError && error.draftSaved === false;
+      if (explicitMiss) {
+        setBody(snapshot);
+        dirtyRef.current = false;
+        pendingEditRef.current = null;
+      } else if (streamed) {
+        setBody(streamed);
+        await refetch();
+      } else {
+        await refetch();
+      }
+      showToast(error instanceof Error ? error.message : String(error), "error");
+      return undefined;
+    } finally {
+      composingRef.current = false;
+      runIdRef.current = "";
+      setStartedAt(null);
+      setStopping(false);
+      setBusy(null);
+    }
+  };
+
+  const startGenerate = (mode: "hand" | "fresh") => {
+    setGenerateChoice(false);
+    void (async () => {
+      const snapshot = bodyRef.current;
+      const hand = mode === "hand";
+      try {
+        const parentArtifactId = await persistIfDirty();
+        await runStream("generate", "/authoring/write/generate/stream", {
+          bookId,
+          chapterNumber,
+          title: chapterTitle,
+          requirements: requirement || undefined,
+          ...(hand && snapshot.trim() ? { baseBody: snapshot } : {}),
+          ...(parentArtifactId ? { parentArtifactId } : {}),
+        }, snapshot);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : String(error), "error");
+      }
+    })();
   };
 
   const requestGenerate = () => {
@@ -254,6 +375,18 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   }, [generateNonce]);
 
   const editorLocked = busy === "generate" || busy === "revise";
+  const liveCount = countChars(body);
+  const elapsedLabel = startedAt ? formatElapsed(now - startedAt) : "";
+  const progressLabel = editorLocked
+    ? `${stopping ? (isZh ? "正在停下" : "Stopping") : (busy === "revise" ? (isZh ? "正在按意见改" : "Revising") : (isZh ? "正在写" : "Writing"))} · ${elapsedLabel} · ${isZh ? `已写 ${liveCount.toLocaleString("zh-CN")} 字` : `${liveCount.toLocaleString("en-US")} chars`}`
+    : "";
+  const shownRun = data?.runs?.find((run) => run.runId && run.runId === candidate?.runId);
+  const runUsage = shownRun?.usage;
+  const shownUsage = usage ?? runUsage;
+  const usageCost = usageTotal(shownUsage)
+    ? estimateTokenCost(usageTotal(shownUsage), priceForServiceRef(shownRun?.modelSnapshot?.serviceRef, serviceConfig?.services))
+    : "";
+  const usageLabel = formatPassUsage(shownUsage, isZh, usageCost);
   const leftId = parentId && parentId !== candidate?.artifactId ? parentId : undefined;
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
   const activeReport = report ?? workspaceReport;
@@ -276,6 +409,41 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           </p>
         ) : null}
       </div>
+      <details className="rounded-xl border border-border/70 bg-background/60 px-3 py-2" data-testid="write-chapter-basis">
+        <summary className="cursor-pointer text-sm">{isZh ? "本章依据" : "This chapter"}</summary>
+        <div className="mt-3 space-y-2 text-sm leading-6">
+          <p>
+            <span className="text-muted-foreground">{isZh ? "这一章要写" : "Plan"} · </span>
+            {(basis?.title || chapterTitle) ? `${basis?.title || chapterTitle}。` : ""}
+            {basis?.summary || (isZh ? "还没有章纲。" : "No chapter plan yet.")}
+          </p>
+          {basis?.goal ? (
+            <p>
+              <span className="text-muted-foreground">{isZh ? "本卷目标" : "Volume"} · </span>
+              {basis.goal}
+            </p>
+          ) : null}
+          <p>
+            <span className="text-muted-foreground">{isZh ? "上一章结尾" : "Previous ending"} · </span>
+            {basis?.previousEnding || (isZh ? "这是开头，没有上一章。" : "This is the opening.")}
+          </p>
+          {basis?.progress ? (
+            <p>
+              <span className="text-muted-foreground">{isZh ? "写到哪了" : "Progress"} · </span>
+              {basis.progress}
+            </p>
+          ) : null}
+          <p>
+            <span className="text-muted-foreground">{isZh ? "字数" : "Length"} · </span>
+            {isZh
+              ? `现在 ${liveCount.toLocaleString("zh-CN")} 字${basis?.targetWordCount ? `，这一章打算写 ${basis.targetWordCount.toLocaleString("zh-CN")} 字` : ""}`
+              : `${liveCount.toLocaleString("en-US")}${basis?.targetWordCount ? ` / ${basis.targetWordCount.toLocaleString("en-US")}` : ""}`}
+          </p>
+        </div>
+      </details>
+      {progressLabel ? (
+        <p className="text-sm text-muted-foreground" data-testid="write-progress">{progressLabel}</p>
+      ) : null}
       <textarea
         className="min-h-[220px] w-full rounded-md border border-border bg-background px-3 py-2 font-serif text-sm leading-6"
         placeholder={isZh ? "候选正文会出现在这里，可直接修改。" : "Candidate text appears here and can be edited."}
@@ -292,7 +460,12 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       <p className="text-xs text-muted-foreground">
         {isZh ? "停笔一会儿会自动保存手改。换章或离开前也会先存下来。" : "Edits save automatically after a short pause, and before you leave."}
       </p>
-      {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
+        {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
+        {usageLabel ? (
+          <p className="text-xs text-muted-foreground" data-testid="write-token-usage">
+            {usageLabel}
+          </p>
+        ) : null}
       {generateChoice ? (
         <div className="space-y-2 rounded-xl border border-border bg-background px-3 py-3" data-testid="write-generate-choice">
           <p className="text-sm">{isZh ? "这一章有手改。要基于手改继续写，还是另起一稿？" : "This chapter has hand edits. Rewrite from them, or start a fresh draft?"}</p>
@@ -309,14 +482,35 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           </div>
         </div>
       ) : null}
-      <button
-        type="button"
-        className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
-        disabled={Boolean(busy) || body === savedBody || !body.trim()}
-        onClick={() => void run("save", () => persistIfDirty())}
-      >
-        {isZh ? "保存手改" : "Save edits"}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
+          disabled={Boolean(busy) || body === savedBody || !body.trim()}
+          onClick={() => void run("save", () => persistIfDirty())}
+        >
+          {isZh ? "保存手改" : "Save edits"}
+        </button>
+        <button
+          type="button"
+          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
+          disabled={!body.trim()}
+          data-testid="write-copy-chapter"
+          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
+          onClick={() => {
+            const text = renderFanqieChapter({
+              chapterNumber,
+              title: chapterTitle,
+              markdown: body,
+            });
+            void copyToClipboard(text)
+              .then(() => showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success"))
+              .catch((error) => showToast(error instanceof Error ? error.message : "复制失败", "error"));
+          }}
+        >
+          {isZh ? "复制本章" : "Copy chapter"}
+        </button>
+      </div>
       <textarea
         className="min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
         placeholder={isZh ? "本章要求、重点场景、保持的文风（可选）" : "Optional chapter notes"}
@@ -334,6 +528,17 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         >
           {busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "开始写本章" : "Write this chapter")}
         </button>
+        {editorLocked ? (
+          <button
+            type="button"
+            className="rounded-lg border border-border px-3 py-2 text-sm"
+            onClick={stopWriting}
+            disabled={stopping || (!runIdRef.current && !startedAt)}
+            data-testid="write-stop"
+          >
+            {stopping ? (isZh ? "正在停下…" : "Stopping…") : (isZh ? "停止" : "Stop")}
+          </button>
+        ) : null}
         <button
           type="button"
           className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
@@ -406,18 +611,20 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         onClose={() => setReportOpen(false)}
         onRevise={(issueIds, reuseStale) => {
           if (!candidate || !activeReport) return;
-          void run("revise", async () => {
-            const result = await postApi("/authoring/write/revise", {
+          void (async () => {
+            const snapshot = bodyRef.current;
+            const result = await runStream("revise", "/authoring/write/revise/stream", {
               bookId,
               artifactId: candidate.artifactId,
               reportId: activeReport.reportId,
               selectedIssueIds: issueIds,
               reuseStale,
-            });
-            setDiffOpen(true);
-            return result;
-          });
+            }, snapshot);
+            if (result?.artifactId) setDiffOpen(true);
+          })();
         }}
+        progressLabel={progressLabel}
+        onStop={stopWriting}
       />
       <AuthoringDiffDrawer
         open={diffOpen}

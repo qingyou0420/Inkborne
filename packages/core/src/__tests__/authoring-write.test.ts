@@ -7,13 +7,15 @@ import { createLightweightBook } from "../authoring/book-create.js";
 import {
   adoptChapterDraft,
   generateChapterDraft,
+  requestWriteRunCancel,
+  SavedPartialDraftError,
   reviewChapterDraft,
   reviseChapterDraft,
 } from "../authoring/stages/write.js";
 import { assembleAuthoringContext } from "../authoring/context.js";
 import { persistAdoptedChapter } from "../authoring/chapter-index.js";
 import { pickSettingsByMention } from "../authoring/serial-ledger.js";
-import { loadArtifact, loadManifest, loadReport, saveHandEditedArtifact, saveManifest, saveReport } from "../authoring/store.js";
+import { loadArtifact, loadManifest, loadReport, loadRun, saveHandEditedArtifact, saveManifest, saveReport } from "../authoring/store.js";
 import { listChapterVersions, readChapterVersion } from "../state/chapter-workspace.js";
 import { withBookWriteLock } from "../authoring/book-lock.js";
 import { autosaveChapterBody } from "../authoring/chapter-index.js";
@@ -826,4 +828,295 @@ describe("write stage", () => {
     });
     expect(prompts.join("\n")).toContain("MARK_ROLE");
   });
+
+  it("keeps one chapter heading from generate through revise and adopt, and records token usage", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-heading-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜雨",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const prompts: string[] = [];
+    const duplicated = [
+      "# 第八章 夜雨",
+      "第八章 夜雨",
+      "雨下了一夜。",
+      "第一章就出事了，他没来得及撑伞。",
+      "他后来提起「第八章 夜雨」四个字。",
+    ].join("\n");
+    const ctx = {
+      root: { projectRoot: root, bookId: created.bookId },
+      project: project(),
+      llm: (async (call) => {
+        const text = call.messages.map((message) => message.content).join("\n");
+        prompts.push(text);
+        if (call.roleId === "write.review") {
+          return JSON.stringify({
+            summary: "开头重复了标题",
+            coverage: "chapter:8",
+            issues: [{ issueId: "h1", title: "标题写了两遍", severity: "improve", suggestion: "只留一行标题" }],
+          });
+        }
+        if (text.includes("整理人物状态")) {
+          return JSON.stringify({ summary: "雨停了", characters: [], openHooks: [], advanceHooks: [], resolveHooks: [] });
+        }
+        if (text.includes("按选中意见")) return duplicated;
+        return {
+          content: duplicated,
+          usage: { promptTokens: 1200, completionTokens: 340, totalTokens: 1540 },
+        };
+      }) as AuthoringLlmFn,
+    };
+    const draft = await generateChapterDraft({ ...ctx, chapterNumber: 8, title: "夜雨" });
+    expect(prompts.some((text) => text.includes("撰写第 8 章") && text.includes("不要写章节标题"))).toBe(true);
+    expect(countExactHeading(draft.body, "第八章 夜雨")).toBe(1);
+    expect(draft.body).toContain("第一章就出事了");
+    expect(draft.body).toContain("他后来提起「第八章 夜雨」四个字。");
+    expect(draft.usage).toEqual({ promptTokens: 1200, completionTokens: 340, totalTokens: 1540 });
+    const run = await loadRun(ctx.root, draft.runId);
+    expect(run?.usage).toEqual({ promptTokens: 1200, completionTokens: 340, totalTokens: 1540 });
+    const stored = await loadArtifact(ctx.root, draft.artifactId);
+    expect(countExactHeading(stored?.body ?? "", "第八章 夜雨")).toBe(1);
+
+    const report = await reviewChapterDraft({ ...ctx, artifactId: draft.artifactId });
+    const revised = await reviseChapterDraft({
+      ...ctx,
+      artifactId: draft.artifactId,
+      reportId: report.reportId,
+      selectedIssueIds: ["h1"],
+    });
+    expect(countExactHeading(revised.body, "第八章 夜雨")).toBe(1);
+    expect(revised.body).toContain("第一章就出事了");
+
+    await writeFile(
+      join(created.bookDir, "story", "workflow", "artifacts", revised.artifactId, "body.md"),
+      `${duplicated}\n`,
+      "utf-8",
+    );
+    await adoptChapterDraft({ ...ctx, artifactId: revised.artifactId });
+    const chapterFile = (await readdir(join(created.bookDir, "chapters"))).find((name) => name.endsWith(".md"));
+    expect(chapterFile).toBeTruthy();
+    const chapter = await readFile(join(created.bookDir, "chapters", chapterFile!), "utf-8");
+    expect(countExactHeading(chapter, "第八章 夜雨")).toBe(1);
+    expect(chapter).toContain("第一章就出事了");
+    expect(chapter).toContain("他后来提起「第八章 夜雨」四个字。");
+    const adoptedBody = await loadArtifact(ctx.root, revised.artifactId);
+    expect(countExactHeading(adoptedBody?.body ?? "", "第八章 夜雨")).toBe(1);
+  });
+
+  it("keeps a stopped draft in one piece and releases the book", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-stop-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "停",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    let runId = "";
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 3,
+      title: "停笔",
+      onRunStart: (id) => {
+        runId = id;
+      },
+      llm: async (call) => {
+        await call.onTextDelta?.("# 第三章 停笔\n第三章 停笔\n他放下笔。");
+        expect(requestWriteRunCancel(runId)).toBe(true);
+        throw abortError();
+      },
+    });
+    expect(draft.status).toBe("cancelled");
+    expect(draft.artifactId).not.toBe("");
+    expect(countExactHeading(draft.body, "第三章 停笔")).toBe(1);
+    expect(draft.body).toContain("他放下笔。");
+    const run = await loadRun(ctx.root, draft.runId);
+    expect(run?.status).toBe("cancelled");
+    expect(run?.producedArtifactIds).toEqual([draft.artifactId]);
+    const release = await new StateManager(root).acquireBookLock(created.bookId, { stage: "测试", taskId: "after-stop" }, { waitMs: 0 });
+    await release();
+  });
+
+  it("drops an empty stop without an artifact or a leftover lock", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-empty-stop-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "空",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    let runId = "";
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "空",
+      onRunStart: (id) => {
+        runId = id;
+      },
+      llm: async () => {
+        expect(requestWriteRunCancel(runId)).toBe(true);
+        throw abortError();
+      },
+    });
+    expect(draft.status).toBe("cancelled");
+    expect(draft.artifactId).toBe("");
+    expect(draft.body).toBe("");
+    const names = await readdir(join(created.bookDir, "story", "workflow", "artifacts")).catch(() => [] as string[]);
+    expect(names.filter((name) => name.startsWith("write-"))).toEqual([]);
+    const release = await new StateManager(root).acquireBookLock(created.bookId, { stage: "测试", taskId: "after-empty" }, { waitMs: 0 });
+    await release();
+  });
+
+  it("keeps a partial chapter when the upstream call fails after text", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-fail-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "断",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const error = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "断",
+      llm: async (call) => {
+        await call.onTextDelta?.("半截要留下");
+        throw new Error("模型断了 sk-supersecretkey123456");
+      },
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SavedPartialDraftError);
+    expect((error as Error).message).toMatch(/模型断了/);
+    expect((error as Error).message).toMatch(/已隐藏/);
+    expect((error as SavedPartialDraftError).artifactId).toBeTruthy();
+    const manifest = await loadManifest(ctx.root);
+    const artifactId = manifest.candidates.write["1"];
+    expect(artifactId).toBeTruthy();
+    const stored = await loadArtifact(ctx.root, artifactId!);
+    expect(stored?.body).toContain("半截要留下");
+    const runs = await loadRun(ctx.root, stored?.meta.runId ?? "");
+    expect(runs?.status).toBe("failed");
+    expect(runs?.producedArtifactIds).toEqual([artifactId]);
+    expect(runs?.error).toContain("已隐藏");
+    expect(runs?.error).not.toContain("sk-supersecretkey123456");
+    const release = await new StateManager(root).acquireBookLock(created.bookId, { stage: "测试", taskId: "after-fail" }, { waitMs: 0 });
+    await release();
+  });
+
+  it("records usage when a stop arrives with token counts", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-stop-usage-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "停",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 2,
+      title: "停",
+      llm: async (call) => {
+        await call.onTextDelta?.("留下这句");
+        const error = abortError() as Error & { usage?: { promptTokens: number; completionTokens: number; totalTokens: number } };
+        error.usage = { promptTokens: 4, completionTokens: 6, totalTokens: 0 };
+        throw error;
+      },
+    });
+    expect(draft.status).toBe("cancelled");
+    expect(draft.body).toContain("留下这句");
+    const run = await loadRun(ctx.root, draft.runId);
+    expect(run?.usage).toEqual({ promptTokens: 4, completionTokens: 6, totalTokens: 10 });
+  });
+
+  it("can cancel a write before the run file exists", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-early-cancel-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "早",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    let sawFile = true;
+    let calledModel = false;
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "早",
+      onRunStart: async (id) => {
+        sawFile = Boolean(await loadRun(ctx.root, id));
+        expect(requestWriteRunCancel(id)).toBe(true);
+      },
+      llm: async () => {
+        calledModel = true;
+        return "不该写";
+      },
+    });
+    expect(sawFile).toBe(false);
+    expect(calledModel).toBe(false);
+    expect(draft.status).toBe("cancelled");
+    expect(draft.artifactId).toBe("");
+  });
 });
+
+function countExactHeading(body: string, heading: string): number {
+  return body.replace(/\r\n/g, "\n").split("\n").filter((line) => line.trim().replace(/^#{1,6}\s*/, "") === heading).length;
+}
+
+function abortError(): Error {
+  const error = new Error("stopped");
+  error.name = "AbortError";
+  return error;
+}

@@ -47,6 +47,8 @@ export type DesktopBridge = {
   readonly pickInstaller?: () => Promise<{ ok?: boolean; path?: string; version?: string | null }>;
   readonly openUpdatePanel?: () => Promise<{ ok?: boolean }>;
   readonly showAbout?: () => Promise<{ ok?: boolean }>;
+  readonly openLogDir?: () => Promise<{ ok?: boolean; message?: string; path?: string }>;
+  readonly openProjectDir?: () => Promise<{ ok?: boolean; message?: string; path?: string }>;
 };
 
 export function readDesktopBridge(root: unknown): DesktopBridge | null {

@@ -6,7 +6,14 @@
 
 import { randomUUID } from "node:crypto";
 import { asString, asStringArray, extractJsonObject } from "./json.js";
-import type { AuthoringReviewReport, AuthoringStage, ReviewIssue, ReviewIssueSeverity } from "./types.js";
+import {
+  isJsonResponseFormatUnsupported,
+  shouldAttemptJsonResponseFormat,
+  completeRoleObserved,
+} from "./llm.js";
+import { combineAuthoringUsage } from "./token-usage.js";
+import { normalizeReviewDimension, WRITE_REVIEW_DIMENSIONS } from "./review-checks.js";
+import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringStage, AuthoringTokenUsage, ResolvedAuthoringRole, ReviewIssue, ReviewIssueSeverity } from "./types.js";
 
 const SEVERITY_MAP: Record<string, ReviewIssueSeverity> = {
   priority: "priority",
@@ -30,8 +37,14 @@ export function parseReviewPayload(raw: string, fallback: {
   readonly model: string;
   readonly runId?: string;
   readonly inputRefs?: AuthoringReviewReport["inputRefs"];
+  readonly rawExcerpt?: string;
 }): AuthoringReviewReport {
-  const json = extractJsonObject(raw);
+  let json: Record<string, unknown> = {};
+  try {
+    json = extractJsonObject(raw);
+  } catch {
+    json = {};
+  }
   const keys = Object.keys(json);
   const hasSummary = Boolean(asString(json.summary) || asString(json.总体评语));
   const hasIssuesField = Array.isArray(json.issues);
@@ -50,8 +63,10 @@ export function parseReviewPayload(raw: string, fallback: {
       reason: asString(row.reason) || asString(row.原因) || undefined,
       suggestion: asString(row.suggestion) || asString(row.建议) || undefined,
       suggestedScope: asString(row.suggestedScope) || undefined,
+      dimension: normalizeReviewDimension(asString(row.dimension) || asString(row.维度)),
     };
   });
+  const rawExcerpt = fallback.rawExcerpt?.trim();
   return {
     reportId: randomUUID(),
     stage: fallback.stage,
@@ -66,11 +81,91 @@ export function parseReviewPayload(raw: string, fallback: {
     issues,
     stale: false,
     incomplete,
+    ...(rawExcerpt ? { rawExcerpt } : {}),
     runId: fallback.runId,
   };
 }
 
+export function reviewPayloadIncomplete(raw: string): boolean {
+  try {
+    const json = extractJsonObject(raw);
+    const hasSummary = Boolean(asString(json.summary) || asString(json.总体评语));
+    const hasIssuesField = Array.isArray(json.issues);
+    return Object.keys(json).length === 0 || (!hasSummary && !hasIssuesField);
+  } catch {
+    return true;
+  }
+}
+
+export function mergeDeterministicIssues(
+  report: AuthoringReviewReport,
+  checks: readonly ReviewIssue[],
+): AuthoringReviewReport {
+  if (checks.length === 0) return report;
+  const seen = new Set(report.issues.map((issue) => issue.issueId));
+  const extra = checks.filter((issue) => !seen.has(issue.issueId));
+  if (extra.length === 0) return report;
+  const summary = report.incomplete
+    ? `模型这次没有给出完整审查，原文附在下面。自动检查先发现 ${extra.length} 条。`
+    : `${report.summary} 自动检查另有 ${extra.length} 条，写在对应方面里。`;
+  return {
+    ...report,
+    summary,
+    issues: [...extra, ...report.issues],
+  };
+}
+
+function clipRaw(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= 4000) return trimmed;
+  return `${trimmed.slice(0, 4000)}\n……（后面还有，已截断）`;
+}
+
+/** Ask for review JSON. OpenAI-compatible relays get response_format; others keep the text parser. */
+export async function requestReviewModelText(input: {
+  readonly resolved: ResolvedAuthoringRole;
+  readonly prompt: string;
+  readonly llm?: AuthoringLlmFn;
+  readonly signal?: AbortSignal;
+  readonly system?: string;
+}): Promise<{ text: string; rawExcerpt?: string; usage?: AuthoringTokenUsage }> {
+  const allowFormat = shouldAttemptJsonResponseFormat(input.resolved);
+  let usage: AuthoringTokenUsage | undefined;
+  const once = async (format: boolean) => {
+    const observed = await completeRoleObserved(
+      input.resolved,
+      input.prompt,
+      {
+        llm: input.llm,
+        signal: input.signal,
+        ...(format ? { responseFormat: "json_object" as const } : {}),
+        ...(input.system ? { system: input.system } : {}),
+      },
+    );
+    usage = combineAuthoringUsage(usage, observed.usage);
+    return observed.content;
+  };
+  let text: string;
+  try {
+    text = await once(allowFormat);
+  } catch (error) {
+    if (!(allowFormat && isJsonResponseFormatUnsupported(error))) throw error;
+    text = await once(false);
+  }
+  if (!reviewPayloadIncomplete(text)) return { text, ...(usage ? { usage } : {}) };
+  let second = text;
+  try {
+    second = await once(false);
+  } catch {
+    return { text, rawExcerpt: clipRaw(text), ...(usage ? { usage } : {}) };
+  }
+  if (!reviewPayloadIncomplete(second)) return { text: second, ...(usage ? { usage } : {}) };
+  const kept = second.trim() ? second : text;
+  return { text: kept, rawExcerpt: clipRaw(kept), ...(usage ? { usage } : {}) };
+}
+
 export function reviewPrompt(stage: AuthoringStage, coverage: string, body: string, extras?: string): string {
+  if (stage === "write") return writeReviewPrompt(coverage, body, extras);
   return [
     `请审查以下${stageLabel(stage)}成果。覆盖范围：${coverage}。`,
     extras ?? "",
@@ -79,6 +174,26 @@ export function reviewPrompt(stage: AuthoringStage, coverage: string, body: stri
     stage === "ground"
       ? "target 必须是设定条目 id（如 shen），不要用顺序号或第一条默认目标。"
       : "target 指向具体段落、条目或章节号。",
+    "必须对照上方依据判断是否违背正典、设定或规划。不要把作者主动保留的未知写成缺陷。不要改稿。",
+    "",
+    body,
+  ].filter(Boolean).join("\n");
+}
+
+function writeReviewPrompt(coverage: string, body: string, extras?: string): string {
+  const dimensions = WRITE_REVIEW_DIMENSIONS
+    .map((item, index) => `${index + 1}. ${item.label}：${item.hint}`)
+    .join("\n");
+  return [
+    `请审查以下正文成果。覆盖范围：${coverage}。`,
+    extras ?? "",
+    "按下面几个方面看，用作者能直接看懂的话，不要用编号，不要用英文术语：",
+    dimensions,
+    "只输出 JSON，不要代码围栏，不要解释。字段：summary, coverage, issues[]。",
+    "每条 issue 含 issueId, dimension, title, severity(priority|improve|style), target, evidence, reason, suggestion。",
+    `dimension 只能是：${WRITE_REVIEW_DIMENSIONS.map((item) => item.label).join("、")}。`,
+    "suggestion 写成作者下一句就能改的人话，不要写「建议优化」「提升表达」这种空话。",
+    "某个方面没问题就不要为了凑数硬编。target 指向具体段落或章节号。",
     "必须对照上方依据判断是否违背正典、设定或规划。不要把作者主动保留的未知写成缺陷。不要改稿。",
     "",
     body,

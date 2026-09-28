@@ -27,6 +27,8 @@ export const ChapterMetaSchema = z.object({
   updatedAt: z.string().datetime(),
   auditIssues: z.array(z.string()).default([]),
   lengthWarnings: z.array(z.string()).default([]),
+  /** Chapter markdown basename, so a single chapter can be opened without scanning the directory. */
+  file: z.string().optional(),
   reviewNote: z.string().optional(),
   detectionScore: z.number().min(0).max(1).optional(),
   detectionProvider: z.string().optional(),

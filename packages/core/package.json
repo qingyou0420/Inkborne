@@ -44,6 +44,10 @@
     "./review-author-copy": {
       "types": "./dist/review-author-copy.d.ts",
       "import": "./dist/review-author-copy.js"
+    },
+    "./chapter-heading": {
+      "types": "./dist/chapter-heading.d.ts",
+      "import": "./dist/chapter-heading.js"
     }
   },
   "files": [
@@ -66,6 +70,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:full": "node ./scripts/run-vitest-with-fts.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -5,6 +5,7 @@
  */
 
 import { fetchJson, useApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import { useEffect, useMemo, useState } from "react";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
@@ -126,7 +127,7 @@ export function OutlineWorkspace({
   useEffect(() => {
     void Promise.all([
       fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`).catch(() => ({ content: "" })),
-      fetchJson<{ candidateWeave?: { body?: string } }>(`/authoring/workspace?bookId=${encodeURIComponent(bookId)}`).catch(() => ({ candidateWeave: undefined })),
+      fetchJson<{ candidateWeave?: { body?: string } }>(`/authoring/workspace?bookId=${encodeURIComponent(bookId)}&summary=1`).catch(() => ({ candidateWeave: undefined })),
     ]).then(([file, workspace]) => {
       const adopted = file.content ?? "";
       setVolumeMap(adopted.trim() ? adopted : (workspace.candidateWeave?.body ?? ""));
@@ -266,7 +267,7 @@ export function OutlineWorkspace({
       </div>
     );
   }
-  if (error) return <div className="text-destructive p-8">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const empty = tree.volumeCount === 0 && tree.chapterCount === 0;

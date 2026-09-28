@@ -5,8 +5,11 @@
  */
 
 import { cjk } from "@streamdown/cjk";
-import { AlertCircle, Feather, Loader2, MoreHorizontal } from "lucide-react";
+import { AlertCircle, Copy, Download, Feather, Loader2, MoreHorizontal } from "lucide-react";
+import { useState } from "react";
 import { Streamdown } from "streamdown";
+import { FanqieExportFields } from "../components/FanqieExportFields";
+import { fanqieRangeProblem } from "../lib/fanqie-range";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
 import {
@@ -20,7 +23,9 @@ import { useI18n, type TFunction } from "../hooks/use-i18n";
 import type { Theme } from "../hooks/use-theme";
 import { tr } from "../lib/app-language";
 import { deriveShortStudy, shortStudyCtaLabel } from "../lib/short-study";
-import { continueShortPrompt, shortManuscriptExportPath } from "../lib/work-export";
+import { copyToClipboard, describeFanqieManuscript, renderFanqieManuscript } from "../lib/fanqie-text";
+import { showToast } from "../lib/toast";
+import { continueShortPrompt, shortManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
 import type { StudioShortDetail } from "../shared/short-works";
 import { useChatStore } from "../store/chat";
 
@@ -48,6 +53,11 @@ export function ShortReader({ storyId, nav, theme: _theme, t }: {
 }) {
   const { lang } = useI18n();
   const isZh = lang !== "en";
+  const [fanqieFrom, setFanqieFrom] = useState("");
+  const [fanqieTo, setFanqieTo] = useState("");
+  const [fanqieLayout, setFanqieLayout] = useState<"combined" | "per-chapter">("combined");
+  const [fanqieBlankLine, setFanqieBlankLine] = useState(true);
+  const [fanqieIndent, setFanqieIndent] = useState(false);
   const { data, loading, error } = useApi<StudioShortDetail>(`/shorts/${encodeURIComponent(storyId)}`);
   const study = data
     ? deriveShortStudy({
@@ -155,6 +165,9 @@ export function ShortReader({ storyId, nav, theme: _theme, t }: {
             <DropdownMenuItem onClick={() => window.location.assign(shortManuscriptExportPath(storyId))}>
               {t("book.export")}
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => window.location.assign(shortManuscriptExportPath(storyId, "fanqie"))}>
+              {isZh ? "番茄纯文本" : "Tomato plain text"}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -196,6 +209,26 @@ export function ShortReader({ storyId, nav, theme: _theme, t }: {
               <Feather size={16} />
               {shortStudyCtaLabel(study.primaryCta, isZh)}
             </button>
+            {data.content.trim() ? (
+              <ShortPlainTextBar
+                storyId={storyId}
+                title={data.title}
+                content={data.content}
+                isZh={isZh}
+                from={fanqieFrom}
+                to={fanqieTo}
+                layout={fanqieLayout}
+                blankLine={fanqieBlankLine}
+                indent={fanqieIndent}
+                onChange={(patch) => {
+                  if (patch.from !== undefined) setFanqieFrom(patch.from);
+                  if (patch.to !== undefined) setFanqieTo(patch.to);
+                  if (patch.layout !== undefined) setFanqieLayout(patch.layout);
+                  if (patch.blankLine !== undefined) setFanqieBlankLine(patch.blankLine);
+                  if (patch.indent !== undefined) setFanqieIndent(patch.indent);
+                }}
+              />
+            ) : null}
           </header>
           {data.content.trim() ? (
             <article className="prose prose-neutral dark:prose-invert max-w-none text-[16px] leading-8 prose-headings:font-semibold prose-h1:text-[26px] prose-h2:text-[22px] prose-h3:text-[19px] prose-p:my-4">
@@ -214,6 +247,100 @@ export function ShortReader({ storyId, nav, theme: _theme, t }: {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function positiveChapter(value: string): number | undefined {
+  if (!/^\d+$/.test(value.trim())) return undefined;
+  const number = Number(value);
+  return number >= 1 ? number : undefined;
+}
+
+function ShortPlainTextBar({
+  storyId,
+  title,
+  content,
+  isZh,
+  from,
+  to,
+  layout,
+  blankLine,
+  indent,
+  onChange,
+}: {
+  readonly storyId: string;
+  readonly title: string;
+  readonly content: string;
+  readonly isZh: boolean;
+  readonly from: string;
+  readonly to: string;
+  readonly layout: "combined" | "per-chapter";
+  readonly blankLine: boolean;
+  readonly indent: boolean;
+  readonly onChange: (patch: { from?: string; to?: string; layout?: "combined" | "per-chapter"; blankLine?: boolean; indent?: boolean }) => void;
+}) {
+  const shape = describeFanqieManuscript(content, title);
+  const rangeProblem = fanqieRangeProblem(from, to, shape.chapters.length, isZh);
+  const query: FanqieExportQuery = rangeProblem ? { layout, blankLine, indent } : {
+    ...(positiveChapter(from) ? { fromChapter: positiveChapter(from) } : {}),
+    ...(positiveChapter(to) ? { toChapter: positiveChapter(to) } : {}),
+    layout,
+    blankLine,
+    indent,
+  };
+  const copyPlain = () => {
+    if (rangeProblem) {
+      showToast(rangeProblem, "error");
+      return;
+    }
+    try {
+      const manuscript = renderFanqieManuscript({
+        title,
+        markdown: content,
+        style: { blankLine, indent },
+        fromChapter: query.fromChapter,
+        toChapter: query.toChapter,
+      });
+      void copyToClipboard(manuscript.combined)
+        .then(() => showToast(isZh ? "纯文本已复制，可直接贴到番茄。标题只留一行。" : "Plain text copied.", "success"))
+        .catch((error) => showToast(error instanceof Error ? error.message : "复制失败", "error"));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "复制失败", "error");
+    }
+  };
+  return (
+    <div className="flex w-full flex-col gap-3 rounded-xl border border-border/60 p-3" data-testid="short-fanqie-export">
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="btn-secondary" data-testid="short-copy-plain" onClick={copyPlain}>
+          <Copy size={14} />
+          {shape.numbered && shape.chapters.length > 1 ? (isZh ? "复制所选纯文本" : "Copy selection") : (isZh ? "复制纯文本" : "Copy plain text")}
+        </button>
+        {rangeProblem ? <p className="text-xs text-destructive" data-testid="fanqie-range-error">{rangeProblem}</p> : null}
+        <a
+          className={`btn-secondary ${rangeProblem ? "pointer-events-none opacity-40" : ""}`}
+          data-testid="short-fanqie-download"
+          href={rangeProblem ? undefined : shortManuscriptExportPath(storyId, "fanqie", query)}
+          aria-disabled={rangeProblem ? true : undefined}
+          download
+          onClick={(event) => {
+            if (rangeProblem) event.preventDefault();
+          }}
+        >
+          <Download size={14} />
+          {isZh ? "下载番茄纯文本" : "Download Tomato text"}
+        </a>
+      </div>
+      <FanqieExportFields
+        isZh={isZh}
+        showRange={shape.numbered && shape.chapters.length > 1}
+        from={from}
+        to={to}
+        layout={layout}
+        blankLine={blankLine}
+        indent={indent}
+        onChange={onChange}
+      />
     </div>
   );
 }

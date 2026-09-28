@@ -133,6 +133,23 @@ describe("session transcript codec", () => {
     await expect(nextTranscriptSeq(projectRoot, "s1")).resolves.toBe(8);
   });
 
+  it("reads the next sequence from the sidecar instead of the whole transcript", async () => {
+    const dir = join(projectRoot, ".inkos", "sessions");
+    await mkdir(dir, { recursive: true });
+    const filler = `${JSON.stringify({ seq: 1, type: "ignored" })}\n`.repeat(200);
+    await writeFile(join(dir, "s-tail.jsonl"), `${filler}${JSON.stringify({
+      type: "request_committed",
+      version: 1,
+      sessionId: "s-tail",
+      requestId: "r1",
+      seq: 4,
+      timestamp: 4,
+    })}\n`, "utf-8");
+    await expect(nextTranscriptSeq(projectRoot, "s-tail")).resolves.toBe(5);
+    await writeFile(join(dir, "s-tail.seq"), "40\n", "utf-8");
+    await expect(nextTranscriptSeq(projectRoot, "s-tail")).resolves.toBe(41);
+  });
+
   it("atomically assigns unique seq for concurrent generated events", async () => {
     await Promise.all(
       Array.from({ length: 10 }, (_, index) =>

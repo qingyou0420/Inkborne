@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { hasNodeSqliteFts5 } from "./sqlite-fts5.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,9 @@ import {
 } from "../utils/memory-retrieval.js";
 import { MemoryDB } from "../state/memory-db.js";
 
-describe("retrieveMemorySelection", () => {
+// Every case in this block opens a LocalSearchIndex. Skip the block when
+// system Node has no FTS5; the markdown/hook helpers below do not need it.
+describe.skipIf(!hasNodeSqliteFts5())("retrieveMemorySelection", () => {
   let root = "";
 
   afterEach(async () => {

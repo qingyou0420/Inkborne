@@ -5,8 +5,11 @@
  */
 
 import { fetchJson, useApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
+import { CorruptBookCard } from "../components/CorruptBookCard";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
+import { readLastChapter } from "../lib/last-chapter";
 import { useEffect, useMemo, useState } from "react";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { StageDot } from "../components/StageDot";
@@ -26,6 +29,7 @@ import {
   stripEngineTokens,
 } from "../lib/copy-map";
 import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
+import { estimateRunsCost, formatTokenCount, sumTokenUsage } from "../lib/token-usage";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
 import {
   CheckCircle2,
@@ -108,7 +112,8 @@ export function BookStudy({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
-  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
+  const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
@@ -193,11 +198,16 @@ export function BookStudy({
       </div>
     );
   }
-  if (error) return <div className="text-destructive p-8">Error: {error}</div>;
+  if (error && /book\.json|快照/.test(error)) {
+    return <CorruptBookCard message={pageErrorText(error)} />;
+  }
+  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const book = data.book;
   const totalWords = data.chapters.reduce((sum, chapter) => sum + (chapter.wordCount ?? 0), 0);
+  const tokenTotal = sumTokenUsage(authoring?.runs);
+  const tokenCost = estimateRunsCost(authoring?.runs, serviceConfig?.services);
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
   const currentStage = stage?.stage ?? "write";
   const guide = studyGuideCopy(currentStage, isZh);
@@ -251,6 +261,7 @@ export function BookStudy({
       onClick: () => goStage(nav, bookId, "weave"),
     });
   }
+  const lastOpened = readLastChapter(bookId);
   const nextTitle = snapshot?.nextChapter.title
     ? shortChapterTitle(snapshot.nextChapter.title)
     : "";
@@ -283,6 +294,13 @@ export function BookStudy({
             formatStudyWords(totalWords, isZh),
           ].filter(Boolean).join(" · ")}
         </p>
+        {tokenTotal > 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="study-token-usage">
+            {isZh
+              ? `这本书累计用了 ${formatTokenCount(tokenTotal, true)}${tokenCost ? `（${tokenCost}）` : ""}`
+              : `This book has used ${formatTokenCount(tokenTotal, false)}${tokenCost ? ` (${tokenCost})` : ""}`}
+          </p>
+        ) : null}
       </header>
 
       {snapshot?.volumeClose ? (
@@ -318,6 +336,16 @@ export function BookStudy({
               {snapshot.nextChapter.oneLine && (
                 <p className="text-sm leading-6 text-foreground/80">{snapshot.nextChapter.oneLine}</p>
               )}
+              {lastOpened && lastOpened !== snapshot.nextChapter.number ? (
+                <button
+                  type="button"
+                  className="text-sm underline text-muted-foreground"
+                  data-testid="study-last-chapter"
+                  onClick={() => nav.toChapter(bookId, lastOpened)}
+                >
+                  {isZh ? `回到上次的第 ${lastOpened} 章` : `Back to chapter ${lastOpened}`}
+                </button>
+              ) : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">{guide.subtitle}</p>

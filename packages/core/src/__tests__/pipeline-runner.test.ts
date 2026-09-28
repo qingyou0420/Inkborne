@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hasNodeSqliteFts5 } from "./sqlite-fts5.js";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -43,6 +44,9 @@ const hasNodeSqlite = (() => {
 })();
 
 const sqliteIt = hasNodeSqlite ? it : it.skip;
+// Governed write/import/revise cases call retrieveMemorySelection, which needs
+// FTS5. Skip those on system Node; cases that never open the index stay on it/sqliteIt.
+const ftsIt = hasNodeSqliteFts5() ? it : it.skip;
 const SLOW_PIPELINE_TEST_TIMEOUT_MS = 15_000;
 
 const ZERO_USAGE = {
@@ -797,7 +801,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("bootstraps missing control documents for legacy books before writing", async () => {
+  ftsIt("bootstraps missing control documents for legacy books before writing", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
 
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
@@ -816,7 +820,7 @@ describe("PipelineRunner", () => {
       const currentFocus = await readFile(join(storyDir, "current_focus.md"), "utf-8");
       const runtimeDir = await stat(join(storyDir, "runtime"));
 
-      expect(authorIntent).toContain("Author Intent");
+      expect(authorIntent).toContain("作者意图");
       expect(currentFocus).toContain("Current Focus");
       expect(runtimeDir.isDirectory()).toBe(true);
     } finally {
@@ -865,7 +869,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("routes writeDraft through planner and composer on the governed path", async () => {
+  ftsIt("routes writeDraft through planner and composer on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -974,7 +978,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("reuses an existing planned intent for draft when no new context is provided on the governed path", async () => {
+  ftsIt("reuses an existing planned intent for draft when no new context is provided on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -1053,7 +1057,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  sqliteIt("syncs current-state facts into memory.db after drafting a chapter", async () => {
+  ftsIt("syncs current-state facts into memory.db after drafting a chapter", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const chapterOneState = createStateCard({
       chapter: 1,
@@ -1236,7 +1240,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  sqliteIt("retries transient sqlite busy errors during narrative memory sync", async () => {
+  ftsIt("retries transient sqlite busy errors during narrative memory sync", async () => {
     const { logger, warnings } = createCaptureLogger();
     const { root, runner, state, bookId } = await createRunnerFixture({
       logger,
@@ -1346,7 +1350,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("marks an outlining book as active after drafting the first chapter", async () => {
+  ftsIt("marks an outlining book as active after drafting the first chapter", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const book = await state.loadBookConfig(bookId);
     await state.saveBookConfig(bookId, { ...book, status: "outlining" });
@@ -1369,7 +1373,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("routes writeNextChapter through planner and composer on the governed path", async () => {
+  ftsIt("routes writeNextChapter through planner and composer on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -1444,7 +1448,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes configured writeNextChapter context through planner and governed writer input", async () => {
+  ftsIt("passes configured writeNextChapter context through planner and governed writer input", async () => {
     const chapterContext = "本章标题：雨夜账本\n必须围绕账本失窃后的当面对质展开。";
     const { root, runner, state, bookId } = await createRunnerFixture({
       externalContext: chapterContext,
@@ -1488,7 +1492,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("re-plans instead of reusing a persisted invalid intent artifact on the governed path", async () => {
+  ftsIt("re-plans instead of reusing a persisted invalid intent artifact on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -1629,7 +1633,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("logs explicit stage messages during writeNextChapter", async () => {
+  ftsIt("logs explicit stage messages during writeNextChapter", async () => {
     const { logger, infos } = createCaptureLogger();
     const { root, runner, state, bookId } = await createRunnerFixture({
       logger,
@@ -1676,7 +1680,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("logs English stage messages during writeNextChapter for English books", async () => {
+  ftsIt("logs English stage messages during writeNextChapter for English books", async () => {
     const { logger, infos } = createCaptureLogger();
     const { root, runner, state, bookId } = await createRunnerFixture({
       logger,
@@ -1731,7 +1735,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("writes English audit drift guidance into a dedicated file without polluting current_state", async () => {
+  ftsIt("writes English audit drift guidance into a dedicated file without polluting current_state", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const englishBook = {
       ...(await state.loadBookConfig(bookId)),
@@ -1797,7 +1801,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes reduced control inputs into auditor and reviser on the governed path", async () => {
+  ftsIt("passes reduced control inputs into auditor and reviser on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -1867,7 +1871,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes governed control inputs into final truth rebuild on the governed path", async () => {
+  ftsIt("passes governed control inputs into final truth rebuild on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -1933,7 +1937,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("repairs hard-range drift through the reviser instead of a second whole-chapter normalizer", async () => {
+  ftsIt("repairs hard-range drift through the reviser instead of a second whole-chapter normalizer", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const overlongDraft = "修订后正文。".repeat(60);
     const normalizedDraft = "归一正文。".repeat(40);
@@ -1976,7 +1980,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("audits overlong writer output without silently rewriting it first", async () => {
+  ftsIt("audits overlong writer output without silently rewriting it first", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const overlongDraft = "冗余句子。".repeat(60);
 
@@ -2013,7 +2017,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("leaves minor soft-range drift to the normal audit path", async () => {
+  ftsIt("leaves minor soft-range drift to the normal audit path", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const nearTargetDraft = "近".repeat(260);
 
@@ -2044,7 +2048,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("repairs an undersized draft through a measured length-budget issue", async () => {
+  ftsIt("repairs an undersized draft through a measured length-budget issue", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const shortDraft = "短句。".repeat(20);
     const normalizedDraft = "补足后的正文。".repeat(30);
@@ -2091,7 +2095,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("records a length warning when repair still misses the hard range", async () => {
+  ftsIt("records a length warning when repair still misses the hard range", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const overlongDraft = "冗余句子。".repeat(60);
     const stillOverHard = "仍然过长。".repeat(70);
@@ -2141,7 +2145,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("keeps the last actionable audit issues when re-audit returns failed with no issues", async () => {
+  ftsIt("keeps the last actionable audit issues when re-audit returns failed with no issues", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -2209,7 +2213,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("feeds postWriteErrors into the scoring loop as extra issues", async () => {
+  ftsIt("feeds postWriteErrors into the scoring loop as extra issues", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
 
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
@@ -2262,7 +2266,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("runs at most one automatic repair iteration during writeNextChapter", async () => {
+  ftsIt("runs at most one automatic repair iteration during writeNextChapter", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const draftBody = "甲".repeat(220);
     const revisedBody = "乙".repeat(220);
@@ -2316,7 +2320,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("does not run the prose polisher automatically after a passing write", async () => {
+  ftsIt("does not run the prose polisher automatically after a passing write", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const draftBody = "林".repeat(220);
 
@@ -2345,7 +2349,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("persists truth files derived from the final revised chapter", async () => {
+  ftsIt("persists truth files derived from the final revised chapter", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
 
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
@@ -2425,7 +2429,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("persists structured runtime state and rendered projections from writer delta output", async () => {
+  ftsIt("persists structured runtime state and rendered projections from writer delta output", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -2505,7 +2509,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("repairs chapter-number drift in writer delta before persisting runtime state", async () => {
+  ftsIt("repairs chapter-number drift in writer delta before persisting runtime state", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -2655,7 +2659,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("degrades to state-degraded when state validation errors instead of aborting", async () => {
+  ftsIt("degrades to state-degraded when state validation errors instead of aborting", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
 
@@ -2687,7 +2691,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("retries settlement after state contradictions without rewriting the chapter body", async () => {
+  ftsIt("retries settlement after state contradictions without rewriting the chapter body", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -2761,7 +2765,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("persists a state-degraded chapter without advancing truth files when settlement retry still contradicts the body", async () => {
+  ftsIt("persists a state-degraded chapter without advancing truth files when settlement retry still contradicts the body", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const bookDir = state.bookDir(bookId);
@@ -2945,7 +2949,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("syncs the latest edited chapter body back into truth files without requiring state-degraded status", async () => {
+  ftsIt("syncs the latest edited chapter body back into truth files without requiring state-degraded status", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
       externalContext: "把注意力收回师债主线。",
     });
@@ -3034,7 +3038,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("still persists the chapter when the state validator appends markdown after a valid JSON verdict", async () => {
+  ftsIt("still persists the chapter when the state validator appends markdown after a valid JSON verdict", async () => {
     vi.mocked(StateValidatorAgent.prototype.validate).mockRestore();
     vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockImplementation(
       async (_bookDir, chapterContent) =>
@@ -3098,7 +3102,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("preserves the revised chapter content when final truth rebuild omits CHAPTER_CONTENT", async () => {
+  ftsIt("preserves the revised chapter content when final truth rebuild omits CHAPTER_CONTENT", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -3153,7 +3157,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("reports only resumed chapters in import results", async () => {
+  ftsIt("reports only resumed chapters in import results", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const now = "2026-03-19T00:00:00.000Z";
     const existingIndex: ChapterMeta[] = [
@@ -3208,7 +3212,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("preserves imported chapter body when the analyzer only returns truth-file updates", async () => {
+  ftsIt("preserves imported chapter body when the analyzer only returns truth-file updates", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const chaptersDir = join(state.bookDir(bookId), "chapters");
     await state.saveChapterIndex(bookId, [{
@@ -3385,7 +3389,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("keeps chapter import running when style guide extraction fails", async () => {
+  ftsIt("keeps chapter import running when style guide extraction fails", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const chapterContent = "章节正文。".repeat(120);
 
@@ -3429,7 +3433,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  sqliteIt("rebuilds fact history from imported chapter snapshots", async () => {
+  ftsIt("rebuilds fact history from imported chapter snapshots", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
 
     vi.spyOn(ArchitectAgent.prototype, "generateFoundationFromImport").mockResolvedValue({
@@ -3597,7 +3601,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("tracks imported English chapters using word counts instead of characters", async () => {
+  ftsIt("tracks imported English chapters using word counts instead of characters", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const englishBook = {
       ...(await state.loadBookConfig(bookId)),
@@ -3663,7 +3667,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("imports English chapters with English foundation seeds and persistence files", async () => {
+  ftsIt("imports English chapters with English foundation seeds and persistence files", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const englishBook = {
       ...(await state.loadBookConfig(bookId)),
@@ -3744,7 +3748,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("logs localized replay progress during chapter import", async () => {
+  ftsIt("logs localized replay progress during chapter import", async () => {
     const { logger, infos } = createCaptureLogger();
     const { root, runner, bookId } = await createRunnerFixture({ logger });
 
@@ -3791,7 +3795,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes governed control inputs into import replay analyzer on the governed path", async () => {
+  ftsIt("passes governed control inputs into import replay analyzer on the governed path", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
 
     vi.spyOn(ArchitectAgent.prototype, "generateFoundationFromImport").mockResolvedValue({
@@ -3847,7 +3851,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("does not leak imported future state into early replay chapters", async () => {
+  ftsIt("does not leak imported future state into early replay chapters", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const englishBook = {
@@ -3989,7 +3993,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  sqliteIt("rebuilds current facts from the revised chapter snapshot", async () => {
+  ftsIt("rebuilds current facts from the revised chapter snapshot", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -4094,7 +4098,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("feeds long-span fatigue warnings back into pipeline audit and dedicated drift guidance", async () => {
+  ftsIt("feeds long-span fatigue warnings back into pipeline audit and dedicated drift guidance", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const now = "2026-03-19T00:00:00.000Z";
@@ -4185,7 +4189,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("feeds hook health warnings back into pipeline audit and dedicated drift guidance", async () => {
+  ftsIt("feeds hook health warnings back into pipeline audit and dedicated drift guidance", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const now = "2026-03-19T00:00:00.000Z";
@@ -4278,7 +4282,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("adds final paragraph fragmentation warnings from revised content before persist", async () => {
+  ftsIt("adds final paragraph fragmentation warnings from revised content before persist", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const draftBody = "林越先把门推开一条缝，再侧耳去听墙后的动静。屋里的灯没有亮，但桌角还有没散的热气，说明人刚离开不久。";
@@ -4362,7 +4366,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("resolves duplicate chapter titles before persist", async () => {
+  ftsIt("resolves duplicate chapter titles before persist", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -4417,7 +4421,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("regenerates duplicate chapter titles before falling back to numeric suffixes", async () => {
+  ftsIt("regenerates duplicate chapter titles before falling back to numeric suffixes", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -4473,7 +4477,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("defaults manual reviseDraft to auto when mode is omitted", async () => {
+  ftsIt("defaults manual reviseDraft to auto when mode is omitted", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -4525,7 +4529,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes governed control inputs into manual revise on the governed path", async () => {
+  ftsIt("passes governed control inputs into manual revise on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -4618,7 +4622,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes one-off external brief into manual revise on the governed path", async () => {
+  ftsIt("passes one-off external brief into manual revise on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
       externalContext: "把注意力收回师债主线，并强调柜台后的异常灯光。",
     });
@@ -4705,7 +4709,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("passes merged AI-tell issues into manual revise and rejects no-improvement revisions", async () => {
+  ftsIt("passes merged AI-tell issues into manual revise and rejects no-improvement revisions", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -4790,7 +4794,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("persists manual revisions only when merged audit improves", async () => {
+  ftsIt("persists manual revisions only when merged audit improves", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -4915,7 +4919,7 @@ describe("PipelineRunner", () => {
     suggestion: "压缩一行解释。",
   };
 
-  it("keeps chapter and truth files unchanged when revised-body settlement cannot validate", async () => {
+  ftsIt("keeps chapter and truth files unchanged when revised-body settlement cannot validate", async () => {
     const { root, runner, state, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
     const storyDir = join(state.bookDir(bookId), "story");
     const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
@@ -4951,7 +4955,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("applies a no-improvement manual revision when revisionGate is lenient", async () => {
+  ftsIt("applies a no-improvement manual revision when revisionGate is lenient", async () => {
     const { root, runner, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("lenient");
 
     // Same warning before and after: strict would reject (no improvement),
@@ -4972,7 +4976,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("rejects a worsening manual revision under the lenient gate and reports the lenient standard", async () => {
+  ftsIt("rejects a worsening manual revision under the lenient gate and reports the lenient standard", async () => {
     const { root, runner, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("lenient");
 
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
@@ -4997,7 +5001,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("always applies manual revisions when revisionGate is always, even when the audit worsens", async () => {
+  ftsIt("always applies manual revisions when revisionGate is always, even when the audit worsens", async () => {
     const { root, runner, state, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
 
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
@@ -5028,7 +5032,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("runs an explicit rework even when the current chapter already passes audit", async () => {
+  ftsIt("runs an explicit rework even when the current chapter already passes audit", async () => {
     const { root, runner, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
 
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
@@ -5051,7 +5055,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("keeps current truth intact and marks downstream chapters when reworking an older chapter", async () => {
+  ftsIt("keeps current truth intact and marks downstream chapters when reworking an older chapter", async () => {
     const { root, runner, state, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
     const storyDir = join(state.bookDir(bookId), "story");
     const latestState = "# Current State\n\nThe second chapter is already complete.";
@@ -5107,7 +5111,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("re-audits revisions against updated state overrides instead of stale on-disk truth files", async () => {
+  ftsIt("re-audits revisions against updated state overrides instead of stale on-disk truth files", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -5335,7 +5339,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("uses chapter length telemetry target for manual revise when available", async () => {
+  ftsIt("uses chapter length telemetry target for manual revise when available", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");

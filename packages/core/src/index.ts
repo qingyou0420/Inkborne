@@ -93,6 +93,7 @@ export {
   listArtifacts,
   listReports,
   listRuns,
+  loadAuthoringWorkspaceLists,
   loadArtifact,
   loadReport,
   loadRun,
@@ -106,6 +107,7 @@ export {
   bindRestoredChapter,
   bindRestoredChapterUnlocked,
   autosaveChapterBody,
+  resolveChapterFile,
   parseCanon,
   serializeCanon,
   ensureAuthoringDraft,
@@ -127,6 +129,8 @@ export {
   reviewChapterDraft,
   reviseChapterDraft,
   adoptChapterDraft,
+  requestWriteRunCancel,
+  loadWriteChapterBasis,
   withBookWriteLock,
   readAuthoringOpenHooks,
   testAuthoringRole,
@@ -508,7 +512,18 @@ export {
   processProjectInteractionRequest,
 } from "./interaction/project-control.js";
 export { createInteractionToolsFromDeps } from "./interaction/project-tools.js";
-export { buildExportArtifact, writeExportArtifact } from "./interaction/export-artifact.js";
+export { buildExportArtifact, writeExportArtifact, fanqieOptionsFromQuery, zipFanqieFiles } from "./interaction/export-artifact.js";
+export type { BookExportFormat, BookExportOptions, ExportArtifact } from "./interaction/export-artifact.js";
+export {
+  fanqieChapterFileName,
+  fanqieChapterHeading,
+  fanqieDownloadName,
+  describeFanqieManuscript,
+  renderFanqieChapter,
+  renderFanqieManuscript,
+  resolveFanqieTitle,
+} from "./interaction/fanqie-text.js";
+export type { FanqieExportOptions, FanqieManuscript, FanqieStyle } from "./interaction/fanqie-text.js";
 export {
   normalizeTruthFileName,
   classifyTruthAuthority,
@@ -635,7 +650,7 @@ export {
   type ModelInfo,
 } from "./llm/service-presets.js";
 export { resolveServiceModel, type ResolvedModel } from "./llm/service-resolver.js";
-export { loadSecrets, saveSecrets, getServiceApiKey, type SecretsFile } from "./llm/secrets.js";
+export { loadSecrets, loadSecretsSync, saveSecrets, getServiceApiKey, maskApiKey, describeSecretsLocation, type SecretsFile, type SecretsLoadOptions } from "./llm/secrets.js";
 export {
   COVER_PROVIDER_PRESETS,
   coverSecretKey,
@@ -792,6 +807,7 @@ export {
 } from "./utils/hook-governance.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 export { analyzeHookHealth } from "./utils/hook-health.js";
+export { atomicWritesInFlight } from "./utils/atomic-file-set.js";
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type WriteChapterGateOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
@@ -801,6 +817,17 @@ export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, c
 export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAgent, renderScriptSpec, renderStoryboardSpec, renderInteractiveFilmSpec, type ScriptCreationInput, type ScriptTargetFormat, type StoryboardCreationInput, type InteractiveFilmCreationInput } from "./agents/script-storyboard.js";
 
 // State
+export { CorruptBookJsonError } from "./state/book-json.js";
+export { redactSecrets } from "./utils/redact-secrets.js";
+export {
+  loadResearchSearchRuntime,
+  migrateResearchSearchKey,
+  readResearchSearchPublic,
+  RESEARCH_SEARCH_KEY_NOT_STORED,
+  saveResearchSearchSettings,
+  type ResearchSearchPublic,
+} from "./llm/research-search-secret.js";
+export { sanitizeAuthoringRun, sanitizeAuthoringRuns } from "./authoring/public-run.js";
 export {
   BookWriteLockError,
   BOOK_LOCK_INTERACTIVE_POLL_MS,
@@ -810,6 +837,7 @@ export {
   isBookWriteLockMessage,
   setBookLockLivenessCheck,
   StateManager,
+  listInProcessBookLocks,
   type AcquireBookLockOptions,
   type BookLockHolder,
   type BookLockLivenessCheck,

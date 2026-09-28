@@ -39,6 +39,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     bookDir(id: string): string {
       return join(this.root, "books", id);
     }
+    async acquireBookLock(): Promise<() => Promise<void>> {
+      return async () => undefined;
+    }
   }
 
   class MockPipelineRunner {
@@ -67,6 +70,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   }
 
   return {
+    ...actual,
     StateManager: MockStateManager,
     PipelineRunner: MockPipelineRunner,
     Scheduler: MockScheduler,
@@ -80,6 +84,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     isSafeBookId: actual.isSafeBookId,
     chatCompletion: chatCompletionMock,
     loadProjectConfig: loadProjectConfigMock,
+    maskApiKey: actual.maskApiKey,
+    describeSecretsLocation: actual.describeSecretsLocation,
+    listInProcessBookLocks: () => [],
+    atomicWritesInFlight: () => 0,
     GLOBAL_ENV_PATH: join(tmpdir(), "inkos-global.env"),
   };
 });

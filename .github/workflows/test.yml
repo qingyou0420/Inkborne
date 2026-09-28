@@ -15,7 +15,8 @@ jobs:
           node-version: "22"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @actalk/inkos-core build
+      - run: pnpm typecheck
+      - run: pnpm lint
       - run: pnpm test
       - name: Engine smoke (explicit root, pinned non-4567 port)
         run: pnpm --filter @actalk/inkos-studio build && pnpm engine:smoke

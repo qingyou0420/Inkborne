@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { collapseDuplicateChapterHeadings, parseChapterHeadingLine } from "@actalk/inkos-core/chapter-heading";
 import { showToast } from "../lib/toast";
 import { trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
 import { fetchJson, putApi, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -23,7 +25,9 @@ import {
   Pencil,
   Save,
   MoreHorizontal,
+  Copy,
 } from "lucide-react";
+import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
 
 interface ChapterData {
   readonly chapterNumber: number;
@@ -34,6 +38,24 @@ interface ChapterData {
 interface Nav {
   toBook: (id: string) => void;
   toDashboard: () => void;
+}
+
+function readingManuscript(content: string, chapterNumber: number): {
+  manuscript: string;
+  title: string;
+  body: string;
+} {
+  const manuscript = collapseDuplicateChapterHeadings(content, { chapterNumber });
+  const lines = manuscript.replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length && lines[index]!.trim() === "") index += 1;
+  const parsed = index < lines.length ? parseChapterHeadingLine(lines[index]!) : null;
+  if (!parsed || parsed.chapterNumber !== chapterNumber) {
+    return { manuscript, title: "", body: manuscript.trim() };
+  }
+  const title = lines[index]!.trim().replace(/^#{1,6}\s*/, "");
+  const body = lines.slice(index + 1).join("\n").trim();
+  return { manuscript, title, body };
 }
 
 function chapterKicker(n: number, isZh: boolean): string {
@@ -152,7 +174,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     if (!data) return;
     pendingSave.current = null;
     editGeneration.current += 1;
-    setEditContent(data.content);
+    setEditContent(readingManuscript(data.content, chapterNumber).manuscript);
     setEditing(true);
   };
 
@@ -187,16 +209,12 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     </div>
   );
 
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
   if (!data) return null;
 
-  const lines = data.content.split("\n");
-  const titleLine = lines.find((l) => l.startsWith("# "));
-  const title = titleLine?.replace(/^#\s*/, "") ?? `Chapter ${chapterNumber}`;
-  const body = lines
-    .filter((l) => l !== titleLine)
-    .join("\n")
-    .trim();
+  const presented = readingManuscript(data.content, chapterNumber);
+  const title = presented.title || (isZh ? chapterKicker(chapterNumber, true) : `Chapter ${chapterNumber}`);
+  const body = presented.body;
 
   const handleApprove = async (why?: string) => {
     try {
@@ -246,6 +264,20 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   };
 
   const paragraphs = body.split(/\n\n+/).filter(Boolean);
+  const copySource = editing ? editContent : data.content;
+  const copyChapter = async () => {
+    try {
+      const text = renderFanqieChapter({
+        chapterNumber,
+        title,
+        markdown: copySource,
+      });
+      await copyToClipboard(text);
+      showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "复制失败", "error");
+    }
+  };
 
   return (
     <div className="w-full space-y-10 fade-in">
@@ -271,6 +303,16 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
             {t("reader.edit")}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => void copyChapter()}
+          className="btn-secondary"
+          data-testid="chapter-copy-plain"
+          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
+        >
+          <Copy size={14} />
+          {isZh ? "复制本章" : "Copy chapter"}
+        </button>
         <button
           type="button"
           onClick={() => void handleApprove()}
@@ -334,7 +376,12 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
             onChange={(e) => {
               const next = e.target.value;
               setEditContent(next);
-              pendingSave.current = trackChapterEdit(bookId, chapterNumber, next, data.content);
+              pendingSave.current = trackChapterEdit(
+                bookId,
+                chapterNumber,
+                next,
+                readingManuscript(data.content, chapterNumber).manuscript,
+              );
             }}
             className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[32px] text-foreground/90 focus:outline-none resize-none border border-border-strong rounded-[10px] p-6 focus:ring-1 focus:ring-ring"
             autoFocus

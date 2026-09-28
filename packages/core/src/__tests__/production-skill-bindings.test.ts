@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { hydrateActivatedSkillGuidance } from "../agent/skill-tool.js";
 import {
   NON_LONG_PRODUCTION_CAPABILITIES,
@@ -10,6 +10,9 @@ import {
   resolveProductionSkillActivations,
 } from "../skills/production-bindings.js";
 import type { AgentSkill } from "../skills/types.js";
+import { hasNodeSqliteFts5 } from "./sqlite-fts5.js";
+
+const ftsIt = hasNodeSqliteFts5() ? it : it.skip;
 
 function skill(id: string): AgentSkill {
   return {
@@ -63,7 +66,7 @@ describe("production skill bindings", () => {
     )).toEqual([replacement, userActivation]);
   });
 
-  it("retrieves task-relevant references for production workers", async () => {
+  ftsIt("retrieves task-relevant references for production workers", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "inkos-skill-bindings-"));
     try {
       await mkdir(join(baseDir, "references"), { recursive: true });
