@@ -26,6 +26,7 @@ import {
   generateWeaveRange,
   loadAuthoringWorkspaceLists,
   redactSecrets,
+  sanitizeAuthoringRun,
   sanitizeAuthoringRuns,
   loadArtifact,
   loadCanonDocument,
@@ -274,7 +275,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const draftId = c.req.query("draftId") || undefined;
     const run = await loadRun(storeRoot(deps.root, { bookId, draftId }), c.req.param("runId"));
     if (!run) return c.json({ error: "找不到运行记录" }, 404);
-    return c.json(run);
+    return c.json(sanitizeAuthoringRun(run));
   });
 
   app.post("/api/v1/authoring/runs/:runId/pause", async (c) => {
@@ -293,8 +294,9 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   app.post("/api/v1/authoring/runs/:runId/resume", async (c) => {
     const body = await c.req.json<{ bookId?: string; draftId?: string }>();
     const root = storeRoot(deps.root, body);
-    const run = await loadRun(root, c.req.param("runId"));
-    if (!run) return c.json({ error: "找不到运行记录" }, 404);
+    const loaded = await loadRun(root, c.req.param("runId"));
+    if (!loaded) return c.json({ error: "找不到运行记录" }, 404);
+    const run = sanitizeAuthoringRun(loaded);
     await saveRunControl(root, run.runId, "none");
     const project = await deps.loadProject();
     if (run.stage !== "weave") return c.json({ error: "目前仅织卷支持继续剩余范围" }, 400);

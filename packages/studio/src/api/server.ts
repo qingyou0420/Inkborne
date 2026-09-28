@@ -67,6 +67,7 @@ import {
   DetectionConfigSchema,
   migrateResearchSearchKey,
   readResearchSearchPublic,
+  RESEARCH_SEARCH_KEY_NOT_STORED,
   saveResearchSearchSettings,
   GLOBAL_ENV_PATH,
   COVER_PROVIDER_PRESETS,
@@ -6771,14 +6772,22 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       apiKey?: string;
     } }>();
     const incoming = body.researchSearch ?? {};
-    const researchSearch = await saveResearchSearchSettings(root, {
-      enabled: incoming.enabled,
-      provider: incoming.provider,
-      baseUrl: incoming.baseUrl,
-      apiKeyEnv: incoming.apiKeyEnv,
-      ...(Object.prototype.hasOwnProperty.call(incoming, "apiKey") ? { apiKey: incoming.apiKey } : {}),
-    });
-    return c.json({ ok: true, researchSearch });
+    try {
+      const researchSearch = await saveResearchSearchSettings(root, {
+        enabled: incoming.enabled,
+        provider: incoming.provider,
+        baseUrl: incoming.baseUrl,
+        apiKeyEnv: incoming.apiKeyEnv,
+        ...(Object.prototype.hasOwnProperty.call(incoming, "apiKey") ? { apiKey: incoming.apiKey } : {}),
+      });
+      return c.json({ ok: true, researchSearch });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === RESEARCH_SEARCH_KEY_NOT_STORED) {
+        return c.json({ ok: false, error: message, keyStorage: "project" }, 400);
+      }
+      throw error;
+    }
   });
 
   // --- Chapter review mode (C4a: auto pipeline vs manual checkpoint) ---
