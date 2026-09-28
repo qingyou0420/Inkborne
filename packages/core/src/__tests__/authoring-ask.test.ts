@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
 import { adoptAskCanon, generateAskCanon, reviewAskCanon, reviseAskCanon } from "../authoring/stages/ask.js";
-import { loadArtifact, loadRun, saveHandEditedArtifact } from "../authoring/store.js";
+import { AuthoringRunCancelledError, loadArtifact, loadManifest, loadRun, newRunId, saveHandEditedArtifact, saveRunControl } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 function project() {
@@ -66,6 +66,8 @@ describe("ask stage", () => {
           boundaries: "开放结局",
           direction: "港口",
           openQuestions: [],
+          targetChapters: 12,
+          chapterWordCount: 2000,
         });
       }
       return JSON.stringify({
@@ -78,6 +80,8 @@ describe("ask stage", () => {
         boundaries: "开放结局",
         direction: "港口",
         openQuestions: ["结局"],
+        targetChapters: 12,
+        chapterWordCount: 2000,
       });
     };
     const ctx = { root: { projectRoot: root, draftId: "d1" }, project: project(), llm };
@@ -196,6 +200,65 @@ describe("ask stage", () => {
     expect(book.chapterWordCount).toBe(3000);
     const canon = await readFile(join(created.bookDir, "story", "canon.md"), "utf-8");
     expect(canon).toContain("新名");
+  });
+
+  it("cancels an active generate without saving a candidate", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ask-cancel-"));
+    const runId = newRunId();
+    let release!: (text: string) => void;
+    const blocked = new Promise<string>((resolve) => { release = resolve; });
+    const ctx = { root: { projectRoot: root, draftId: "d-cancel" }, project: project() };
+    const pending = generateAskCanon({
+      ...ctx,
+      runId,
+      conversation: "港口会计找回账本",
+      llm: async () => blocked,
+    });
+    await vi.waitFor(async () => {
+      expect((await loadRun(ctx.root, runId))?.status).toBe("running");
+    });
+    await saveRunControl(ctx.root, runId, "cancel");
+    release(JSON.stringify({
+      title: "夜港账本",
+      oneLine: "会计找回账本",
+      proposition: "记忆有代价",
+      protagonist: "沈砚",
+      conflict: "救人还是自保",
+      voice: "限制视角",
+      boundaries: "开放结局",
+      direction: "港口",
+      openQuestions: [],
+      targetChapters: 12,
+      chapterWordCount: 2000,
+    }));
+    await expect(pending).rejects.toBeInstanceOf(AuthoringRunCancelledError);
+    expect((await loadRun(ctx.root, runId))?.status).toBe("cancelled");
+    expect((await loadManifest(ctx.root)).candidates.ask).toBeUndefined();
+  });
+
+  it("keeps the original model error when the actual ask catch cannot persist failed", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ask-eio-"));
+    const store = { projectRoot: root, bookId: "demo" };
+    const llm: AuthoringLlmFn = async () => {
+      const dir = join(root, "books", "demo", "story", "workflow", "runs");
+      const files = await readdir(dir);
+      const runFile = files.find((file) => file.endsWith(".json") && !file.endsWith(".control.json"));
+      if (runFile) {
+        const path = join(dir, runFile);
+        await rm(path);
+        await mkdir(path);
+      }
+      throw new Error("synthetic model failure");
+    };
+    await expect(generateAskCanon({
+      root: store,
+      project: project(),
+      conversation: "合成对话",
+      llm,
+    })).rejects.toMatchObject({
+      message: "synthetic model failure",
+      persistError: expect.anything(),
+    });
   });
 
   it("stores token usage on the ask run", async () => {

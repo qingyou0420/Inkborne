@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Bot, FileText, FolderUp, Globe, MessageSquare, Radar, RotateCcw, Search, Plus, Trash2 } from "lucide-react";
-import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
-import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
+import { Bell, Bot, FileText, FolderUp, Globe, MessageSquare, Palette, Radar, RotateCcw, Search, Plus, Trash2, CircleHelp } from "lucide-react";
+import { Drawer } from "../components/ui/drawer";
+import {
+  PROSE_LEADING_OPTIONS,
+  PROSE_SIZE_OPTIONS,
+  STUDIO_FONT_LABELS,
+  type StudioFontId,
+} from "../lib/appearance";
+import { SettingsTabs } from "../components/SettingsTabs";
 import { getDesktopBridge } from "../lib/desktop-bridge";
+import { fetchJson, postApi, putApi, useApi } from "../hooks/use-api";
 import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
 import { useI18n, type TFunction } from "../hooks/use-i18n";
@@ -18,7 +25,6 @@ import {
   type NotifyChannelDraft,
   type NotifyType,
   type OverrideRow,
-  legacyAgentLabel,
 } from "./project-settings-model";
 import {
   serializeSkillFolder,
@@ -32,6 +38,7 @@ import {
 interface Nav {
   toDashboard: () => void;
   toServices: () => void;
+  toProjectSettings?: (section?: "advanced") => void;
 }
 
 type NoticeTone = "success" | "error" | "info";
@@ -47,8 +54,6 @@ interface ResearchSearchDraft {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyEnv: string;
-  readonly configured?: boolean;
-  readonly last4?: string;
 }
 
 const DEFAULT_RESEARCH_SEARCH: ResearchSearchDraft = {
@@ -79,33 +84,38 @@ function SettingsCard({
   icon: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   return (
-    <section className="rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm space-y-4">
+    <section className="border-b border-border pb-8 space-y-4">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 rounded-xl bg-primary/10 p-2 text-primary">{icon}</div>
-        <div>
-          <h2 className="text-base font-bold">{title}</h2>
-          <p className="mt-1 text-sm text-muted-foreground leading-relaxed">{description}</p>
-        </div>
+        <span className="mt-0.5 text-muted-foreground" aria-hidden="true">{icon}</span>
+        <h2 className="text-base font-medium">{title}</h2>
+        <button type="button" className="ml-auto rounded p-1 text-muted-foreground hover:text-foreground" aria-label={`${title} · ?`} onClick={() => setHelpOpen(true)}><CircleHelp size={17} /></button>
       </div>
       {children}
+      <Drawer open={helpOpen} onClose={() => setHelpOpen(false)} title={title}>
+        <p className="text-sm leading-7 text-muted-foreground">{description}</p>
+      </Drawer>
     </section>
   );
 }
 
 const fieldClass = "w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm outline-none focus:border-primary/50";
 
-export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
+export function ProjectSettings({ nav, theme, t, setTheme, section }: { nav: Nav; theme: Theme; t: TFunction; setTheme?: (next: Theme) => void; section?: "advanced" }) {
   const c = useColors(theme);
   const { lang } = useI18n();
   const isZh = lang !== "en";
   const { data: projectData, refetch: refetchProject } = useApi<{ language?: string }>("/project");
   const { data: overridesData, refetch: refetchOverrides } = useApi<{ overrides: Record<string, unknown> }>("/project/model-overrides");
-  const { data: researchSearchData, refetch: refetchResearchSearch } = useApi<{ researchSearch: Partial<ResearchSearchDraft> & { configured?: boolean; last4?: string } }>("/project/research-search");
+  const { data: defaultModelData, refetch: refetchDefaultModel } = useApi<{ service: string | null; defaultModel: string | null }>("/project/default-model");
+  const { data: researchSearchData, refetch: refetchResearchSearch } = useApi<{ researchSearch: Partial<ResearchSearchDraft> }>("/project/research-search");
   const { data: notifyData, refetch: refetchNotify } = useApi<{ channels: unknown[] }>("/project/notify");
   const { data: detectionData, refetch: refetchDetection } = useApi<{ detection: unknown | null }>("/project/detection");
   const { data: skillsData, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
   const { data: promptPacksData, refetch: refetchPromptPacks } = useApi<PromptPacksResponse>("/prompt-packs");
+  const [defaultService, setDefaultService] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
   const [researchSearch, setResearchSearch] = useState<ResearchSearchDraft>({ ...DEFAULT_RESEARCH_SEARCH });
   const [overrideRows, setOverrideRows] = useState<OverrideRow[]>([]);
   const [notifyChannels, setNotifyChannels] = useState<NotifyChannelDraft[]>([]);
@@ -117,6 +127,13 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const skillFolderInputRef = useRef<HTMLInputElement>(null);
   const toolDetailsDefaultOpen = usePreferencesStore((s) => s.toolDetailsDefaultOpen);
   const setToolDetailsDefaultOpen = usePreferencesStore((s) => s.setToolDetailsDefaultOpen);
+  const uiFont = usePreferencesStore((s) => s.uiFont);
+  const proseFont = usePreferencesStore((s) => s.proseFont);
+  const proseSize = usePreferencesStore((s) => s.proseSize);
+  const proseLeading = usePreferencesStore((s) => s.proseLeading);
+  const showStudioImage = usePreferencesStore((s) => s.showStudioImage);
+  const paperTone = usePreferencesStore((s) => s.paperTone);
+  const setAppearance = usePreferencesStore((s) => s.setAppearance);
   const skills = skillsData?.skills ?? [];
   const promptGroups = groupPromptPacksForDisplay(promptPacksData ?? { packs: [], prompts: [] });
   const promptList = promptPacksData?.prompts ?? [];
@@ -133,6 +150,12 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   }, [overridesData]);
 
   useEffect(() => {
+    if (!defaultModelData) return;
+    setDefaultService(defaultModelData.service ?? "");
+    setDefaultModel(defaultModelData.defaultModel ?? "");
+  }, [defaultModelData]);
+
+  useEffect(() => {
     if (!researchSearchData) return;
     const raw = researchSearchData.researchSearch ?? {};
     setResearchSearch({
@@ -140,10 +163,8 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
       ...raw,
       provider: raw.provider === "custom" ? "custom" : "tavily",
       baseUrl: raw.baseUrl ?? "",
-      apiKey: "",
+      apiKey: raw.apiKey ?? "",
       apiKeyEnv: raw.apiKeyEnv ?? "TAVILY_API_KEY",
-      configured: raw.configured,
-      last4: raw.last4,
     });
   }, [researchSearchData]);
 
@@ -196,28 +217,152 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   };
 
   return (
-    <div className="space-y-8">
+    <div className="settings-layout">
+      <SettingsTabs
+        active={section === "advanced" ? "advanced" : "appearance"}
+        t={t}
+        onModels={nav.toServices}
+        onAppearance={() => nav.toProjectSettings?.()}
+        onAdvanced={() => nav.toProjectSettings?.("advanced")}
+      />
+      <div className="space-y-8 min-w-0">
       <div className="space-y-2">
-        <h1 className="font-serif text-[32px] font-medium leading-10">
-          {t("settings.title")}
+        <h1 className="text-[32px] font-medium leading-10">
+          {section === "advanced" ? t("settings.advancedTab") : t("settings.appearanceTab")}
         </h1>
-        <p className="text-sm text-muted-foreground">{t("settings.subtitle")}</p>
       </div>
 
       {notice && (
         <div
-          className={`rounded-xl px-4 py-3 text-sm ${
-            notice.tone === "error"
-              ? "bg-destructive/10 text-destructive"
-              : notice.tone === "info"
-                ? "bg-secondary text-muted-foreground"
-                : "bg-secondary text-foreground"
-          }`}
+          className="ink-notice text-sm"
+          data-tone={notice.tone === "error" ? "danger" : undefined}
         >
           {notice.message}
         </div>
       )}
 
+      <div hidden={section === "advanced"}>
+      <SettingsCard title={t("settings.appearance")} description={t("settings.appearanceHint")} icon={<Palette size={18} />}>
+      <div id="settings-appearance" />
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <span className="text-sm">{isZh ? "日间纸色" : "Day paper"}</span>
+          <div className="segmented" aria-label={isZh ? "日间纸色" : "Day paper"}>
+            {(["white", "warm", "mist"] as const).map((tone) => <button key={tone} type="button" className={paperTone === tone ? "active" : ""} aria-pressed={paperTone === tone} onClick={() => setAppearance({ paperTone: tone })}>{isZh ? {white:"素白",warm:"暖纸",mist:"雾灰"}[tone] : {white:"White",warm:"Warm",mist:"Mist"}[tone]}</button>)}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.theme")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-theme">
+            {(["light", "dark"] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={theme === item ? "active" : ""}
+                aria-pressed={theme === item}
+                onClick={() => setTheme?.(item)}
+              >
+                {item === "light" ? t("settings.themeLight") : t("settings.themeDark")}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.uiFont")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-ui-font">
+            {(Object.keys(STUDIO_FONT_LABELS) as StudioFontId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={uiFont === id ? "active" : ""}
+                aria-pressed={uiFont === id}
+                onClick={() => setAppearance({ uiFont: id })}
+              >
+                {isZh ? STUDIO_FONT_LABELS[id].zh : STUDIO_FONT_LABELS[id].en}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.proseFont")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-prose-font">
+            {(Object.keys(STUDIO_FONT_LABELS) as StudioFontId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={proseFont === id ? "active" : ""}
+                aria-pressed={proseFont === id}
+                onClick={() => setAppearance({ proseFont: id })}
+              >
+                {isZh ? STUDIO_FONT_LABELS[id].zh : STUDIO_FONT_LABELS[id].en}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.proseSize")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-prose-size">
+            {PROSE_SIZE_OPTIONS.map((size) => (
+              <button
+                key={size}
+                type="button"
+                className={proseSize === size ? "active" : ""}
+                aria-pressed={proseSize === size}
+                onClick={() => setAppearance({ proseSize: size })}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{t("settings.proseLeading")}</label>
+          </div>
+          <div className="segmented" data-testid="settings-prose-leading">
+            {PROSE_LEADING_OPTIONS.map((leading) => (
+              <button
+                key={leading}
+                type="button"
+                className={proseLeading === leading ? "active" : ""}
+                aria-pressed={proseLeading === leading}
+                onClick={() => setAppearance({ proseLeading: leading })}
+              >
+                {leading.toFixed(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row flex items-center justify-between gap-4 border-b border-border py-4">
+          <div>
+            <label className="text-sm">{isZh ? "留白中的水墨点缀" : "Ink ornament"}</label>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-label={isZh ? "留白中的水墨点缀" : "Ink ornament"}
+            aria-checked={showStudioImage}
+            data-testid="settings-studio-image"
+            onClick={() => setAppearance({ showStudioImage: !showStudioImage })}
+            className={`relative h-[25px] w-[43px] shrink-0 rounded-full ${showStudioImage ? "bg-seal" : "bg-border-strong"}`}
+          >
+            <span className={`absolute top-[3px] left-[3px] h-[19px] w-[19px] rounded-full bg-background transition-transform ${showStudioImage ? "translate-x-[18px]" : ""}`} />
+          </button>
+        </div>
+        <div className="font-specimen" data-testid="settings-font-specimen">
+          <h3>{t("settings.fontSpecimenTitle")}</h3>
+          <p>{t("settings.fontSpecimenBody")}</p>
+        </div>
+      </SettingsCard>
+      </div>
+      <div id="settings-advanced" hidden={section !== "advanced"} className="space-y-8">
       <SettingsCard title={t("settings.writingLanguage")} description={t("settings.writingLanguageHint")} icon={<Globe size={18} />}>
         <div className="flex flex-wrap gap-2" data-testid="settings-writing-language">
           {(["zh", "en"] as const).map((lang) => (
@@ -488,38 +633,109 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           >
             {isZh ? "打开项目目录" : "Open project folder"}
           </button>
-          <button type="button" onClick={nav.toServices} className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary}`}>
+        </div>
+      </SettingsCard>
+
+      <p className="text-xs text-muted-foreground">{isZh ? "高级：八个角色在模型配置页。" : "The eight roles live on the Models page."}</p>
+
+      {/* Model routing — per-agent model overrides */}
+      <SettingsCard title={t("settings.modelOverrides")} description={t("settings.modelOverridesHint")} icon={<Bot size={18} />}>
+        <div className="rounded-xl border border-border/60 bg-secondary/20 p-3 space-y-2">
+          <div>
+            <div className="text-sm font-semibold">{t("settings.globalDefaultModel")}</div>
+            <p className="mt-1 text-xs text-muted-foreground">{t("settings.globalDefaultModelHint")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{isZh ? "四阶段各槽在模型配置页。" : "The eight stage slots live on the Models page."}</p>
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
+            <input
+              value={defaultService}
+              onChange={(e) => setDefaultService(e.target.value)}
+              placeholder={t("settings.serviceId")}
+              className={`${fieldClass} font-mono`}
+            />
+            <input
+              value={defaultModel}
+              onChange={(e) => setDefaultModel(e.target.value)}
+              placeholder={t("settings.modelId")}
+              className={`${fieldClass} font-mono`}
+            />
+            <button
+              onClick={() => runSave("default-model", async () => {
+                await putApi("/project/default-model", {
+                  service: defaultService.trim() || undefined,
+                  defaultModel: defaultModel.trim(),
+                });
+                await refetchDefaultModel();
+              }, t("settings.saved"))}
+              disabled={saving === "default-model" || !defaultModel.trim()}
+              className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
+            >
+              {saving === "default-model" ? t("config.saving") : t("config.save")}
+            </button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {overrideRows.length === 0 && (
+            <p className="text-xs text-muted-foreground italic">{t("settings.noOverrides")}</p>
+          )}
+          {overrideRows.map((row, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input
+                value={row.agent}
+                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
+                placeholder={t("settings.agentName")}
+                className={`${fieldClass} flex-1`}
+              />
+              <span className="text-muted-foreground">→</span>
+              <input
+                value={row.model}
+                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, model: e.target.value } : r)))}
+                placeholder={t("settings.modelId")}
+                className={`${fieldClass} flex-1 font-mono`}
+              />
+              <button
+                onClick={() => setOverrideRows((prev) => prev.filter((_, j) => j !== i))}
+                className="shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                aria-label="remove"
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setOverrideRows((prev) => [...prev, { agent: "", model: "" }])}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${c.btnSecondary}`}
+          >
+            <Plus size={14} /> {t("settings.addOverride")}
+          </button>
+          <button
+            onClick={() => runSave("overrides", async () => {
+              const overrides: Record<string, unknown> = {};
+              for (const r of overrideRows) {
+                const agent = r.agent.trim();
+                const model = r.model.trim();
+                if (!agent || !model) continue;
+                overrides[agent] = r.rest && Object.keys(r.rest).length > 0 ? { ...r.rest, model } : model;
+              }
+              await putApi("/project/model-overrides", { overrides });
+              await refetchOverrides();
+            }, t("settings.saved"))}
+            disabled={saving === "overrides"}
+            className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
+          >
+            {saving === "overrides" ? t("config.saving") : t("config.save")}
+          </button>
+          <button onClick={nav.toServices} className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnSecondary}`}>
             {t("settings.openModelConfig")}
           </button>
         </div>
       </SettingsCard>
 
-      <details className="rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm">
-        <summary className="cursor-pointer text-base font-bold">{isZh ? "高级：八个角色和旧的分角色模型" : "Advanced: eight roles and old per-role models"}</summary>
-        <div className="mt-4 space-y-4">
-          <p className="text-sm text-muted-foreground">
-            {isZh
-              ? "平时只要在模型配置里填接口地址、密钥、主力模型和审查模型。这里可以单独改某一步。下面的旧名称只用来填充角色，不能在这里改。"
-              : "Day to day, set the address, key, main model, and review model in Model Config. Change one role here. Older names below only fill those roles and are not edited here."}
-          </p>
-          <AuthoringRolesPanel isZh={isZh} />
-          {overrideRows.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{isZh ? "没有旧的分角色模型。" : "No older per-role models."}</p>
-          ) : (
-            <ul className="space-y-1 text-sm">
-              {overrideRows.map((row) => (
-                <li key={`${row.agent}:${row.model}`} className="text-muted-foreground">
-                  {legacyAgentLabel(row.agent)} → <span className="font-mono text-foreground">{row.model || (isZh ? "未填模型" : "no model")}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </details>
-
       <SettingsCard
         title={isZh ? "联网研究搜索服务" : "Research Search Provider"}
-        description={isZh ? "给 research_web 配置外部搜索 API。密钥放在本机用户数据目录，和模型密钥放在一起。未配置时仍可用环境变量 TAVILY_API_KEY。" : "Configure the external search API used by research_web. The key stays in this machine's user data folder, with the model keys. If unset, TAVILY_API_KEY can still be used."}
+        description={isZh ? "给 research_web 配置外部搜索 API。未配置时仍可用服务器环境变量 TAVILY_API_KEY 作为兜底。" : "Configure the external search API used by research_web. If unset, the server may still use TAVILY_API_KEY as a fallback."}
         icon={<Search size={18} />}
       >
         <label className="flex items-center gap-2 text-sm">
@@ -567,9 +783,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
                 value={researchSearch.apiKey}
                 onChange={(e) => setResearchSearch((prev) => ({ ...prev, apiKey: e.target.value }))}
                 type="password"
-                placeholder={researchSearch.configured
-                  ? (isZh ? `已配置，末四位 ${researchSearch.last4 || "····"}。留空则保留` : `Saved, last 4 ${researchSearch.last4 || "····"}. Leave blank to keep`)
-                  : (isZh ? "可直接填 key，或只填环境变量名" : "Paste key, or use env var only")}
+                placeholder={isZh ? "可直接填 key，或只填环境变量名" : "Paste key, or use env var only"}
                 className={`${fieldClass} font-mono`}
               />
             </label>
@@ -715,6 +929,8 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           {saving === "detection" ? t("config.saving") : t("config.save")}
         </button>
       </SettingsCard>
+      </div>
+      </div>
     </div>
   );
 }

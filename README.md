@@ -4,7 +4,7 @@ Windows 向的**本机桌面**长篇连载工作台（原名幻想作家 / Fanta
 
 内核与 Studio UI fork 自 [InkOS](https://github.com/Narcooo/inkos) v1.8.x（AGPL-3.0）。Electron 壳负责单实例、钉端口、窗口、首启向导和退出杀引擎。稿件落在你选的项目根目录（默认 `%USERPROFILE%\Documents\幻想作家\`），标准 InkOS 布局：`inkos.json`、`books/`、`.inkos/secrets.json`。密钥只写在本机项目里，**不进 git、不进安装包**。
 
-当前版本：**2.1.10**。安装包：`Inkborne-Setup-2.1.10.exe`（同时提供 `FantaWriter-Setup-*` 与 `Fantasy-Writer-Setup-*` 别名；[Releases](https://github.com/qingyou0420/Inkborne/releases)）。
+当前源码版本：**2.2.10**。本地构建安装包：`Inkborne-Setup-2.2.10.exe`（同时提供 `FantaWriter-Setup-*` 与 `Fantasy-Writer-Setup-*` 别名）。已公开发布的安装包见 [Releases](https://github.com/qingyou0420/Inkborne/releases)。
 
 **[更新日志](./CHANGELOG.md)** · **[2.0 蓝图](./docs/2.0重构蓝图-InkOS内核桌面重建方案.md)** · **[上游说明](./docs/UPSTREAM.md)**
 
@@ -28,10 +28,8 @@ git clone https://github.com/qingyou0420/Inkborne.git
 cd Inkborne
 pnpm install
 pnpm build          # 编译 @actalk/inkos-core + Studio dist/
-pnpm test           # 默认跑 core / studio / cli / desktop 全部测试；少数依赖 FTS5 的文件被排除，见 packages/core/vitest.config.ts
-pnpm typecheck      # core 构建 + Studio 前端与服务端 tsc --noEmit
-pnpm lint
-pnpm start          # Electron
+pnpm test           # CI 会跑的子集
+pnpm start          # Electron；首次打开走首启向导
 # 或
 pnpm dev            # 缺 dist 时先 build，再开 Electron
 ```
@@ -48,7 +46,7 @@ pnpm engine:smoke
 pnpm dist:win
 ```
 
-产物在 `dist-installer/Inkborne-Setup-2.1.10.exe`（另有 `FantaWriter-Setup-2.1.10.exe` 与 `Fantasy-Writer-Setup-2.1.10.exe` 别名）。更新扫描同时接受三套前缀。打包前会预构建 Studio、`INKOS_DISABLE_VITE_BUILD=1`，把 `packages/studio/dist` + core 装进 extraResources，并拒绝把 `.env` / `secrets.json` 打进安装包。
+产物在 `dist-installer/Inkborne-Setup-2.2.10.exe`（另有 `FantaWriter-Setup-2.2.10.exe` 与 `Fantasy-Writer-Setup-2.2.10.exe` 别名）。更新扫描同时接受三套前缀。打包前会预构建 Studio、`INKOS_DISABLE_VITE_BUILD=1`，把 `packages/studio/dist` + core 装进 extraResources，并拒绝把 `.env` / `secrets.json` 打进安装包。
 
 调试 CLI（显式根，不要靠 cwd）：
 
@@ -56,7 +54,7 @@ pnpm dist:win
 INKOS_PROJECT_ROOT=/abs/path/to/project pnpm --filter @actalk/inkos exec inkos status
 ```
 
-默认 `pnpm test` 跑 core / studio / cli / desktop 的全部测试文件，只排除确需 SQLite **FTS5** 的少数 core 文件（系统 Node 的 `node:sqlite` 常常没有 FTS5，会报 `no such module: fts5`）。同一个文件里只有部分用例要 FTS5 的，那些用例会跳过，其余照跑。**Electron 37 的 `ELECTRON_RUN_AS_NODE` 有 FTS5**（蓝图 H1）。有 FTS5 的 Node 上可再跑 `pnpm test:core:full` 把排除的文件加回来。Playwright 不进每次 CI，每周日由 `.github/workflows/e2e.yml` 跑，也可以手动触发。
+完整上游 `packages/core` 测试套件依赖 SQLite **FTS5**。系统 Node 的 `node:sqlite` 可能没有 FTS5；**Electron 37 的 `ELECTRON_RUN_AS_NODE` 有 FTS5**（蓝图 H1）。CI 因此跑锁/桌面/引擎绑定子集；发版机再探测 Electron FTS5。有 FTS5 的 Node 上可再跑 `pnpm test:core:full`。
 
 ## 上游
 

@@ -107,7 +107,7 @@ export function ChapterManuscriptTable<T extends ChapterRow>({
           placeholder={isZh ? "搜索章号或标题" : "Search chapter number or title"}
           aria-label={isZh ? "搜索章号或标题" : "Search chapter number or title"}
           data-testid="chapter-table-search"
-          className="w-full max-w-sm rounded-[10px] border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="w-full max-w-sm rounded border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </div>
       {chapters.length > 0 && (

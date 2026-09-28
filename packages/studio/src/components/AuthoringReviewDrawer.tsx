@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuthoringIssue, AuthoringReport } from "../lib/authoring-workspace";
 import { severityLabel } from "../lib/authoring-workspace";
 import { groupReviewIssues } from "../lib/review-dimensions";
-import { Drawer } from "./ui/drawer";
+import { ReadingSidePanel } from "./ReadingSidePanel";
 
 export function AuthoringReviewDrawer({
   open,
@@ -21,6 +21,9 @@ export function AuthoringReviewDrawer({
   onClose,
   onRevise,
   onStop,
+  error,
+  onRetry,
+  reviseDisabled,
 }: {
   readonly open: boolean;
   readonly title: string;
@@ -32,15 +35,26 @@ export function AuthoringReviewDrawer({
   readonly onClose: () => void;
   readonly onRevise: (selectedIssueIds: ReadonlyArray<string>, reuseStale?: boolean) => void;
   readonly onStop?: () => void;
+  readonly error?: string | null;
+  readonly onRetry?: () => void;
+  readonly reviseDisabled?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [reuseStale, setReuseStale] = useState(false);
   const issues = report?.issues ?? [];
+  useEffect(() => {
+    setSelected([]);
+    setReuseStale(false);
+  }, [report?.reportId, currentArtifactId]);
   const historical = Boolean(report && currentArtifactId && !report.targetRefs.includes(currentArtifactId));
   const blocked = Boolean(report?.incomplete || ((report?.stale || historical) && !reuseStale));
+  const stopping = Boolean(busy && onStop);
 
   return (
-    <Drawer open={open} title={title} onClose={onClose} testId="authoring-review-drawer">
+    <ReadingSidePanel open={open} title={title} onClose={onClose} testId="authoring-review-drawer">
+      {busy ? <p role="status" className="mb-4 text-sm text-muted-foreground">{isZh ? "正在审查，可继续对照文稿…" : "Reviewing. You can keep reading the manuscript…"}</p> : null}
+      {error ? <p role="alert" className="mb-4 text-sm text-destructive">{error}</p> : null}
+      {onRetry && (report || error) ? <button type="button" className="btn-ghost mb-4" disabled={busy || reviseDisabled} onClick={onRetry}>{isZh ? "重新审查" : "Retry review"}</button> : null}
       {!report ? (
         <p className="text-sm text-muted-foreground">{isZh ? "还没有审查报告。" : "No report yet."}</p>
       ) : (
@@ -90,33 +104,35 @@ export function AuthoringReviewDrawer({
             ))
           )}
           {busy && progressLabel ? <p className="text-sm text-muted-foreground">{progressLabel}</p> : null}
-          <div className="flex gap-2 pt-2">
-            <button
-              type="button"
-              className="rounded-lg border border-border px-3 py-2 text-sm"
-              disabled={busy}
-              onClick={() => setSelected(issues.map((issue) => issue.issueId))}
-            >
-              {isZh ? "全选" : "Select all"}
-            </button>
-            <button
-              type="button"
-              className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-              disabled={busy ? !onStop : selected.length === 0 || blocked}
-              onClick={() => {
-                if (busy) onStop?.();
-                else onRevise(selected, reuseStale);
-              }}
-              data-testid={busy ? "write-stop" : "write-revise"}
-            >
-              {busy
-                ? (isZh ? "停止" : "Stop")
-                : (isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`)}
-            </button>
-          </div>
+          {issues.length > 0 || stopping ? (
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                className="rounded-lg border border-border px-3 py-2 text-sm"
+                disabled={busy}
+                onClick={() => setSelected(issues.map((issue) => issue.issueId))}
+              >
+                {isZh ? "全选" : "Select all"}
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
+                disabled={stopping ? false : busy || reviseDisabled || selected.length === 0 || blocked}
+                onClick={() => {
+                  if (stopping) onStop?.();
+                  else onRevise(selected, reuseStale);
+                }}
+                data-testid={stopping ? "write-stop" : "write-revise"}
+              >
+                {stopping
+                  ? (isZh ? "停止" : "Stop")
+                  : (isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`)}
+              </button>
+            </div>
+          ) : null}
         </div>
       )}
-    </Drawer>
+    </ReadingSidePanel>
   );
 }
 

@@ -47,7 +47,9 @@ describe("ask page layout", () => {
     expect(app).toMatch(/deriveBookChromeTab/);
     expect(nav).not.toMatch(/onToggleChat/);
     expect(nav).not.toMatch(/talkOpen/);
-    expect(nav).toMatch(/justify-between/);
+    expect(nav).toMatch(/ink-book-nav/);
+    expect(nav).toMatch(/book-stage-strip/);
+    expect(nav).not.toMatch(/<StageTools/);
     expect(nav).toMatch(/nav\.toAsk\(bookId\)/);
   });
 
@@ -57,12 +59,28 @@ describe("ask page layout", () => {
     const ground = read("src/pages/BookGround.tsx");
     const server = read("src/api/server.ts");
     expect(rail).toMatch(/\/books\/\$\{bookId\}\/story-card/);
-    expect(rail).toMatch(/storyCardSettled/);
+    expect(ground).toMatch(/<AskStoryCard[\s\S]*?derivedFromCanon=\{!legacyEditing && cardData\?\.source === "derived"\}/);
+    expect(ground).toMatch(/editable=\{legacyEditing\}/);
     expect(rail).toMatch(/ask-story-card/);
     expect(ground).toMatch(/\/books\/\$\{bookId\}\/story-card/);
     expect(study).not.toMatch(/truth\/story\/story_card/);
     expect(server).toMatch(/\/api\/v1\/books\/:id\/story-card/);
     expect(server).toMatch(/truth:written/);
+  });
+
+  it("makes 整理正典 → 采用并建书 the only book-create entry", () => {
+    const app = read("src/App.tsx");
+    const panel = read("src/components/AskCanonPanel.tsx");
+    const prompt = read("../core/src/agent/agent-system-prompt.ts");
+    expect(app).toMatch(/data-testid="book-create-ask"/);
+    expect(app).toMatch(/AskCanonPanel/);
+    expect(app).not.toMatch(/AskCreateRail/);
+    expect(panel).toMatch(/采用并建书/);
+    expect(panel).toMatch(/ask-adopt-create/);
+    expect(panel).toMatch(/ask-length-confirm/);
+    expect(panel).not.toMatch(/propose_action/);
+    expect(prompt).toMatch(/采用并建书/);
+    expect(prompt).not.toMatch(/默认 200\/3000/);
   });
 
   it("strips book-page breadcrumbs and sends sidebar sessions to /ask", () => {

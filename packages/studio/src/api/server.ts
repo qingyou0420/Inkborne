@@ -126,6 +126,7 @@ import {
   createSpinoffBookTool,
   createImitationBookTool,
   createSubAgentTool,
+  createAskBookCandidate,
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
@@ -201,6 +202,7 @@ import {
 import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
+import { attachmentDisposition } from "./attachment-disposition.js";
 import { ApiError } from "./errors.js";
 import {
   formatAgentModelReboundNotice,
@@ -224,6 +226,16 @@ import {
   saveAuthorProfile,
   toAuthorPublic,
 } from "../lib/author-io.js";
+import {
+  BOOK_COVER_MAX_BYTES,
+  BookCoverError,
+  bookCoverExtensionFor,
+  clearBookCoverFile,
+  isSafeBookCoverRelative,
+  readBookCoverFile,
+  saveBookCoverFile,
+  withStudioCoverSrc,
+} from "../lib/book-cover-io.js";
 import {
   deleteStudioTaskSnapshot,
   loadStudioTaskSnapshot,
@@ -278,11 +290,6 @@ const PIPELINE_STAGES: Record<string, ReadonlyArray<BilingualLabel>> = {
 
 function pipelineStages(agent: string, lang: StudioLanguage = "zh"): string[] | undefined {
   return PIPELINE_STAGES[agent]?.map((stage) => pick(lang, stage.zh, stage.en));
-}
-
-function attachmentDisposition(fileName: string): string {
-  const safeAscii = fileName.replace(/[^A-Za-z0-9._-]+/g, "_") || "download";
-  return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 const AGENT_LABELS: Record<string, BilingualLabel> = {
@@ -1333,6 +1340,8 @@ function toolResultText(result: unknown, lang: StudioLanguage = "zh"): string {
 
 async function executeConfirmedProductionAction(args: {
   readonly pipeline: PipelineRunner;
+  readonly project: ProjectConfig;
+  readonly conversation?: string;
   readonly root: string;
   readonly sessionId: string;
   readonly bookId: string | null;
@@ -1385,11 +1394,35 @@ async function executeConfirmedProductionAction(args: {
   if (args.requestedIntent === "create_book") {
     const payload = actionPayload?.createBook;
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createSubAgentTool(args.pipeline, null, args.root, {
-      actionPayload,
-      workerSkills: (worker) => worker === "architect" ? productionSkills("longWriting") : [],
-    });
-    agent = "architect";
+    // Keep the task lifecycle, but creating a book belongs to 问心. The
+    // legacy architect chain also generates settings and outline before the
+    // author can review canon, and must not run from this confirmation.
+    tool = {
+      ...createSubAgentTool(args.pipeline, null, args.root),
+      name: "ask_create",
+      async execute() {
+        const result = await createAskBookCandidate({
+          projectRoot: args.root,
+          project: args.project,
+          conversation: args.conversation?.trim() || args.instruction,
+          requirements: [
+            "作者原文是人物、国名、情节与结局的依据。确认卡只是摘要，未提及不代表删除；仅作者明确的改动可以覆盖此前约定。",
+            "只整理故事正典候选，不创作另一个故事，不生成设定或卷纲，缺失信息列为待确认。",
+            `本次确认指令：\n${args.instruction}`,
+            `确认卡字段：\n${JSON.stringify(payload)}`,
+          ].join("\n\n"),
+          book: { ...payload, title },
+          signal: args.signal,
+        });
+        return {
+          content: [{ type: "text" as const, text: pick(lang,
+            `《${title}》已建书，故事正典已整理为候选。请核对、审查并采用后再进入研墨。`,
+            `Created "${title}" with a canon candidate. Review and adopt it before generating settings.`) }],
+          details: { kind: "book_created", bookId: result.bookId, title, artifactId: result.artifactId, adopted: false },
+        };
+      },
+    };
+    agent = "ask";
     params = {
       agent,
       instruction: args.instruction,
@@ -1684,7 +1717,7 @@ async function executeConfirmedProductionAction(args: {
     id,
     tool: tool.name,
     agent,
-    label: resolveToolLabel(tool.name, agent, lang),
+    label: tool.name === "ask_create" ? pick(lang, "问心 · 整理正典", "Ask · Organize canon") : resolveToolLabel(tool.name, agent, lang),
     status: "running",
     args: params,
     stages: tool.name === "short_fiction_run"
@@ -1860,6 +1893,7 @@ function deriveBookIdFromTitle(title: string): string {
 }
 
 async function completeBookExists(bookDir: string): Promise<boolean> {
+  if (await isLightweightAuthoringBook(bookDir)) return true;
   try {
     await access(join(bookDir, "book.json"));
     await access(join(bookDir, "story", "story_bible.md"));
@@ -1938,7 +1972,7 @@ async function loadStudioBookListSummary(
   } catch {
     // Stage is display-only; a missing workflow file must not hide the book.
   }
-  return { ...book, chaptersWritten, stage, coverImagePath: book.coverImagePath };
+  return withStudioCoverSrc({ ...book, chaptersWritten, stage });
 }
 
 function isCustomServiceId(serviceId: string): boolean {
@@ -3245,7 +3279,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const book = await state.loadBookConfig(id);
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
-      return c.json({ book, chapters, nextChapter });
+      return c.json({ book: withStudioCoverSrc(book), chapters, nextChapter });
     } catch (error) {
       const corrupt = asCorruptBookError(error);
       if (corrupt) {
@@ -3258,6 +3292,77 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
+  });
+
+  app.get("/api/v1/books/:id/cover", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
+    }
+    try {
+      const book = await state.loadBookConfig(id);
+      const file = await readBookCoverFile(state.bookDir(id), book);
+      if (!file) return c.body(null, 404);
+      return new Response(new Uint8Array(file.bytes), {
+        headers: {
+          "Content-Type": file.contentType,
+          "Cache-Control": "no-cache",
+        },
+      });
+    } catch {
+      return c.notFound();
+    }
+  });
+
+  app.post("/api/v1/books/:id/cover", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
+    }
+    const body = await c.req.parseBody().catch(() => ({} as Record<string, unknown>));
+    const file = body.file ?? body.cover;
+    if (!(file instanceof File)) {
+      return c.json({ error: "请选择封面文件" }, 400);
+    }
+    if (!bookCoverExtensionFor(file.type, file.name)) {
+      return c.json({ error: "封面只支持 png / jpg / jpeg / webp / gif" }, 400);
+    }
+    if (file.size > BOOK_COVER_MAX_BYTES) {
+      return c.json({ error: "封面不能超过 6 MB" }, 400);
+    }
+    let book;
+    try {
+      book = await state.loadBookConfig(id);
+    } catch {
+      return c.json({ error: `Book "${id}" not found` }, 404);
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const updated = await saveBookCoverFile(state.bookDir(id), book, bytes, file.type, file.name);
+      await state.saveBookConfig(id, updated);
+      return c.json({ ok: true, book: withStudioCoverSrc(updated) });
+    } catch (error) {
+      if (error instanceof BookCoverError) {
+        return c.json({ error: error.message }, 400);
+      }
+      return c.json({ error: error instanceof Error ? error.message : "上传失败" }, 400);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/cover", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
+    }
+    let book;
+    try {
+      book = await state.loadBookConfig(id);
+    } catch {
+      return c.json({ error: `Book "${id}" not found` }, 404);
+    }
+    const updated = await clearBookCoverFile(state.bookDir(id), book);
+    await state.saveBookConfig(id, updated);
+    return c.json({ ok: true, book: withStudioCoverSrc(updated) });
   });
 
   app.get("/api/v1/books/:id/stage", async (c) => {
@@ -3983,11 +4088,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     throw new BookWriteLockError(id, existingLock.lockPath, lockData, existingLock);
   }
 
+  async function rejectLegacyPipelineForAuthoringBook(id: string): Promise<void> {
+    if (await isLightweightAuthoringBook(state.bookDir(id))) {
+      throw new ApiError(400, "AUTHORING_WRITE_REQUIRED", "四阶段书请在落笔中生成候选并采用");
+    }
+  }
+
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
     if (!isSafeBookId(id)) {
       throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
     }
+    await rejectLegacyPipelineForAuthoringBook(id);
     const body = await c.req.json<{ wordCount?: number; skipPreviousApproval?: boolean }>().catch(() => ({
       wordCount: undefined as number | undefined,
       skipPreviousApproval: undefined as boolean | undefined,
@@ -4080,6 +4192,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${id}"`);
     }
+    await rejectLegacyPipelineForAuthoringBook(id);
     const body = await c.req.json<{ wordCount?: number; context?: string; skipPreviousApproval?: boolean }>().catch(() => ({
       wordCount: undefined as number | undefined,
       context: undefined as string | undefined,
@@ -4456,6 +4569,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const num = parseInt(c.req.param("num"), 10);
     const body = await c.req.json<{ override?: { who?: string; why?: string } }>().catch(() => ({
       override: undefined as { who?: string; why?: string } | undefined,
@@ -4487,6 +4601,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const num = parseInt(c.req.param("num"), 10);
 
     try {
@@ -5703,6 +5818,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId: reqSessionId,
       clientRequestId: reqClientRequestId,
       sessionKind: reqSessionKind,
+      authoringStage: reqAuthoringStage,
       actionSource: reqActionSource,
       requestedIntent: reqRequestedIntent,
       actionPayload: reqActionPayload,
@@ -5720,6 +5836,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId?: string;
       clientRequestId?: unknown;
       sessionKind?: string;
+      authoringStage?: unknown;
       actionSource?: string;
       requestedIntent?: string;
       actionPayload?: unknown;
@@ -5733,6 +5850,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionServiceOverride?: string;
     }>();
     const sessionId = reqSessionId;
+    if (reqAuthoringStage !== undefined && reqAuthoringStage !== "ask") {
+      throw new ApiError(400, "INVALID_AUTHORING_STAGE", "Invalid authoringStage");
+    }
     if (!instruction?.trim()) {
       return c.json({ error: "No instruction provided" }, 400);
     }
@@ -5786,6 +5906,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         reqSessionKind,
         bookSession.sessionKind ?? (agentBookId ? "book" : "chat"),
       );
+      // Old desktop clients do not send the surface yet. Existing four-stage
+      // books still need Ask isolation when their generic book chat is resumed.
+      const authoringStage = reqAuthoringStage === "ask"
+        || (agentBookId && sessionKind === "book" && await isLightweightAuthoringBook(join(root, "books", agentBookId)))
+        ? "ask" as const
+        : undefined;
+      if (authoringStage && (!agentBookId || sessionKind !== "book")) {
+        throw new ApiError(400, "INVALID_ASK_SURFACE", "问心讨论需要绑定当前作品，请返回问心页面继续。");
+      }
+      if (authoringStage && requestedIntent && isConfirmedProductionAction(actionSource, requestedIntent)) {
+        throw new ApiError(409, "ASK_STAGE_ACTION_REQUIRED", "问心聊天只讨论故事。请在右侧正典面板整理或重新生成正典，再审查并采用；设定、大纲和正文请在对应阶段生成。");
+      }
       if (bookSession.sessionKind !== sessionKind || (playMode && bookSession.playMode !== playMode)) {
         const updatedSession = await createAndPersistBookSession(
           root,
@@ -6057,6 +6189,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
           const exec = await executeConfirmedProductionAction({
             pipeline,
+            project: config,
+            conversation: bookSession.messages
+              .filter((message) => message.role === "user" || message.role === "assistant")
+              .map((message) => `${message.role === "user" ? "用户消息（含原始讨论和确认指令，摘要省略不代表删除原约定）" : "助手建议（未经作者确认不算事实）"}：\n${message.content}`)
+              .join("\n\n"),
             root,
             sessionId: bookSession.sessionId,
             bookId: agentBookId,
@@ -6104,7 +6241,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               bookCreateStatus.delete(createdBookId);
               const createPayload = actionPayload?.createBook;
               try {
-                await persistAskArtifacts({
+                if (exec.tool !== "ask_create") await persistAskArtifacts({
                   bookDir: join(root, "books", createdBookId),
                   card: {
                     workingTitle: createPayload?.title ?? book?.title ?? createdBookId,
@@ -6122,6 +6259,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               broadcast("book:created", {
                 bookId: createdBookId,
                 sessionId: bookSession.sessionId,
+                ...(exec.tool === "ask_create" ? { canonCandidate: true } : {}),
                 ...(book ? { book } : {}),
               });
             }
@@ -6212,6 +6350,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           projectRoot: root,
           bookId: agentBookId,
           sessionKind,
+          authoringStage,
           playMode,
           actionSource,
           redirectNewChapters: sessionKind === "book",
@@ -6547,6 +6686,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/revise/:chapter", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const chapterNum = parseInt(c.req.param("chapter"), 10);
     const bookDir = state.bookDir(id);
     const body = await c.req
@@ -6931,6 +7071,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       content = normalizeVolumeMapChapterHeadings(content, {
         language: book?.language === "en" ? "en" : "zh",
       });
+      if (await isLightweightAuthoringBook(state.bookDir(id))) {
+        return c.json({ error: "请在织卷中编辑候选并采用，不要直接改已采用卷纲。" }, 400);
+      }
     }
     const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
     const { dirname: dirnameFs } = await import("node:path");
@@ -6990,13 +7133,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
         ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
-        ...(updates.coverImagePath !== undefined
-          ? { coverImagePath: updates.coverImagePath || undefined }
-          : {}),
+        ...(updates.coverImagePath === undefined
+          ? {}
+          : !updates.coverImagePath
+            ? { coverImagePath: undefined }
+            : isSafeBookCoverRelative(updates.coverImagePath)
+              ? { coverImagePath: updates.coverImagePath }
+              : {}),
         updatedAt: new Date().toISOString(),
       };
       await state.saveBookConfig(id, updated);
-      return c.json({ ok: true, book: updated });
+      return c.json({ ok: true, book: withStudioCoverSrc(updated) });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -7006,6 +7153,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/rewrite/:chapter", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const chapterNum = parseInt(c.req.param("chapter"), 10);
     const body: { brief?: string } = await c.req
       .json<{ brief?: string }>()
@@ -7037,6 +7185,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/resync/:chapter", async (c) => {
     const id = c.req.param("id");
+    await rejectLegacyPipelineForAuthoringBook(id);
     const chapterNum = parseInt(c.req.param("chapter"), 10);
     const body: { brief?: string } = await c.req
       .json<{ brief?: string }>()
@@ -7869,7 +8018,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(new Uint8Array(archive), {
         headers: {
           "Content-Type": "application/gzip",
-          "Content-Disposition": `attachment; filename="${encodeURIComponent(id)}.tar.gz"`,
+          "Content-Disposition": attachmentDisposition(`${id}.tar.gz`),
         },
       });
     } catch (error) {
@@ -7976,6 +8125,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       raw.authoringRoles = roles;
       await saveRawConfig(root, raw);
     },
+    broadcast,
   });
 
   return app;
@@ -7997,41 +8147,8 @@ export async function startStudioServer(
 
   // Serve frontend static files — single process for API + frontend
   if (options?.staticDir) {
-    const { readFile: readFileFs } = await import("node:fs/promises");
-    const { join: joinPath } = await import("node:path");
-    const { existsSync } = await import("node:fs");
-
-    // Serve static assets (js, css, etc.)
-    app.get("/assets/*", async (c) => {
-      const filePath = joinPath(options.staticDir!, c.req.path);
-      try {
-        const content = await readFileFs(filePath);
-        const ext = filePath.split(".").pop() ?? "";
-        const contentTypes: Record<string, string> = {
-          js: "application/javascript",
-          css: "text/css",
-          svg: "image/svg+xml",
-          png: "image/png",
-          ico: "image/x-icon",
-          json: "application/json",
-        };
-        return new Response(content, {
-          headers: { "Content-Type": contentTypes[ext] ?? "application/octet-stream" },
-        });
-      } catch {
-        return c.notFound();
-      }
-    });
-
-    // SPA fallback — serve index.html for all non-API routes
-    const indexPath = joinPath(options.staticDir!, "index.html");
-    if (existsSync(indexPath)) {
-      const indexHtml = await readFileFs(indexPath, "utf-8");
-      app.get("*", (c) => {
-        if (c.req.path.startsWith("/api/v1/")) return c.notFound();
-        return c.html(indexHtml);
-      });
-    }
+    const { mountStudioStaticFiles } = await import("./static-assets.js");
+    await mountStudioStaticFiles(app, options.staticDir);
   }
 
   const hostname = options?.hostname ?? "127.0.0.1";

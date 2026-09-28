@@ -69,6 +69,18 @@ describe("storyFrameHasFourSections", () => {
 });
 
 describe("deriveBookStage", () => {
+  it("keeps an unadopted Ask candidate at 问心 despite old confirmation marks", () => {
+    const snap = deriveBookStage(facts({
+      askCandidatePending: true,
+      authorIntentNonEmpty: true,
+      storyCardExists: true,
+      askConfirmedAt: "2026-09-01T00:00:00.000Z",
+      groundConfirmedAt: "2026-09-01T00:00:00.000Z",
+      weaveLockedAt: "2026-09-01T00:00:00.000Z",
+    }));
+    expect(snap).toEqual({ stage: "ask", steps: { ask: "current", ground: "todo", weave: "todo", write: "todo" } });
+  });
+
   it("starts a bare book at 问心", () => {
     const snap = deriveBookStage(facts());
     expect(snap.stage).toBe("ask");
@@ -130,6 +142,17 @@ describe("deriveBookStage", () => {
 });
 
 describe("migrateWorkflowFromFacts", () => {
+  it("does not infer or retain completed stages from a pending candidate's author source", () => {
+    const pending = facts({ askCandidatePending: true, authorIntentNonEmpty: true });
+    const initial = migrateWorkflowFromFacts(null, pending, "2026-09-17T00:00:00.000Z");
+    expect(initial.workflow).toEqual({ lastStage: "ask" });
+    const stale = migrateWorkflowFromFacts({
+      lastStage: "ask", askConfirmedAt: "old", groundConfirmedAt: "old", weaveLockedAt: "old",
+    }, pending, "2026-09-17T00:00:00.000Z");
+    expect(stale).toEqual({ workflow: { lastStage: "ask" }, wrote: true });
+    expect(migrateWorkflowFromFacts(stale.workflow, pending, "later").wrote).toBe(false);
+  });
+
   it("writes confirm timestamps for an existing story_frame book", () => {
     const { workflow, wrote } = migrateWorkflowFromFacts(null, facts({
       authorIntentNonEmpty: true,

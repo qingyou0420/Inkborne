@@ -4,6 +4,19 @@ import { createSkillRegistry } from "../skills/index.js";
 
 describe("buildAgentSystemPrompt", () => {
   describe("mode isolation", () => {
+    it("keeps Ask discussion separate from legacy book production in both languages", () => {
+      const zh = buildAgentSystemPrompt("醉词", "zh", "book", { authoringStage: "ask", actionSource: "button", requestedIntent: "write_next" });
+      const en = buildAgentSystemPrompt("Story", "en", "book", { authoringStage: "ask" });
+      expect(zh).toContain("问心只整理故事正典");
+      expect(zh).toContain("更多 → 重新生成");
+      expect(zh).toContain("作者的明确约定高于助手建议和审查意见");
+      expect(en).toContain("A chat reply neither saves a canon candidate nor changes adopted content");
+      for (const prompt of [zh, en]) {
+        expect(prompt).not.toContain("sub_agent");
+        expect(prompt).not.toContain("必须调用 write_truth_file");
+        expect(prompt).not.toContain("architect");
+      }
+    });
     it("defaults no-book sessions to plain chat, not book creation", () => {
       const prompt = buildAgentSystemPrompt(null, "zh");
       expect(prompt).toContain("普通聊天助手");
@@ -167,22 +180,19 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   describe("book-create mode", () => {
-    it("gates long-form creation behind a confirmation proposal", () => {
+    it("discusses canon and points to the right-rail create path", () => {
       const prompt = buildAgentSystemPrompt(null, "zh", "book-create");
-      expect(prompt).toContain("建书助手");
-      expect(prompt).toContain("确认是否创建");
-      expect(prompt).toContain("分阶段");
-      expect(prompt).toContain("世界观与规则");
-      expect(prompt).toContain("人称/比例/禁忌/节奏要求");
-      expect(prompt).toContain("propose_action");
-      expect(prompt).toContain("create_book");
+      expect(prompt).toContain("问心");
+      expect(prompt).toContain("整理正典");
+      expect(prompt).toContain("采用并建书");
+      expect(prompt).toContain("右侧正典面板");
+      expect(prompt).toContain("不要调用 propose_action");
+      expect(prompt).not.toContain("可用工具：propose_action");
+      expect(prompt).not.toContain("create_book");
+      expect(prompt).not.toContain("200/3000");
       expect(prompt).not.toContain("sub_agent");
       expect(prompt).not.toContain("architect");
-      expect(prompt).toContain("标题");
-      expect(prompt).toContain("题材");
-      expect(prompt).toContain("世界观");
-      expect(prompt).toContain("主角");
-      expect(prompt).toContain("核心冲突");
+      expect(prompt).toContain("篇幅");
       expect(prompt).not.toContain("short_fiction_run");
       expect(prompt).not.toContain("generate_cover");
       expect(prompt).not.toContain("play_start");
@@ -203,8 +213,13 @@ describe("buildAgentSystemPrompt", () => {
 
     it("English book-create mode is isolated from short and play before confirmation", () => {
       const prompt = buildAgentSystemPrompt(null, "en", "book-create");
-      expect(prompt).toContain("book creation assistant");
-      expect(prompt).toContain("propose_action");
+      expect(prompt).toContain("Ask agent");
+      expect(prompt).toContain("Create canon");
+      expect(prompt).toContain("Adopt and create book");
+      expect(prompt).toContain("Do not call propose_action");
+      expect(prompt).not.toContain("Available tools: propose_action");
+      expect(prompt).not.toContain("create_book");
+      expect(prompt).not.toContain("200/3000");
       expect(prompt).not.toContain("agent=\"architect\"");
       expect(prompt).not.toContain("short_fiction_run");
       expect(prompt).not.toContain("play_start");

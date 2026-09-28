@@ -52,6 +52,15 @@ describe("localizeKnownRuntimeMessage", () => {
     expect(message).not.toMatch(/produced no token/i);
   });
 
+  it("maps browser network failures to a retry hint without implying engine death", () => {
+    const expected = "请求暂时失败，请重试；若正文已出现可先刷新";
+    expect(localizeKnownRuntimeMessage("Failed to fetch")).toBe(expected);
+    expect(localizeKnownRuntimeMessage("NetworkError when attempting to fetch resource.")).toBe(expected);
+    expect(localizeKnownRuntimeMessage("NetworkError")).toBe(expected);
+    expect(localizeKnownRuntimeMessage(expected)).toBe(expected);
+    expect(expected).not.toContain("重启应用");
+  });
+
   it("localizes in-process write locks as 写入被占用, not a read failure", () => {
     const message = localizeKnownRuntimeMessage(
       'Book "醉词" is locked by an active write (pid:123 started:2026-09-06T00:00:00.000Z). This in-process lock is not recovered automatically while the holder is still alive. Abort the running task or POST /api/v1/books/:id/lock/force-release, then retry.',

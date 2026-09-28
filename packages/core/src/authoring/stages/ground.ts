@@ -7,7 +7,14 @@
 import { join } from "node:path";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { withBookWriteLock } from "../book-lock.js";
-import { assembleAuthoringContext, loadCanonDocument, serializeCanonBrief } from "../context.js";
+import {
+  assertAdoptedCanonReady,
+  assembleAuthoringContext,
+  loadCanonDocument,
+  packAdoptedSettings,
+  serializeCanonBrief,
+  type AdoptedSettingEntry,
+} from "../context.js";
 import { asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRoleObserved } from "../llm.js";
 import { combineAuthoringUsage } from "../token-usage.js";
@@ -17,6 +24,7 @@ import {
   loadArtifact,
   loadManifest,
   loadReport,
+  loadRunControl,
   loadSettingsCatalog,
   newArtifactId,
   newRunId,
@@ -27,8 +35,9 @@ import {
   saveSettingsCatalog,
   type AuthoringStoreRoot,
 } from "../store.js";
-import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringTokenUsage, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
+import type { AuthoringLlmFn, AuthoringReviewReport, AuthoringRunRecord, AuthoringTokenUsage, SettingsCatalog, SettingsCatalogEntry } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
+import { closeImpactItemsAfterAdopt } from "./impact.js";
 
 const DEFAULT_CATEGORIES = ["世界与时代", "人物", "关系与势力", "地点", "规则与物品", "历史与其他"];
 
@@ -80,6 +89,29 @@ function uniqueCatalogFile(preferred: string, reservedKeys: Set<string>): string
   return candidate;
 }
 
+async function loadPeerSettingEntries(
+  root: AuthoringStoreRoot,
+  catalog: SettingsCatalog,
+  excludeId: string,
+): Promise<AdoptedSettingEntry[]> {
+  const peers: AdoptedSettingEntry[] = [];
+  for (const entry of catalog.entries) {
+    if (entry.archived || entry.id === excludeId) continue;
+    const artifactId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
+    if (!artifactId) continue;
+    const loaded = await loadArtifact(root, artifactId);
+    if (!loaded?.body.trim()) continue;
+    peers.push({
+      id: entry.id,
+      name: entry.name,
+      category: entry.category,
+      artifactId,
+      body: loaded.body.trim(),
+    });
+  }
+  return peers;
+}
+
 function fileForEntry(entry: Pick<SettingsCatalogEntry, "category" | "name" | "id">): string {
   return entry.category === "人物"
     ? `story/roles/主要角色/${slug(entry.name)}.md`
@@ -126,6 +158,7 @@ function mergeCatalogIdentities(
 
 export async function proposeSettingsCatalog(input: GroundRuntime): Promise<SettingsCatalog> {
   if (!input.root.bookId) throw new Error("研墨需要先采用正典并建书。");
+  await assertAdoptedCanonReady(input.root);
   const existing = await loadSettingsCatalog(input.root);
   const { canon } = await loadCanonDocument(input.root);
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
@@ -162,8 +195,12 @@ export async function proposeSettingsCatalog(input: GroundRuntime): Promise<Sett
 export async function generateGroundEntries(input: GroundRuntime & {
   readonly entryIds?: readonly string[];
   readonly regenerate?: boolean;
+  readonly requirements?: string;
+  readonly runId?: string;
+  readonly onProgress?: (run: AuthoringRunRecord) => void;
 }): Promise<{ generated: string[]; failed: string[]; runId: string }> {
   if (!input.root.bookId) throw new Error("研墨需要已建的书。");
+  await assertAdoptedCanonReady(input.root);
   const catalog = await loadSettingsCatalog(input.root);
   const targets = catalog.entries.filter((entry) => {
     if (entry.archived) return false;
@@ -172,32 +209,56 @@ export async function generateGroundEntries(input: GroundRuntime & {
     return !entry.adoptedArtifactId && !entry.candidateArtifactId;
   });
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
-  const { canon } = await loadCanonDocument(input.root);
-  const runId = newRunId();
+  const ctx = await assembleAuthoringContext(input.root, { stage: "ground" });
+  const runId = input.runId ?? newRunId();
   const generated: string[] = [];
   const failed: string[] = [];
   let usage: AuthoringTokenUsage | undefined;
-  await saveRun(input.root, {
-    runId,
-    stage: "ground",
-    operation: "generate",
-    roleId: "ground.main",
-    status: "running",
-    bookId: input.root.bookId,
-    progressDone: 0,
-    progressTotal: targets.length,
-    modelSnapshot: resolved.snapshot,
-    producedArtifactIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
+  const failedReasons: string[] = [];
+  const startedAt = new Date().toISOString();
+  const persistRun = async (status: AuthoringRunRecord["status"], extra?: { error?: string }) => {
+    const record = {
+      runId,
+      stage: "ground" as const,
+      operation: "generate" as const,
+      roleId: "ground.main" as const,
+      status,
+      bookId: input.root.bookId,
+      progressDone: generated.length + failed.length,
+      progressTotal: targets.length,
+      progressLabel: targets.length
+        ? `已生成 ${generated.length}/${targets.length} 条${failed.length ? ` · 失败 ${failed.length}` : ""}`
+        : "没有需要生成的条目",
+      modelSnapshot: resolved.snapshot,
+      producedArtifactIds: generated,
+      error: extra?.error ?? (failedReasons.length ? failedReasons.join("；") : undefined),
+      ...(usage ? { usage } : {}),
+      createdAt: startedAt,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRun(input.root, record);
+    input.onProgress?.(record);
+  };
+  await persistRun("running");
   for (const entry of targets) {
+    if (await loadRunControl(input.root, runId) === "cancel") {
+      await persistRun("cancelled");
+      await saveSettingsCatalog(input.root, catalog);
+      return { generated, failed, runId };
+    }
     try {
+      const priorId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
+      const prior = priorId ? await loadArtifact(input.root, priorId) : null;
+      const peers = await loadPeerSettingEntries(input.root, catalog, entry.id);
+      const packedPeers = packAdoptedSettings(peers, `${entry.category} ${entry.name}`, 4000, peers.length > 4);
       const observed = await completeRoleObserved(resolved, [
         `撰写设定条目「${entry.name}」（分类：${entry.category}）。输出 Markdown 正文，不要 JSON。`,
-        serializeCanonBrief(canon),
+        ctx.text,
+        packedPeers.text ? `【同书其他条目摘要】\n${packedPeers.text}` : "",
         "只写这一条，不要改其他条目。",
-      ].join("\n"), { llm: input.llm });
+        input.requirements ? `作者本次要求：\n${input.requirements}` : "",
+        prior ? `当前设定（按本次要求保留或调整）：\n${prior.body}` : "",
+      ].filter(Boolean).join("\n"), { llm: input.llm });
       usage = combineAuthoringUsage(usage, observed.usage);
       const text = observed.content;
       const artifactId = newArtifactId("ground", entry.id);
@@ -209,36 +270,25 @@ export async function generateGroundEntries(input: GroundRuntime & {
         source: "generate",
         status: "candidate",
         bodyPath: entry.file,
-        inputRefs: [{ kind: "canon", id: "canon" }],
+        inputRefs: [{ kind: "canon", id: "canon" }, ...ctx.refs],
         createdAt: new Date().toISOString(),
         runId,
         label: entry.name,
       }, text);
       entry.candidateArtifactId = artifactId;
       generated.push(entry.id);
+      await saveSettingsCatalog(input.root, catalog);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       failed.push(entry.id);
-      void error;
+      failedReasons.push(`${entry.name}：${message}`);
     }
-    await saveRun(input.root, {
-      runId,
-      stage: "ground",
-      operation: "generate",
-      roleId: "ground.main",
-      status: failed.length && generated.length + failed.length >= targets.length
-        ? (generated.length ? "partial" : "failed")
-        : (generated.length + failed.length >= targets.length ? "completed" : "running"),
-      bookId: input.root.bookId,
-      progressDone: generated.length + failed.length,
-      progressTotal: targets.length,
-      modelSnapshot: resolved.snapshot,
-      producedArtifactIds: generated,
-      ...(usage ? { usage } : {}),
-      error: failed.length ? `失败条目：${failed.join("、")}` : undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    const done = generated.length + failed.length >= targets.length;
+    await persistRun(
+      done ? (generated.length === 0 ? "failed" : failed.length ? "partial" : "completed") : "running",
+    );
   }
+  if (targets.length === 0) await persistRun("completed");
   await saveSettingsCatalog(input.root, catalog);
   const manifest = await loadManifest(input.root);
   await saveManifest(input.root, {
@@ -327,10 +377,12 @@ async function adoptGroundEntriesInner(input: GroundRuntime & {
       settingsTarget: catalog.entries.filter((entry) => !entry.archived).length,
     },
   });
+  if (adopted.length) await closeImpactItemsAfterAdopt(input.root, { ground: adopted });
   return { adopted };
 }
 
 export async function reviseGroundEntry(input: GroundRuntime & {
+  readonly requirements?: string;
   readonly entryId?: string;
   readonly reportId: string;
   readonly selectedIssueIds: readonly string[];
@@ -365,6 +417,7 @@ export async function reviseGroundEntry(input: GroundRuntime & {
     const observed = await completeRoleObserved(resolved, [
       `按意见修改设定「${entry.name}」（id:${entry.id}）。只输出该条目 Markdown。不要改其他条目。`,
       ...issues.map((issue) => `- ${issue.title}: ${issue.suggestion ?? ""}`),
+      input.requirements ? `作者本次要求：\n${input.requirements}` : "",
       loaded.body,
     ].join("\n"), { llm: input.llm });
     const text = observed.content;
@@ -392,6 +445,7 @@ export async function reviseGroundEntry(input: GroundRuntime & {
 
 export async function reviseGroundEntries(
   input: GroundRuntime & {
+    readonly requirements?: string;
     readonly entryId?: string;
     readonly reportId: string;
     readonly selectedIssueIds: readonly string[];

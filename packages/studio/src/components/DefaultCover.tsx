@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { useState } from "react";
+
 export function DefaultCover({
   title,
   coverSrc,
@@ -11,12 +13,14 @@ export function DefaultCover({
   readonly title: string;
   readonly coverSrc?: string;
 }) {
-  if (coverSrc) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (coverSrc && failedSrc !== coverSrc) {
     return (
       <img
         src={coverSrc}
         alt={title}
         className="aspect-[3/4] w-full rounded-md border border-border/50 object-cover"
+        onError={() => setFailedSrc(coverSrc)}
       />
     );
   }

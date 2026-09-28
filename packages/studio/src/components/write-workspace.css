@@ -1,0 +1,61 @@
+/* Manuscript workspace. SPDX-License-Identifier: AGPL-3.0-only */
+.one-workspace.directory-collapsed { grid-template-columns: minmax(0, 1fr); }
+.one-workspace > .one-directory[hidden] { display: none; }
+.one-workspace.directory-collapsed > .one-document { margin-inline: auto; width: 100%; }
+.write-directory-control { margin: 0 0 20px; }
+.write-manuscript-reading { min-height: calc(100vh - 410px); }
+.ground-document-actions { position: sticky; bottom: 0; z-index: 15; padding-block: 18px; border-top: 1px solid var(--border); background: var(--background); }
+.ground-document-actions > span { padding-inline: 8px; }
+.ground-document-actions [data-slot="dropdown-menu-trigger"] { border: 0; }
+.ground-workspace .one-document .prose-body { max-width: 42rem; }
+.write-workspace-page { padding-bottom: 92px; }
+.write-workspace-page > .write-book-meta { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 24px; font-size: 13px; color: var(--muted-foreground); }
+.write-workspace-page .write-legacy { margin-top: 32px; }
+.write-workspace-page .write-directory-next { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }
+.manuscript-workspace { min-width: 0; }
+.manuscript-heading { margin-bottom: 26px; }
+.manuscript-heading h1 { font-size: 30px; font-weight: 500; line-height: 1.4; margin: 18px 0 8px; overflow-wrap: anywhere; }
+.manuscript-version, .manuscript-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; color: var(--muted-foreground); font-size: 13px; }
+.manuscript-meta button { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; }
+.manuscript-meta button:hover { color: var(--foreground); }
+.manuscript-editor { display: block; width: 100%; min-height: calc(100vh - 340px); padding: 4px 0 24px; resize: vertical; background: transparent; border: 0; color: var(--foreground); caret-color: var(--primary); }
+.manuscript-editor:focus-visible { outline: 1px solid var(--ring); outline-offset: 8px; }
+.manuscript-editor::placeholder { color: var(--muted-foreground); }
+.manuscript-editor[readonly] { cursor: progress; }
+.manuscript-notice { margin: 12px 0; font-size: 13px; line-height: 1.7; color: var(--mark-text, var(--foreground)); }
+.manuscript-error { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0; color: var(--destructive); font-size: 13px; }
+.manuscript-actions { position: fixed; inset: auto 0 0; z-index: 35; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; min-height: 72px; padding: 12px clamp(20px, 4vw, 54px); background: var(--background); border-top: 1px solid var(--border); }
+.manuscript-save-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted-foreground); }
+.manuscript-save-status strong { color: var(--foreground); font-weight: 500; }
+.manuscript-action-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.manuscript-action-buttons button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 5px; font-size: 13px; }
+.manuscript-action-buttons button.primary { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
+.manuscript-action-buttons button.quiet { border-color: transparent; }
+.manuscript-action-buttons button:disabled { opacity: .48; cursor: default; }
+.manuscript-action-buttons button:not(:disabled):hover { background: var(--muted); }
+.manuscript-action-buttons button.primary:not(:disabled):hover { background: var(--foreground); border-color: var(--foreground); }
+.reading-appearance-controls { display: grid; gap: 28px; }
+.reading-appearance-controls legend { margin-bottom: 12px; font-size: 13px; font-weight: 500; }
+.reading-font-options, .reading-number-options { display: flex; gap: 8px; flex-wrap: wrap; }
+.reading-font-options { flex-direction: column; }
+.reading-appearance-controls label { display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border-strong); border-radius: 5px; min-height: 44px; padding: 8px 12px; cursor: pointer; }
+.reading-font-options label { justify-content: flex-start; }
+.reading-appearance-controls label.selected { background: var(--muted); border-color: var(--foreground); }
+.reading-appearance-controls input { accent-color: var(--primary); }
+.reading-appearance-sample { padding: 24px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.reader-toolbar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.reader-save-state { margin-right: auto; font-size: 13px; color: var(--muted-foreground); }
+.focus-mode .write-workspace-page .write-book-meta, .focus-mode .write-workspace-page .one-directory, .focus-mode .write-workspace-page .write-legacy { display: none; }
+.focus-mode .write-workspace-page .one-workspace { display: block; }
+.focus-mode .write-workspace-page .one-document { margin: 28px auto 0; }
+@media (max-width: 780px) {
+  .manuscript-heading h1 { font-size: 25px; }
+  .manuscript-actions { gap: 8px; padding: 9px 16px; }
+  .manuscript-action-buttons { gap: 5px; }
+  .manuscript-action-buttons button { padding: 0 10px; min-height: 38px; }
+  .manuscript-action-buttons button svg { display: none; }
+  .manuscript-editor { min-height: 48vh; }
+  .write-workspace-page { padding-bottom: 120px; }
+  .write-workspace-page .write-directory-next { margin: 0; padding: 0 0 0 12px; border-top: 0; border-left: 1px solid var(--border); }
+  .focus-mode .write-workspace-page .one-document { margin-top: 42px; }
+}

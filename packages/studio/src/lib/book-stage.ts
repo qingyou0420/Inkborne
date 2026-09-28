@@ -19,6 +19,7 @@ export interface BookStageFacts {
   readonly authorIntentNonEmpty: boolean;
   readonly storyCardExists: boolean;
   readonly canonExists?: boolean;
+  readonly askCandidatePending?: boolean;
   readonly settingsAdoptedCount?: number;
   readonly storyFrameNonEmpty: boolean;
   readonly storyFrameFourSectionsNonEmpty: boolean;
@@ -105,6 +106,7 @@ export function splitMarkdownSections(markdown: string): ReadonlyArray<{ heading
 }
 
 export function inferAskDone(facts: BookStageFacts): boolean {
+  if (facts.askCandidatePending) return false;
   if (facts.askConfirmedAt) return true;
   if (facts.canonExists) return true;
   if (facts.authorIntentNonEmpty && facts.storyCardExists) return true;
@@ -123,7 +125,7 @@ export function inferWeaveDone(facts: BookStageFacts): boolean {
 }
 
 export function deriveBookStage(facts: BookStageFacts): BookStageSnapshot {
-  if (!facts.bookExists) {
+  if (!facts.bookExists || facts.askCandidatePending) {
     return {
       stage: "ask",
       steps: { ask: "current", ground: "todo", weave: "todo", write: "todo" },
@@ -169,6 +171,14 @@ export function migrateWorkflowFromFacts(
   facts: Omit<BookStageFacts, "askConfirmedAt" | "groundConfirmedAt" | "weaveLockedAt">,
   nowIso: string,
 ): { readonly workflow: BookWorkflowJson; readonly wrote: boolean } {
+  if (facts.askCandidatePending) {
+    // A candidate is not approval; discard legacy inferred completion marks.
+    return {
+      workflow: { lastStage: "ask" },
+      wrote: !existing || existing.lastStage !== "ask"
+        || Boolean(existing.askConfirmedAt || existing.groundConfirmedAt || existing.weaveLockedAt),
+    };
+  }
   if (existing) {
     const snapshot = deriveBookStage({
       ...facts,

@@ -1,4 +1,21 @@
-import { getAppLanguage } from "./app-language";
+import { getAppLanguage, tr } from "./app-language";
+
+const TRANSIENT_NETWORK_MESSAGE_RE =
+  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|NetworkError)$/i;
+
+export function transientNetworkUserMessage(): string {
+  return tr(
+    "请求暂时失败，请重试；若正文已出现可先刷新",
+    "Request failed temporarily. Retry, or refresh if the text already appeared.",
+  );
+}
+
+export function isTransientNetworkFetchError(cause: unknown): boolean {
+  if (cause instanceof DOMException && cause.name === "AbortError") return false;
+  const message = (cause instanceof Error ? cause.message : String(cause)).trim();
+  if (TRANSIENT_NETWORK_MESSAGE_RE.test(message)) return true;
+  return message === transientNetworkUserMessage();
+}
 
 const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   readonly pattern: RegExp;
@@ -81,6 +98,9 @@ function stripTechnicalTokens(message: string): string {
 
 export function localizeKnownRuntimeMessage(message: string): string {
   const stripped = stripTechnicalTokens(message);
+  if (TRANSIENT_NETWORK_MESSAGE_RE.test(stripped) || TRANSIENT_NETWORK_MESSAGE_RE.test(message.trim())) {
+    return transientNetworkUserMessage();
+  }
   // Runtime messages arrive in English; in English mode show them as-is.
   if (getAppLanguage() === "en") return stripped;
   let localized = stripped;

@@ -5,13 +5,17 @@
  */
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
 import { fileURLToPath } from "url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const target = path.join(
-  root,
-  "node_modules/app-builder-lib/out/util/electronGet.js"
+// Resolve the exact dependency used by the desktop builder, including pnpm's
+// isolated node_modules layout instead of assuming root-level hoisting.
+const desktopRequire = createRequire(path.join(root, "packages/desktop/package.json"));
+const builderRequire = createRequire(
+  desktopRequire.resolve("electron-builder/package.json")
 );
+const target = builderRequire.resolve("app-builder-lib/out/util/electronGet.js");
 
 let s = fs.readFileSync(target, "utf8");
 

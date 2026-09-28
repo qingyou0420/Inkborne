@@ -5,8 +5,18 @@
  */
 
 import { fetchJson, useApi } from "../hooks/use-api";
-import { pageErrorText } from "../lib/error-copy";
-import { useEffect, useMemo, useState } from "react";
+import { showToast } from "../lib/toast";
+import { workspaceQuery, type AuthoringWorkspace } from "../lib/authoring-workspace";
+import {
+  defaultImpactFilter,
+  openStructureImpact,
+  openWeaveItemForNode,
+  shouldShowImpactFilter,
+  takeImpactFocus,
+  truncateImpactReason,
+  type ImpactCatalogFilter,
+} from "../lib/impact-view";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
@@ -16,19 +26,18 @@ import {
   applyVolumeMapNodeEdit,
   findNodeById,
   HARD_CHAPTER_TITLE_CHARS,
-  insertChapterStub,
-  lockedNamedVolumeCount,
+
   MAX_CHAPTER_TITLE_CHARS,
   normalizeVolumeMapChapterHeadings,
   outlineEditorSource,
   parseVolumeMapTree,
-  recommendedOutlineNodeId,
   splitOutlineTitleAndSummary,
   tidyVolumeMapMarkdown,
   truncateOutlineLabel,
   type VolumeMapChapterNode,
   type VolumeMapNoteNode,
 } from "../lib/volume-map-tree";
+import { appendUnplannedChapter, saveOutlineMap } from "../lib/weave-editor-state";
 import {
   outlineTreeVolumeLabel,
 } from "../lib/outline-weave";
@@ -36,6 +45,10 @@ import { formatVolumeArriveCopy } from "../lib/copy-map";
 import { weaveGuideWhenUngrounded } from "../lib/stage-copy";
 import { useBookStage } from "../hooks/use-book-stage";
 import { StageDot } from "../components/StageDot";
+import { ManuscriptView } from "../components/ManuscriptView";
+import { useDraftDecision } from "../hooks/use-draft-decision";
+import { registerNavigationGuard } from "../lib/edit-navigation";
+import { List, MoreHorizontal } from "lucide-react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 
@@ -69,6 +82,16 @@ interface Nav extends BookWorkspaceNavTarget {
 }
 
 type Filter = "all" | "coarse" | "pending" | "refined";
+const pendingOutlineEdits = new Map<string, { nodeId: string; title: string; summary: string }>();
+let unloadGuardInstalled = false;
+function installUnloadGuard() {
+  if (unloadGuardInstalled || typeof window === "undefined") return;
+  unloadGuardInstalled = true;
+  window.addEventListener("beforeunload", (event) => {
+    if (pendingOutlineEdits.size === 0) return;
+    event.preventDefault(); event.returnValue = "";
+  });
+}
 
 function isRefinedChapter(node: VolumeMapChapterNode): boolean {
   return node.kind === "chapter" && Boolean(node.title.trim() || node.summary.trim());
@@ -78,7 +101,10 @@ function nodeVisible(
   node: VolumeMapChapterNode,
   filter: Filter,
   query: string,
+  impactFilter: ImpactCatalogFilter,
+  impact: AuthoringWorkspace["impact"],
 ): boolean {
+  if (impactFilter === "needs-review" && !openWeaveItemForNode(impact, node.id, node.chapterNumber, node.endChapter)) return false;
   if (filter === "coarse" && node.kind !== "range") return false;
   if (filter === "pending" && (node.kind !== "range" && isRefinedChapter(node))) return false;
   if (filter === "refined" && !isRefinedChapter(node)) return false;
@@ -87,35 +113,61 @@ function nodeVisible(
   return hay.includes(query);
 }
 
-export function OutlineWorkspace({
-  bookId,
-  nav,
-  theme: _theme,
-  t,
-  sse: _sse,
-}: {
+type OutlineWorkspaceProps = {
   bookId: string;
   nav: Nav;
   theme: Theme;
   t: TFunction;
   sse?: { readonly messages: ReadonlyArray<SSEMessage> };
-}) {
+};
+
+export function OutlineWorkspace(props: OutlineWorkspaceProps) {
+  return <OutlineWorkspaceBook key={props.bookId} {...props} />;
+}
+
+function OutlineWorkspaceBook({
+  bookId,
+  nav,
+  theme: _theme,
+  t,
+  sse: _sse,
+}: OutlineWorkspaceProps) {
   const { data, loading, error } = useApi<BookData>(`/books/${bookId}`);
+  const { data: authoring, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const authoringBook = authoring?.authoringBook === true;
+  const restoredEdit = useRef(pendingOutlineEdits.get(bookId));
   const [volumeMap, setVolumeMap] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [titleDraft, setTitleDraft] = useState("");
-  const [summaryDraft, setSummaryDraft] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(restoredEdit.current?.nodeId ?? null);
+  const [titleDraft, setTitleDraft] = useState(restoredEdit.current?.title ?? "");
+  const [summaryDraft, setSummaryDraft] = useState(restoredEdit.current?.summary ?? "");
   const [saving, setSaving] = useState(false);
+  const [editingSelected, setEditingSelected] = useState(false);
+  const [directoryOpen, setDirectoryOpen] = useState(true);
   const [filter, setFilter] = useState<Filter>("all");
+  const [impactFilter, setImpactFilter] = useState<ImpactCatalogFilter>("all");
+  const impactSeeded = useRef<string | null>(null);
   const [query, setQuery] = useState("");
+  const weaveBeforeLeave = useRef<(() => Promise<boolean>) | null>(null);
+  const registerWeaveBeforeLeave = useCallback((guard: (() => Promise<boolean>) | null) => { weaveBeforeLeave.current = guard; }, []);
+  const mapState = useRef({ current: "", pending: false });
+  const mapReady = useRef(false);
+  const [mapLoading, setMapLoading] = useState(true);
+  const mounted = useRef(true);
+  const replaceVolumeMap = useCallback((content: string) => {
+    mapState.current.current = content;
+    setVolumeMap(content);
+  }, []);
 
   const stage = useBookStage(bookId);
   const [pageError, setPageError] = useState<string | null>(null);
   const [splitHint, setSplitHint] = useState(false);
   const [notesOpen, setNotesOpen] = useState<Record<string, boolean>>({});
+  const [preferredVolume, setPreferredVolume] = useState<{ startChapter: number; endChapter: number } | null>(null);
 
   const isZh = data?.book.language !== "en";
-  const tree = useMemo(() => parseVolumeMapTree(volumeMap), [volumeMap]);
+  const decision = useDraftDecision(isZh);
+  const outlineSource = authoring?.candidateWeave?.body || volumeMap;
+  const tree = useMemo(() => parseVolumeMapTree(outlineSource), [outlineSource]);
   const written = useMemo(
     () => new Set((data?.chapters ?? []).filter((chapter) => chapter.status).map((chapter) => chapter.number)),
     [data?.chapters],
@@ -125,51 +177,89 @@ export function OutlineWorkspace({
   );
 
   useEffect(() => {
-    void Promise.all([
-      fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`).catch(() => ({ content: "" })),
-      fetchJson<{ candidateWeave?: { body?: string } }>(`/authoring/workspace?bookId=${encodeURIComponent(bookId)}&summary=1`).catch(() => ({ candidateWeave: undefined })),
-    ]).then(([file, workspace]) => {
-      const adopted = file.content ?? "";
-      setVolumeMap(adopted.trim() ? adopted : (workspace.candidateWeave?.body ?? ""));
-    }).catch(() => setVolumeMap(""));
-  }, [bookId]);
+    mounted.current = true;
+    mapReady.current = false;
+    let cancelled = false;
+    void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
+      .then((file) => { if (!cancelled) { replaceVolumeMap(file.content ?? ""); mapReady.current = true; } })
+      .catch((error) => { if (!cancelled) setPageError(error instanceof Error ? error.message : String(error)); })
+      .finally(() => { if (!cancelled) setMapLoading(false); });
+    return () => { cancelled = true; mounted.current = false; };
+  }, [bookId, replaceVolumeMap]);
+
+  const BOOK_OUTLINE_ID = "weave-book";
 
   useEffect(() => {
     if (selectedId || !data) return;
-    setSelectedId(recommendedOutlineNodeId(tree, data.nextChapter));
+    setSelectedId(BOOK_OUTLINE_ID);
   }, [data, selectedId, tree]);
 
-  const selected = selectedId ? findNodeById(tree, selectedId) : undefined;
+  const showingBookOutline = selectedId === BOOK_OUTLINE_ID;
+  const selected = selectedId && !showingBookOutline ? findNodeById(tree, selectedId) : undefined;
+  const detachedDraft = !showingBookOutline && !selected ? pendingOutlineEdits.get(bookId) : undefined;
 
   useEffect(() => {
     if (!selected) return;
     const source = outlineEditorSource(selected, { language: isZh ? "zh" : "en" });
-    setTitleDraft(source.title);
-    setSummaryDraft(source.summary);
+    const draft = pendingOutlineEdits.get(bookId);
+    setTitleDraft(draft?.nodeId === selected.id ? draft.title : source.title);
+    setSummaryDraft(draft?.nodeId === selected.id ? draft.summary : source.summary);
     setSplitHint(source.split);
-  }, [isZh, selected]);
+  }, [bookId, isZh, selected]);
+
+  const changeDraft = (title: string, summary: string) => {
+    if (!selected || mapState.current.pending) return;
+    setTitleDraft(title); setSummaryDraft(summary);
+    const source = outlineEditorSource(selected, { language: isZh ? "zh" : "en" });
+    if (title === source.title && summary === source.summary) pendingOutlineEdits.delete(bookId);
+    else pendingOutlineEdits.set(bookId, { nodeId: selected.id, title, summary });
+  };
+  useEffect(() => { installUnloadGuard(); }, []);
+
+  const impact = authoring?.impact;
+  const showImpactFilter = shouldShowImpactFilter(impact?.openCount.weave ?? 0, authoring?.authoringBook);
+  const structureImpact = openStructureImpact(impact);
+
+  useEffect(() => {
+    const focused = takeImpactFocus();
+    if (focused) setSelectedId(focused);
+  }, [bookId]);
+
+  useEffect(() => {
+    if (!showImpactFilter) {
+      if (impactFilter === "needs-review") setImpactFilter("all");
+      return;
+    }
+    const token = impact?.impactId ?? "pending";
+    if (impactSeeded.current === token) return;
+    impactSeeded.current = token;
+    setImpactFilter(defaultImpactFilter(impact?.openCount.weave ?? 0));
+  }, [showImpactFilter, impact?.impactId, impact?.openCount.weave, impactFilter]);
 
   const visibleVolumes = tree.volumes
     .map((volume) => ({
       ...volume,
-      chapters: volume.chapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase())),
+      chapters: volume.chapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase(), showImpactFilter ? impactFilter : "all", impact)),
     }))
     .filter((volume) => {
       if (volume.chapters.length > 0) return true;
+      if (showImpactFilter && impactFilter === "needs-review") return false;
       if (query && !`${volume.title} ${volume.body} ${volume.okr}`.toLowerCase().includes(query.trim().toLowerCase())) return false;
       return filter === "all";
     });
-  const visibleOrphans = tree.orphanChapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase()));
+  const visibleOrphans = tree.orphanChapters.filter((node) => nodeVisible(node, filter, query.trim().toLowerCase(), showImpactFilter ? impactFilter : "all", impact));
   const targetChapters = data?.book.targetChapters && data.book.targetChapters > 0
     ? data.book.targetChapters
     : Math.max(tree.chapterCount, 1);
-  const lockedVolumes = lockedNamedVolumeCount(tree);
   const plannedChapters = tree.chapterCount;
 
   const reloadVolumeMap = () => {
+    mapReady.current = false;
+    setMapLoading(true);
     void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
-      .then((body) => setVolumeMap(body.content ?? ""))
-      .catch(() => setVolumeMap(""));
+      .then((body) => { if (mounted.current) { replaceVolumeMap(body.content ?? ""); mapReady.current = true; setPageError(null); } })
+      .catch((error) => { if (mounted.current) setPageError(error instanceof Error ? error.message : String(error)); })
+      .finally(() => { if (mounted.current) setMapLoading(false); });
   };
 
   const persistMap = async (next: string) => {
@@ -178,11 +268,12 @@ export function OutlineWorkspace({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: next }),
     });
-    setVolumeMap(next);
+    // In-flight saves can finish after navigation; the next mount will load the saved file.
+    if (mounted.current) setVolumeMap(next);
   };
 
-  const saveSelected = async (persistSplit = false) => {
-    if (!selected) return;
+  const applySelectedDraft = (current: string, persistSplit = false): string => {
+    if (!selected || selected.kind === "volume") return current;
     const language = isZh ? "zh" : "en";
     let nextTitle = titleDraft;
     let nextSummary = summaryDraft;
@@ -196,68 +287,118 @@ export function OutlineWorkspace({
         setSplitHint(true);
       }
       if (persistSplit && (selected.title !== nextTitle || selected.summary !== nextSummary)) {
-        const next = applyVolumeMapNodeEdit(volumeMap, selected.id, {
+        return applyVolumeMapNodeEdit(current, selected.id, {
           title: nextTitle,
           summary: nextSummary,
         });
-        if (next === volumeMap) return;
-        setSaving(true);
-        setPageError(null);
-        try {
-          await persistMap(next);
-        } catch (err) {
-          setPageError(err instanceof Error ? err.message : "Save failed");
-        } finally {
-          setSaving(false);
-        }
-        return;
       }
     }
-    const next = applyOutlineWorkspaceSave(volumeMap, selected.id, nextTitle, nextSummary, { language });
-    if (next === volumeMap) return;
+    return applyOutlineWorkspaceSave(current, selected.id, nextTitle, nextSummary, { language });
+  };
+
+  const saveMap = async (transform: (current: string) => string, savesDraft = false): Promise<boolean> => {
+    if (mapState.current.pending || !mapReady.current) return false;
+    const savingDraft = pendingOutlineEdits.get(bookId);
     setSaving(true);
     setPageError(null);
     try {
-      await persistMap(next);
+      const saved = await saveOutlineMap(mapState.current, transform, persistMap);
+      if (saved && savesDraft && pendingOutlineEdits.get(bookId) === savingDraft) pendingOutlineEdits.delete(bookId);
+      return saved;
     } catch (err) {
       setPageError(err instanceof Error ? err.message : "Save failed");
+      return false;
     } finally {
       setSaving(false);
     }
   };
+  const saveSelected = async (persistSplit = false) => {
+    if (detachedDraft) {
+      setPageError(isZh ? "原条目已不在卷纲中。手稿已保留，可用「新增一章」另存。" : "The original entry is no longer in the outline. Add a chapter to save the retained draft.");
+      return false;
+    }
+    const saved = await saveMap((current) => applySelectedDraft(current, persistSplit), true);
+    if (saved) setEditingSelected(false);
+    return saved;
+  };
+
+  const finishSelected = async (): Promise<boolean> => {
+    if (mapState.current.pending) return false;
+    if (!pendingOutlineEdits.has(bookId)) { setEditingSelected(false); return true; }
+    const answer = await decision.ask();
+    if (answer === "cancel") { setEditingSelected(true); return false; }
+    if (answer === "save") return saveSelected();
+    pendingOutlineEdits.delete(bookId);
+    if (selected) { const source = outlineEditorSource(selected, { language: isZh ? "zh" : "en" }); setTitleDraft(source.title); setSummaryDraft(source.summary); }
+    setEditingSelected(false); return true;
+  };
+  const selectedLeaveRef = useRef(finishSelected);
+  selectedLeaveRef.current = finishSelected;
+  const selectedDirty = pendingOutlineEdits.has(bookId);
+  useEffect(() => {
+    if (showingBookOutline || !selectedDirty) return;
+    return registerNavigationGuard(() => selectedLeaveRef.current());
+  }, [showingBookOutline, selectedDirty]);
+
+  const selectNode = async (id: string) => {
+    if (id === selectedId || mapState.current.pending) return;
+    if (showingBookOutline && !authoringBook && weaveBeforeLeave.current && !(await weaveBeforeLeave.current())) return;
+    if (!showingBookOutline && !authoringBook && !(await finishSelected())) return;
+    setEditingSelected(false);
+    const node = findNodeById(tree, id);
+    if (node?.kind === "volume" && node.startChapter != null && node.endChapter != null) {
+      setPreferredVolume({ startChapter: node.startChapter, endChapter: node.endChapter });
+    } else if (node) {
+      const owner = tree.volumes.find((volume) => volume.chapters.some((chapter) => chapter.id === node.id) || volume.notes.some((note) => note.id === node.id));
+      if (owner?.startChapter != null && owner.endChapter != null) {
+        setPreferredVolume({ startChapter: owner.startChapter, endChapter: owner.endChapter });
+      }
+    }
+    setSelectedId(id);
+  };
+  const saveCurrentRef = useRef<() => Promise<unknown>>(async () => undefined);
+  saveCurrentRef.current = () => saveSelected();
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!showingBookOutline && editingSelected && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !document.querySelector('[role="dialog"]')) {
+        event.preventDefault(); void saveCurrentRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showingBookOutline, editingSelected]);
 
   const addFirstChapter = async () => {
-    const next = insertChapterStub(volumeMap, data?.nextChapter ?? 1);
-    setSaving(true);
-    setPageError(null);
-    try {
-      await persistMap(next);
-      setSelectedId(`chapter:${data?.nextChapter ?? 1}`);
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
+    if (mapState.current.pending) return;
+    if (showingBookOutline && weaveBeforeLeave.current && !(await weaveBeforeLeave.current())) return;
+    if (!showingBookOutline && !detachedDraft && !(await finishSelected())) return;
+    let addedChapter = 0;
+    const saved = await saveMap((current) => {
+      // Save the selected draft and append against that result in one file write.
+      const next = appendUnplannedChapter(showingBookOutline || detachedDraft ? current : applySelectedDraft(current), data?.nextChapter ?? 1);
+      addedChapter = next.chapterNumber;
+      return detachedDraft ? applyOutlineWorkspaceSave(next.content, `chapter:${addedChapter}`, detachedDraft.title, detachedDraft.summary, { language: isZh ? "zh" : "en" }) : next.content;
+    }, !showingBookOutline);
+    if (saved) { setSelectedId(`chapter:${addedChapter}`); setEditingSelected(false); }
   };
 
   const tidyOutline = async (deep = false) => {
-    const language = isZh ? "zh" : "en";
-    const next = deep
-      ? tidyVolumeMapMarkdown(volumeMap, language)
-      : normalizeVolumeMapChapterHeadings(volumeMap, { language });
-    if (next === volumeMap) return;
-    setSaving(true);
-    setPageError(null);
-    try {
-      await persistMap(next);
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setSaving(false);
+    if (mapState.current.pending) return;
+    if (detachedDraft) { await saveSelected(); return; }
+    if (!showingBookOutline) {
+      const source = selected && outlineEditorSource(selected, { language: isZh ? "zh" : "en" });
+      if (source && (titleDraft !== source.title || summaryDraft !== source.summary)) {
+        setPageError(isZh ? "请先保存当前修改，再整理卷纲。" : "Save your current edits before tidying.");
+        return;
+      }
     }
+    const language = isZh ? "zh" : "en";
+    await saveMap((current) => deep
+      ? tidyVolumeMapMarkdown(current, language)
+      : normalizeVolumeMapChapterHeadings(current, { language }));
   };
 
-  const goWrite = () => (nav.toWrite ?? nav.toBookSettings)(bookId);
+  const goWrite = async () => { if (await finishSelected()) (nav.toWrite ?? nav.toBookSettings)(bookId); };
 
   if (loading) {
     return (
@@ -267,7 +408,7 @@ export function OutlineWorkspace({
       </div>
     );
   }
-  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
+  if (error) return <div className="text-destructive p-8">Error: {error}</div>;
   if (!data) return null;
 
   const empty = tree.volumeCount === 0 && tree.chapterCount === 0;
@@ -276,32 +417,22 @@ export function OutlineWorkspace({
 
   return (
     <div className="space-y-5 fade-in" data-testid="outline-workspace">
-      <header className="space-y-1">
-        <p className="eyebrow text-[13px] font-medium text-muted-foreground">{isZh ? `《${data.book.title}》` : data.book.title}</p>
-        <h1 className="font-serif text-[32px] font-medium leading-10">{isZh ? "织卷" : "Weave"}</h1>
-      </header>
+      <h1 className="sr-only">{isZh ? "织卷" : "Weave"}</h1>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-muted-foreground" data-testid="outline-stats">
-          {isZh
-            ? `已排 ${plannedChapters} / 目标 ${targetChapters} 章 · 已锁 ${lockedVolumes} / ${tree.volumeCount} 卷`
-            : `${plannedChapters} / ${targetChapters} outlined · ${lockedVolumes} / ${tree.volumeCount} locked volumes`}
+        <button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{isZh ? "卷纲目录" : "Volume directory"}</button>
+        <div className="text-xs text-muted-foreground" data-testid="outline-stats">
+          {tree.volumeCount === 0
+            ? (isZh ? `全书 ${targetChapters} 章 · 尚未分卷` : `${targetChapters} chapters · no volumes yet`)
+            : (isZh
+              ? `已排 ${plannedChapters} / 目标 ${targetChapters} 章 · ${tree.volumeCount} 卷`
+              : `${plannedChapters} / ${targetChapters} outlined · ${tree.volumeCount} volumes`)}
         </div>
       </div>
 
-      <AuthoringWeavePanel
-        bookId={bookId}
-        targetChapters={targetChapters}
-        isZh={isZh}
-        onAdopted={() => {
-          void reloadVolumeMap();
-          (nav.toWrite ?? nav.toBookSettings)?.(bookId);
-        }}
-      />
-
       {ungrounded ? (
         <div
-          className="rounded-xl border border-border/50 bg-secondary/30 px-3 py-2 text-sm text-muted-foreground"
+          className="ink-notice text-sm text-muted-foreground"
           data-testid="outline-ungrounded"
         >
           {guide.subtitle}
@@ -316,11 +447,32 @@ export function OutlineWorkspace({
       ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
+            {showImpactFilter ? (
+              <div className="flex items-center gap-2 text-[12px]" data-testid="impact-filter">
+                <button
+                  type="button"
+                  data-testid="impact-filter-needs-review"
+                  className={impactFilter === "needs-review" ? "font-medium text-foreground" : "text-muted-foreground"}
+                  onClick={() => setImpactFilter("needs-review")}
+                >
+                  {isZh ? `需核对 ${impact?.openCount.weave ?? 0}` : `Needs review ${impact?.openCount.weave ?? 0}`}
+                </button>
+                <span className="text-muted-foreground">·</span>
+                <button
+                  type="button"
+                  data-testid="impact-filter-all"
+                  className={impactFilter === "all" ? "font-medium text-foreground" : "text-muted-foreground"}
+                  onClick={() => setImpactFilter("all")}
+                >
+                  {isZh ? `全部 ${tree.chapterCount}` : `All ${tree.chapterCount}`}
+                </button>
+              </div>
+            ) : null}
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={isZh ? "搜索卷 / 章" : "Search"}
-              className="rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+              className="rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
             />
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -357,25 +509,29 @@ export function OutlineWorkspace({
             </DropdownMenu>
           </div>
 
-          {empty ? (
-            <LiteraryEmpty
-              title={isZh ? "还没有卷纲" : "No volume outline yet"}
-              subtitle={isZh ? "用上方「规划全书每章概要」生成，或在下面手动加章。" : "Use “plan every chapter” above, or add a chapter by hand."}
-              testId="outline-empty"
-            />
-          ) : (
-            <div className="grid gap-5 md:grid-cols-[280px_1fr]" data-testid="outline-split">
-              <div className="rounded-2xl border border-border/40 overflow-hidden flex flex-col">
+            <div className={`one-workspace ${!directoryOpen ? "directory-collapsed" : ""}`} data-testid="outline-split">
+              <div className="one-directory flex flex-col" hidden={!directoryOpen}>
+                <button
+                  type="button"
+                  className={`dir-item ${showingBookOutline ? "active" : ""}`}
+                  data-testid="outline-book-outline"
+                  onClick={() => void selectNode(BOOK_OUTLINE_ID)}
+                >
+                  {t("weave.bookOutline")}
+                  <small>
+                    {isZh ? "规划" : "Plan"}
+                    {structureImpact ? (isZh ? " · 分卷需重规划" : " · volumes need replanning") : ""}
+                  </small>
+                </button>
+                <p className="px-3 py-2 text-xs text-muted-foreground">{isZh ? "已采用卷纲" : "Adopted outline"}</p>
                 <div className="flex-1">
                 {visibleVolumes.map((volume) => (
                   <div key={volume.id}>
                     <button
                       type="button"
                       data-testid="outline-volume-label"
-                      onClick={() => setSelectedId(volume.id)}
-                      className={`w-full truncate px-3 py-2 text-left text-sm font-medium border-b border-border/30 ${
-                        selectedId === volume.id ? "bg-primary/10 text-primary" : "hover:bg-muted/30"
-                      }`}
+                      onClick={() => void selectNode(volume.id)}
+                      className={`dir-item ${selectedId === volume.id ? "active" : ""}`}
                       title={volume.title}
                     >
                       {outlineTreeVolumeLabel(volume.volumeNumber, volume.title, isZh) || (isZh ? "未命名卷" : "Untitled volume")}
@@ -386,7 +542,8 @@ export function OutlineWorkspace({
                         node={node}
                         selected={selectedId === node.id}
                         written={written.has(node.chapterNumber)}
-                        onClick={() => setSelectedId(node.id)}
+                        impactItem={openWeaveItemForNode(impact, node.id, node.chapterNumber, node.endChapter)}
+                        onClick={() => void selectNode(node.id)}
                         isZh={isZh}
                       />
                     ))}
@@ -396,7 +553,7 @@ export function OutlineWorkspace({
                         open={Boolean(notesOpen[volume.id])}
                         onToggle={() => setNotesOpen((prev) => ({ ...prev, [volume.id]: !prev[volume.id] }))}
                         selectedId={selectedId}
-                        onSelect={setSelectedId}
+                        onSelect={(id) => void selectNode(id)}
                         isZh={isZh}
                       />
                     )}
@@ -408,7 +565,8 @@ export function OutlineWorkspace({
                     node={node}
                     selected={selectedId === node.id}
                     written={written.has(node.chapterNumber)}
-                    onClick={() => setSelectedId(node.id)}
+                    impactItem={openWeaveItemForNode(impact, node.id, node.chapterNumber, node.endChapter)}
+                    onClick={() => void selectNode(node.id)}
                     isZh={isZh}
                   />
                 ))}
@@ -418,65 +576,106 @@ export function OutlineWorkspace({
                     open={Boolean(notesOpen.orphan)}
                     onToggle={() => setNotesOpen((prev) => ({ ...prev, orphan: !prev.orphan }))}
                     selectedId={selectedId}
-                    onSelect={setSelectedId}
+                    onSelect={(id) => void selectNode(id)}
                     isZh={isZh}
                   />
                 )}
                 </div>
                 <div className="flex items-center gap-3 border-t border-border/30 px-3 py-2">
-                  <button
-                    type="button"
+                  <DropdownMenu><DropdownMenuTrigger className="btn-ghost inline-flex items-center gap-2" aria-label={isZh ? "目录操作" : "Directory actions"}><MoreHorizontal size={17} />{isZh ? "目录操作" : "Directory actions"}</DropdownMenuTrigger><DropdownMenuContent align="start">
+                  {authoringBook ? (
+                    <DropdownMenuItem disabled>
+                      {isZh ? "请到本书规划中编辑候选" : "Edit candidates in the book plan"}
+                    </DropdownMenuItem>
+                  ) : (
+                    <>
+                  <DropdownMenuItem
                     data-testid="outline-add-chapter"
                     onClick={() => void addFirstChapter()}
-                    
-                    className="btn-ghost h-8 px-1 text-[13px] underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal disabled:opacity-40"
+                    disabled={saving || mapLoading || !mapReady.current}
                   >
                     {isZh ? "新增一章" : "Add chapter"}
-                  </button>
-                  <button
-                    type="button"
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     data-testid="outline-tidy"
-                    title={isZh ? "只整理超长短题。按住 ⌥ 深度整理卷头与备注。" : "Normalize long titles. Hold ⌥ for a deep tidy."}
+                    title={isZh ? "只整理超长短题。按住 Alt 深度整理卷头与备注。" : "Normalize long titles. Hold Alt for a deep tidy."}
                     onClick={(event) => void tidyOutline(event.altKey)}
-                    
-                    className="btn-ghost h-8 px-1 text-[13px] underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal disabled:opacity-40"
+                    disabled={saving || mapLoading || !mapReady.current}
                   >
                     {isZh ? "整理卷纲" : "Tidy volumes"}
-                  </button>
-                  <button
-                    type="button"
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     data-testid="outline-tidy-deep"
                     onClick={() => void tidyOutline(true)}
-                    
-                    className="btn-ghost h-8 px-1 text-[13px] text-muted-foreground underline decoration-[color-mix(in_oklch,var(--foreground)_25%,transparent)] hover:decoration-seal disabled:opacity-40"
+                    disabled={saving || mapLoading || !mapReady.current}
                   >
                     {isZh ? "深度整理" : "Deep tidy"}
-                  </button>
+                  </DropdownMenuItem>
+                    </>
+                  )}
+                  </DropdownMenuContent></DropdownMenu>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-border/40 p-5 space-y-4 min-h-[360px]" data-testid="outline-detail">
-                {!selected ? (
+              <div className="one-document space-y-4 min-h-[360px]" data-testid="outline-detail">
+                <div hidden={!showingBookOutline && !authoringBook}>
+                  <AuthoringWeavePanel
+                    bookId={bookId}
+                    targetChapters={targetChapters}
+                    isZh={isZh}
+                    active={showingBookOutline || authoringBook}
+                    preferredVolume={preferredVolume}
+                    selectedNodeId={showingBookOutline ? null : selectedId}
+                    adoptedMap={volumeMap}
+                    onRegisterBeforeLeave={registerWeaveBeforeLeave}
+                    onGoAsk={() => nav.toAsk(bookId)}
+                    onChanged={() => { void refetchAuthoring(); }}
+                    onAdopted={() => {
+                      void reloadVolumeMap();
+                      void refetchAuthoring();
+                    }}
+                  />
+                </div>
+                {!showingBookOutline && !authoringBook && <div className="space-y-4">
+                <p className="text-xs text-muted-foreground">{isZh ? "已采用卷纲" : "Adopted outline"}{selectedDirty ? (isZh ? " · 未保存修改" : " · Unsaved changes") : ""}</p>
+                {detachedDraft ? (
+                  <div className="space-y-3">
+                    <p role="status" className="text-sm text-muted-foreground">{isZh ? "原条目已不在卷纲中，手稿已保留。点击左侧「新增一章」可另存。" : "The original entry was removed. Add a chapter to save this retained draft."}</p>
+                    <input aria-label={isZh ? "保留的标题" : "Retained title"} value={detachedDraft.title} readOnly className="w-full bg-background font-serif text-xl" />
+                    <textarea aria-label={isZh ? "保留的手稿" : "Retained draft"} value={detachedDraft.summary} readOnly rows={8} className="w-full bg-background text-sm leading-6" />
+                  </div>
+                ) : empty ? (
+                  <LiteraryEmpty
+                    title={isZh ? "还没有卷纲" : "No volume outline yet"}
+                    subtitle={isZh ? "用左侧「本书规划」生成，或在下面手动加章。" : "Generate from the book plan, or add a chapter by hand."}
+                    testId="outline-empty"
+                  />
+                ) : !selected ? (
                   <p className="text-sm text-muted-foreground">{isZh ? "点左侧任意一章" : "Pick a chapter on the left"}</p>
                 ) : selected.kind === "volume" ? (
                   <VolumeDetail volumeTitle={selected.title} okr={selected.okr} startChapter={selected.startChapter} endChapter={selected.endChapter} locked={selected.startChapter != null && selected.endChapter != null} isZh={isZh} />
-                ) : selected.kind === "note" ? (
+                ) : !editingSelected ? <>
+                  <ManuscriptView body={`## ${titleDraft || selected.title}\n\n${summaryDraft}`} />
+                  <div className="manuscript-action-buttons ground-document-actions">{authoringBook ? <p className="text-sm text-muted-foreground">{isZh ? "请到本书规划中编辑候选并采用。新四阶段书不直接改已采用卷纲。" : "Edit the candidate in the book plan, then adopt. Direct edits to the adopted map are disabled for four-stage books."}</p> : <button type="button" disabled={saving || mapLoading} onClick={() => setEditingSelected(true)}>{isZh ? "编辑" : "Edit"}</button>}{selected.kind === "chapter" ? <button type="button" className="quiet" onClick={() => void goWrite()}>{isZh ? "去落笔" : "Go to Write"}</button> : null}</div>
+                </> : selected.kind === "note" ? (
                   <>
                     <div className="text-xs text-muted-foreground">{isZh ? "备注" : "Note"}</div>
                     <input
                       value={titleDraft}
-                      onChange={(event) => setTitleDraft(event.target.value)}
-                      onBlur={() => void saveSelected()}
-                      
+                      onChange={(event) => changeDraft(event.target.value, summaryDraft)}
+                      readOnly={saving || mapLoading}
+                      aria-label={isZh ? "备注标题" : "Note title"}
                       className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 font-serif text-xl outline-none focus:border-primary/50"
                     />
                     <textarea
                       value={summaryDraft}
-                      onChange={(event) => setSummaryDraft(event.target.value)}
+                      onChange={(event) => changeDraft(titleDraft, event.target.value)}
                       rows={8}
-                      
+                      readOnly={saving || mapLoading}
+                      aria-label={isZh ? "备注内容" : "Note content"}
                       className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 text-sm leading-6 outline-none focus:border-primary/50"
                     />
+                    <div className="manuscript-action-buttons ground-document-actions">{authoringBook ? <p className="text-sm text-muted-foreground">{isZh ? "请到本书规划中编辑候选并采用。" : "Edit the candidate in the book plan, then adopt."}</p> : <button type="button" disabled={saving || mapLoading || !mapReady.current} onClick={() => void saveSelected()}>{isZh ? "保存已采用卷纲" : "Save adopted volume map"}</button>}<button type="button" className="quiet" disabled={saving} onClick={() => void finishSelected()}>{isZh ? "取消" : "Cancel"}</button></div>
                   </>
                 ) : (
                   <>
@@ -491,10 +690,9 @@ export function OutlineWorkspace({
                         <input
                           value={titleDraft}
                           maxLength={selected.kind === "range" ? undefined : (isZh ? HARD_CHAPTER_TITLE_CHARS : HARD_CHAPTER_TITLE_CHARS * 2)}
-                          onChange={(event) => setTitleDraft(event.target.value)}
-                          onBlur={() => void saveSelected(false)}
-                          
-                          className="w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 pr-14 font-serif text-xl outline-none focus:ring-1 focus:ring-ring"
+                          onChange={(event) => changeDraft(event.target.value, summaryDraft)}
+                          readOnly={saving || mapLoading}
+                          className="w-full rounded-lg border border-border-strong bg-card px-3 py-2 pr-14 font-serif text-xl outline-none focus:ring-1 focus:ring-ring"
                         />
                         {selected.kind !== "range" && (
                           <span
@@ -516,9 +714,9 @@ export function OutlineWorkspace({
                       <span className="text-xs text-muted-foreground">{isZh ? "提要" : "Summary"}</span>
                       <textarea
                         value={summaryDraft}
-                        onChange={(event) => setSummaryDraft(event.target.value)}
+                        onChange={(event) => changeDraft(titleDraft, event.target.value)}
                         rows={8}
-                        
+                        readOnly={saving || mapLoading}
                         className="w-full rounded-lg border border-border/50 bg-secondary/20 px-3 py-2 text-sm leading-6 outline-none focus:border-primary/50"
                       />
                     </label>
@@ -528,21 +726,29 @@ export function OutlineWorkspace({
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => void saveSelected(true)}
-                        disabled={saving}
+                        onClick={() => {
+                          if (authoringBook) {
+                            showToast(isZh ? "请到本书规划中编辑候选并采用。" : "Edit the candidate in the book plan, then adopt.", "info");
+                            return;
+                          }
+                          void saveSelected(true);
+                        }}
+                        disabled={saving || mapLoading || !mapReady.current || authoringBook}
                         className="btn-secondary disabled:opacity-50"
                       >
                         {saving
                           ? t("common.loading")
-                          : splitHint
-                            ? (isZh ? "保存拆分" : "Save split")
-                            : (isZh ? "保存" : "Save")}
+                          : authoringBook
+                            ? (isZh ? "请到本书规划中采用" : "Adopt from the book plan")
+                            : (isZh ? "保存已采用卷纲" : "Save adopted outline")}
                       </button>
+                      <button type="button" className="btn-ghost" disabled={saving} onClick={() => void finishSelected()}>{isZh ? "取消" : "Cancel"}</button>
                       {selected.kind === "chapter" && (
                         <button
                           type="button"
                           data-testid="outline-go-write"
-                          onClick={goWrite}
+                          onClick={() => void goWrite()}
+                          disabled={saving || mapLoading || !mapReady.current}
                           className="btn-ghost"
                         >
                           {isZh ? "去落笔 →" : "Go write →"}
@@ -551,11 +757,12 @@ export function OutlineWorkspace({
                     </div>
                   </>
                 )}
+                </div>}
               </div>
             </div>
-          )}
 
-      {pageError && <p className="text-sm text-destructive">{pageError}</p>}
+      {pageError && <p role="alert" className="text-sm text-destructive">{pageError} {!mapReady.current && <button type="button" disabled={mapLoading} onClick={reloadVolumeMap}>{isZh ? "重新加载卷纲" : "Reload outline"}</button>}</p>}
+      {decision.dialog}
     </div>
   );
 }
@@ -646,12 +853,14 @@ function ChapterRow({
   node,
   selected,
   written,
+  impactItem,
   onClick,
   isZh,
 }: {
   readonly node: VolumeMapChapterNode;
   readonly selected: boolean;
   readonly written: boolean;
+  readonly impactItem?: { readonly verdict: "affected" | "maybe"; readonly reason: string } | undefined;
   readonly onClick: () => void;
   readonly isZh: boolean;
 }) {
@@ -665,12 +874,13 @@ function ChapterRow({
       type="button"
       onClick={onClick}
       data-testid={coarse ? "outline-coarse-row" : "outline-chapter-row"}
+      title={impactItem?.reason}
       className={`flex w-full items-center gap-2 px-5 py-1.5 text-left text-sm border-b border-border/20 ${
         coarse ? "text-muted-foreground/70" : ""
       } ${selected ? "bg-primary/10 text-primary" : "hover:bg-muted/30 text-muted-foreground"}`}
     >
-      {coarse ? null : <StageDot state={written ? "done" : "todo"} />}
-      <span className="truncate">{label}{shortTitle ? ` ${truncateOutlineLabel(shortTitle)}` : ""}</span>
+      {impactItem ? <span className="impact-dot" data-verdict={impactItem.verdict} /> : coarse ? null : <StageDot state={written ? "done" : "todo"} />}
+      <span className="min-w-0 truncate">{label}{shortTitle ? ` ${truncateOutlineLabel(shortTitle)}` : ""}{impactItem ? ` · ${truncateImpactReason(impactItem.reason, 24)}` : ""}</span>
     </button>
   );
 }

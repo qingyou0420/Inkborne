@@ -1,15 +1,23 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
 import { CorruptBookCard } from "../components/CorruptBookCard";
-import { fanqieRangeProblem } from "../lib/fanqie-range";
-import { showToast } from "../lib/toast";
-import { FanqieExportFields } from "../components/FanqieExportFields";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChapterManuscriptTable } from "../components/ChapterManuscriptTable";
+import { downloadRequestDiagnostics } from "../lib/engine-connection";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
-import { AuthoringWritePanel, type AuthoringWritePanelHandle } from "../components/AuthoringWritePanel";
+import { FanqieExportFields } from "../components/FanqieExportFields";
+import { AuthoringWritePanel, type WriteLeaveGuard } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
+import {
+  firstUnwrittenChapter,
+  mergeWriteDirectory,
+  writeMarkDotState,
+  writeMarkLabel,
+  type WriteDirectoryChapter,
+} from "../lib/write-directory";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ExportMenu, type ExportFormat } from "../components/ExportMenu";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
 import type { Theme } from "../hooks/use-theme";
@@ -18,9 +26,13 @@ import type { SSEMessage } from "../hooks/use-sse";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
 import { bookManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
 import { formatReviewIssueCopy, hasPreviousChapterUnapprovedReason, isMustFixSeverity } from "../lib/copy-map";
+import { groupReviewIssues } from "../lib/review-dimensions";
+import { parseVolumeMapTree } from "../lib/volume-map-tree";
+import { buildChapterGroups, defaultOpenGroupId, filterChapterGroups } from "../lib/chapter-table";
 import { formatStudyWords, writeEmptyCopy } from "../lib/stage-copy";
 import type { BookStepState } from "../lib/book-stage";
 import { useBookStage } from "../hooks/use-book-stage";
+import { usePreferencesStore } from "../store/preferences";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,10 +43,10 @@ import {
 } from "../components/ui/dropdown-menu";
 import {
   Feather,
-  Download,
   Check,
   ChevronDown,
   MoreHorizontal,
+  List,
 } from "lucide-react";
 
 interface ChapterMeta {
@@ -60,14 +72,6 @@ interface BookData {
 }
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
-type ExportFormat = "txt" | "md" | "epub" | "fanqie";
-
-function positiveChapter(value: string): number | undefined {
-  if (!/^\d+$/.test(value.trim())) return undefined;
-  const number = Number(value);
-  return number >= 1 ? number : undefined;
-}
-
 interface Nav extends BookWorkspaceNavTarget {
   toDashboard: () => void;
   toChapter: (bookId: string, num: number) => void;
@@ -118,6 +122,9 @@ export function BookDetail({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
+  const { data: authoring, loading: authoringLoading } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const { data: outline, loading: outlineLoading } = useApi<{ content?: string | null }>(`/books/${encodeURIComponent(bookId)}/truth/outline/volume_map.md`);
+  const authoringBook = authoring?.authoringBook === true;
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [writeRequestPending, setWriteRequestPending] = useState(false);
   const [draftRequestPending, setDraftRequestPending] = useState(false);
@@ -133,9 +140,7 @@ export function BookDetail({
   const [fanqieBlankLine, setFanqieBlankLine] = useState(true);
   const [fanqieIndent, setFanqieIndent] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
-  const [generateNonce, setGenerateNonce] = useState(0);
-  const [panelBusy, setPanelBusy] = useState(false);
-  const writePanelRef = useRef<AuthoringWritePanelHandle>(null);
+  const [reviewMode, setReviewMode] = useState<"auto" | "manual">("auto");
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
   const [preflight, setPreflight] = useState<{ ok: boolean; reasons: Array<{ code?: string; message?: string; messageZh?: string; chapterNumber?: number }> } | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<{
@@ -152,8 +157,60 @@ export function BookDetail({
   } | null>(null);
   const [overrideValue, setOverrideValue] = useState("");
   const [writeChapter, setWriteChapter] = useState<number | null>(null);
-  const [volumeMap, setVolumeMap] = useState("");
+  const [directoryOpen, setDirectoryOpen] = useState(true);
+  const [chapterQuery, setChapterQuery] = useState("");
+  const [openVolumeIds, setOpenVolumeIds] = useState<ReadonlySet<string> | null>(null);
+  const writeLeaveGuard = useRef<WriteLeaveGuard | null>(null);
+  const [chapterSwitchPending, setChapterSwitchPending] = useState(false);
+  const registerWriteGuard = useCallback((guard: WriteLeaveGuard | null) => { writeLeaveGuard.current = guard; }, []);
+  const switchWriteChapter = async (chapter: number) => {
+    if (chapterSwitchPending || chapter === writeChapter) return;
+    setChapterSwitchPending(true);
+    try {
+      if (writeLeaveGuard.current && !(await writeLeaveGuard.current())) return;
+      setWriteChapter(chapter);
+      usePreferencesStore.getState().setLastChapter(bookId, chapter);
+    } finally {
+      setChapterSwitchPending(false);
+    }
+  };
+  const writeDirectory = useMemo<ReadonlyArray<WriteDirectoryChapter>>(() => {
+    if (!data) return [];
+    if (!authoringBook) {
+      return data.chapters.map((chapter) => ({
+        number: chapter.number,
+        title: chapter.title,
+        mark: "adopted" as const,
+        wordCount: chapter.wordCount ?? 0,
+      }));
+    }
+    return mergeWriteDirectory({
+      volumeMap: outline?.content ?? "",
+      persisted: data.chapters,
+      candidates: authoring?.manifest?.candidates?.write,
+      adopted: authoring?.manifest?.adopted?.write,
+      stateRefs: authoring?.writeStateRefs,
+    });
+  }, [authoring?.manifest?.adopted?.write, authoring?.manifest?.candidates?.write, authoring?.writeStateRefs, authoringBook, data, outline?.content]);
+  const firstUnwritten = firstUnwrittenChapter(writeDirectory, data?.nextChapter ?? 1);
+  useEffect(() => { setWriteChapter(null); }, [bookId]);
+  useEffect(() => {
+    if (data?.book.id !== bookId || writeChapter !== null) return;
+    if (authoringLoading || outlineLoading) return;
+    const previous = usePreferencesStore.getState().lastChapters[bookId];
+    const allowed = new Set(writeDirectory.map((chapter) => chapter.number));
+    allowed.add(firstUnwritten);
+    const restored = previous && allowed.has(previous) ? previous : firstUnwritten;
+    setWriteChapter(restored);
+    usePreferencesStore.getState().setLastChapter(bookId, restored);
+  }, [authoringLoading, bookId, data?.book.id, firstUnwritten, outlineLoading, writeChapter, writeDirectory]);
 
+
+  useEffect(() => {
+    void fetchJson<{ mode?: string }>(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`)
+      .then((r) => setReviewMode(r.mode === "manual" ? "manual" : "auto"))
+      .catch(() => undefined);
+  }, [bookId]);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const drafting = draftRequestPending || activity.drafting;
@@ -191,14 +248,25 @@ export function BookDetail({
     void fetchJson<{ items?: Array<{ chapterNumber: number; severity: string; category: string; description: string }> }>(`/books/${bookId}/review-queue`)
       .then((body) => setReviewQueue(body.items ?? []))
       .catch(() => setReviewQueue([]));
-    void fetchJson<{ content?: string | null }>(`/books/${bookId}/truth/outline/volume_map.md`)
-      .then((body) => setVolumeMap(body.content ?? ""))
-      .catch(() => setVolumeMap(""));
   }, [bookId, skipPreviousApproval, data?.nextChapter, activity.lastError]);
 
-  const selectWriteChapter = async (chapterNumber: number) => {
-    await writePanelRef.current?.flush();
-    setWriteChapter(chapterNumber);
+  const handleWriteNext = async () => {
+    const chapter = data?.nextChapter ?? firstUnwritten;
+    await switchWriteChapter(chapter);
+  };
+
+  const handleToggleReviewMode = async () => {
+    const next = reviewMode === "manual" ? "auto" : "manual";
+    setReviewMode(next);
+    try {
+      await fetchJson(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: next }),
+      });
+    } catch {
+      setReviewMode(reviewMode);
+    }
   };
 
   const runRewrite = async (chapterNum: number, brief: string) => {
@@ -339,6 +407,17 @@ export function BookDetail({
     });
   };
 
+  const handleSettleWriteState = async (chapterNum: number) => {
+    const artifactId = authoring?.manifest?.adopted?.write?.[String(chapterNum)];
+    if (!artifactId) return;
+    await runBookAction(`settle-state-${chapterNum}`, async () => {
+      await postApi("/authoring/write/settle", { bookId, artifactId });
+      return data?.book.language === "en"
+        ? `Settling chapter ${chapterNum} state.`
+        : `正在整理第 ${chapterNum} 章状态。`;
+    });
+  };
+
   const confirmBrief = () => {
     if (!briefPrompt) return;
     const { kind, chapter, mode } = briefPrompt;
@@ -374,16 +453,27 @@ export function BookDetail({
     </div>
   );
 
-  if (error && /book\.json|快照/.test(error)) {
+  if (error && !data && /book\.json|快照/.test(error)) {
     return <CorruptBookCard message={pageErrorText(error)} />;
   }
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
+  if (error && !data) {
+    return (
+      <div className="p-8 space-y-4 bg-destructive/5 rounded-xl border border-destructive/20" data-testid="write-reconnect">
+        <p className="text-destructive">{pageErrorText(error)}</p>
+        <button type="button" className="btn-ghost" onClick={() => void refetch()}>重新连接</button>
+        <button type="button" className="btn-ghost" data-testid="export-request-diagnostics" onClick={() => downloadRequestDiagnostics()}>导出连接诊断</button>
+      </div>
+    );
+  }
   if (!data) return null;
 
   const { book, chapters } = data;
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
   const reviewCount = chapters.filter((ch) => ch.status === "ready-for-review").length;
+  const activeChapter = writeChapter ?? firstUnwritten;
+  const persistedByNumber = new Map(chapters.map((chapter) => [chapter.number, chapter]));
 
+  const preflightOk = preflight?.ok !== false;
   const showSkip = hasPreviousChapterUnapprovedReason(preflight?.reasons ?? []);
   const isZh = book.language !== "en";
   const emptyCopy = writeEmptyCopy({
@@ -392,190 +482,54 @@ export function BookDetail({
     isZh,
   });
 
-  const fanqieChapterCount = chapters.reduce((max, chapter) => Math.max(max, chapter.number), chapters.length);
-  const fanqieProblem = exportFormat === "fanqie"
-    ? fanqieRangeProblem(fanqieFrom, fanqieTo, fanqieChapterCount, isZh)
-    : "";
-  const fanqieQuery: FanqieExportQuery | undefined = exportFormat === "fanqie" && !fanqieProblem ? {
-    ...(positiveChapter(fanqieFrom) ? { fromChapter: positiveChapter(fanqieFrom) } : {}),
-    ...(positiveChapter(fanqieTo) ? { toChapter: positiveChapter(fanqieTo) } : {}),
+  const fanqieQuery: FanqieExportQuery | undefined = {
+    fromChapter: Number(fanqieFrom) || undefined,
+    toChapter: Number(fanqieTo) || undefined,
     layout: fanqieLayout,
     blankLine: fanqieBlankLine,
     indent: fanqieIndent,
-  } : undefined;
-  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly, fanqieQuery);
+  };
+  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly);
+  const fanqieHref = bookManuscriptExportPath(bookId, "fanqie", exportApprovedOnly, fanqieQuery);
   const briefDialog = briefPrompt ? briefCopy(briefPrompt.kind) : null;
+  const volumeTree = parseVolumeMapTree(outline?.content ?? "");
+  const directoryGroups = filterChapterGroups(
+    buildChapterGroups(writeDirectory, volumeTree.volumes.length ? volumeTree : null, isZh),
+    chapterQuery,
+  );
+  const focusVolumeId = defaultOpenGroupId(directoryGroups, activeChapter);
+  const searchingChapters = chapterQuery.trim().length > 0;
+  const openedVolumes = searchingChapters
+    ? new Set(directoryGroups.map((group) => group.id))
+    : openVolumeIds ?? new Set(focusVolumeId ? [focusVolumeId] : directoryGroups.map((group) => group.id));
 
   return (
-    <div className="space-y-8 fade-in">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-2">
-        <div className="space-y-2">
-          <p className="eyebrow text-[13px] font-medium text-muted-foreground">{isZh ? `《${book.title}》` : book.title}</p>
-          <h1 className="font-serif text-[32px] font-medium leading-10">{isZh ? "落笔" : "Write"}</h1>
-          <p className="text-[13px] leading-5 text-muted-foreground">
-            {book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}
-          </p>
+    <div className="write-workspace-page">
+      <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-serif text-xl font-medium leading-8">{isZh ? "落笔" : "Write"}</h1>
+        <button
+          type="button"
+          data-testid="write-next-primary"
+          className="btn-primary"
+          onClick={() => void handleWriteNext()}
+        >
+          {isZh ? "落笔 · 写下一章" : "落笔 · Write next"}
+        </button>
+      </header>
+      {error ? (
+        <div className="ink-notice text-sm mb-3" data-tone="danger" data-testid="write-refresh-error">
+          <span>{error}</span>
+          {" "}
+          <button type="button" className="btn-ghost" onClick={() => void refetch()}>重试</button>
+          {" "}
+          <button type="button" className="btn-ghost" data-testid="export-request-diagnostics" onClick={() => downloadRequestDiagnostics()}>导出连接诊断</button>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="btn-secondary inline-flex items-center gap-1.5">
-              <Download size={14} />
-              {t("book.exportMenu")}
-              <ChevronDown size={14} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-80 p-3 space-y-3">
-              {(["txt", "md", "epub", "fanqie"] as const).map((format) => (
-                <label key={format} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="export-format"
-                    checked={exportFormat === format}
-                    onChange={() => setExportFormat(format)}
-                    data-testid={format === "fanqie" ? "export-format-fanqie" : undefined}
-                  />
-                  {format === "fanqie" ? (isZh ? "番茄纯文本" : "Tomato plain text") : format.toUpperCase()}
-                </label>
-              ))}
-              {exportFormat === "fanqie" ? (
-                <FanqieExportFields
-                  isZh={isZh}
-                  showRange
-                  from={fanqieFrom}
-                  to={fanqieTo}
-                  layout={fanqieLayout}
-                  blankLine={fanqieBlankLine}
-                  indent={fanqieIndent}
-                  onChange={(patch) => {
-                    if (patch.from !== undefined) setFanqieFrom(patch.from);
-                    if (patch.to !== undefined) setFanqieTo(patch.to);
-                    if (patch.layout !== undefined) setFanqieLayout(patch.layout);
-                    if (patch.blankLine !== undefined) setFanqieBlankLine(patch.blankLine);
-                    if (patch.indent !== undefined) setFanqieIndent(patch.indent);
-                  }}
-                />
-              ) : null}
-              {fanqieProblem ? (
-                <p className="text-xs text-destructive" data-testid="fanqie-range-error">{fanqieProblem}</p>
-              ) : null}
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={exportApprovedOnly} onChange={(e) => setExportApprovedOnly(e.target.checked)} />
-                {t("book.approvedOnly")}
-              </label>
-              <div className="flex flex-col gap-1 pt-1">
-                <a
-                  href={fanqieProblem ? undefined : exportHref}
-                  download
-                  aria-disabled={fanqieProblem ? true : undefined}
-                  data-testid="book-export-manuscript"
-                  className={`btn-secondary text-center ${fanqieProblem ? "pointer-events-none opacity-40" : ""}`}
-                  onClick={(event) => {
-                    if (fanqieProblem) event.preventDefault();
-                  }}
-                >
-                  {t("book.download")}
-                </a>
-                <button
-                  type="button"
-                  disabled={Boolean(fanqieProblem)}
-                  onClick={async () => {
-                    if (fanqieProblem) return;
-                    try {
-                      const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          format: exportFormat,
-                          approvedOnly: exportApprovedOnly,
-                          ...(fanqieQuery ?? {}),
-                        }),
-                      });
-                      setBookActionPending(`saved:${exported.path ?? ""}`);
-                      showToast(isZh ? "已保存到这本书的导出文件夹。" : "Saved in the book export folder.", "success");
-                    } catch (e) {
-                      const message = e instanceof Error ? e.message : "导出失败";
-                      setBookActionPending(message);
-                      showToast(message, "error");
-                    }
-                  }}
-                  className="btn-ghost w-full"
-                >
-                  {t("book.exportSave")}
-                </button>
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <button
-            type="button"
-            onClick={() => setGenerateNonce((value) => value + 1)}
-            disabled={writing || drafting || panelBusy}
-            className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-primary px-5 text-[14px] font-medium text-primary-foreground disabled:opacity-40"
-            data-testid="write-next-primary"
-          >
-            {writing || panelBusy ? <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Feather size={16} />}
-            {writing || panelBusy ? t("dash.writing") : (isZh ? "落笔 · 写下一章" : "落笔 · Write next")}
-          </button>
-        </div>
-      </div>
-
-      <AuthoringWritePanel
-        ref={writePanelRef}
-        key={`${bookId}:${writeChapter ?? data.nextChapter}`}
-        bookId={bookId}
-        chapterNumber={writeChapter ?? data.nextChapter}
-        chapterTitle={data.chapters.find((item) => item.number === (writeChapter ?? data.nextChapter))?.title}
-        isZh={isZh}
-        generateNonce={generateNonce}
-        onBusyChange={setPanelBusy}
-        onChanged={() => refetch()}
-      />
-
-      <SerialCockpitStrip
-        bookId={bookId}
-        isZh={isZh}
-        skipPreviousApproval={skipPreviousApproval}
-        onSkipChange={setSkipPreviousApproval}
-        showSkip={showSkip}
-        onJumpOutline={() => nav.toOutline(bookId)}
-        onJumpReview={(chapterNumber) => {
-          if (chapterNumber) nav.toChapter(bookId, chapterNumber);
-        }}
-      />
-
-      {reviewQueue.length > 0 && (
-        <div className="rounded-2xl border border-border bg-mark-soft px-4 py-3 space-y-2" data-testid="review-queue">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-medium">{isZh ? "等你过目" : "Review queue"}</div>
-            {reviewCount > 0 && (
-              <button type="button" onClick={() => void handleApproveAll()} className="btn-secondary h-8 px-3 text-[13px]">
-                {t("book.approveAll")} ({reviewCount})
-              </button>
-            )}
-          </div>
-          <ul className="space-y-1 text-sm">
-            {reviewQueue.slice(0, 12).flatMap((item, index) => {
-              const copy = formatReviewIssueCopy(item, isZh);
-              if (!copy) return [];
-              return [(
-                <li key={`${item.chapterNumber}-${item.category}-${index}`}>
-                  <span className={isMustFixSeverity(item.severity) ? "text-seal-text font-medium" : "text-mark-text"}>
-                    {copy.severity}
-                  </span>{" "}
-                  {isZh ? "第" : "Ch."}{item.chapterNumber} · {copy.category}: {copy.description}
-                </li>
-              )];
-            })}
-          </ul>
-        </div>
-      )}
+      ) : null}
 
       {(writing || drafting || activity.lastError || actionMessage || (typeof bookActionPending === "string" && bookActionPending.startsWith("saved:"))) && (
         <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
-            activity.lastError
-              ? "border-destructive/30 bg-destructive/5 text-destructive"
-              : "border-border bg-card text-foreground"
-          }`}
+          className="ink-notice text-sm"
+          data-tone={activity.lastError ? "danger" : undefined}
         >
           {activity.lastError ? (
             <span>{t("book.pipelineFailed")}: {activity.lastError}</span>
@@ -591,159 +545,322 @@ export function BookDetail({
         </div>
       )}
 
-      <div className="rounded-xl overflow-hidden border border-border">
-        {chapters.length > 0 && (
-          <ChapterManuscriptTable
-            chapters={chapters}
-            nextChapter={data.nextChapter}
-            volumeMap={volumeMap}
-            isZh={isZh}
-            t={t}
-            renderChapter={(ch) => (
-                <tr key={ch.number} data-chapter={ch.number} className="h-12 overflow-hidden hover:bg-accent/60 transition-colors" style={{ height: 48 }}>
-                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-muted-foreground font-mono text-[13px] tabular-nums">{ch.number}</td>
-                  <td className="h-12 overflow-hidden px-4 py-0 align-middle">
-                    <button
-                      onClick={() => nav.toChapter(bookId, ch.number)}
-                      className="block max-w-full truncate text-left font-serif text-base font-medium underline decoration-[color-mix(in_oklch,var(--foreground)_35%,transparent)] hover:decoration-seal"
-                    >
-                      {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
-                    </button>
-                  </td>
-                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-muted-foreground font-medium tabular-nums text-[13px]">{(ch.wordCount ?? 0).toLocaleString()}</td>
-                  <td className="h-12 overflow-hidden px-4 py-0 align-middle">
-                    <div className={`inline-flex items-center gap-1.5 text-[13px] font-medium ${statusTone(ch.status)}`}>
-                      <StageDot state={statusDotState(ch.status)} />
-                      {translateChapterStatus(ch.status, t)}
-                    </div>
-                  </td>
-                  <td className="h-12 overflow-hidden px-4 py-0 align-middle text-right">
-                    <div className="flex h-12 items-center gap-1.5 justify-end">
-                      {ch.status === "ready-for-review" && (
-                        <button
-                          type="button"
-                          onClick={() => void handleApprove(ch.number)}
-                          className="btn-primary h-8 px-3 text-[13px]"
-                          data-testid={`chapter-approve-${ch.number}`}
-                        >
-                          <Check size={14} />
-                          {t("book.approve")}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn-ghost h-8 px-2 text-[13px]"
-                        onClick={() => void selectWriteChapter(ch.number)}
+      <div className="write-directory-control"><button type="button" className="btn-ghost inline-flex items-center gap-2" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen((value) => !value)}><List size={16} />{t("write.directory")}</button></div>
+      <div className={`one-workspace ${!directoryOpen ? "directory-collapsed" : ""}`}>
+        <nav className="one-directory" hidden={!directoryOpen} aria-label={t("write.directory")}>
+          {writeDirectory.length > 0 ? (
+            <input
+              value={chapterQuery}
+              onChange={(event) => setChapterQuery(event.target.value)}
+              placeholder={isZh ? "搜索章号或标题" : "Search chapter number or title"}
+              aria-label={isZh ? "搜索章号或标题" : "Search chapter number or title"}
+              data-testid="chapter-table-search"
+              className="mb-2 w-full rounded border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+            />
+          ) : null}
+          {writeDirectory.length > 0 && (
+            directoryGroups.flatMap((group) => {
+              const open = openedVolumes.has(group.id);
+              const header = (
+                <button
+                  key={`volume-${group.id}`}
+                  type="button"
+                  className="dir-item"
+                  data-testid={`chapter-volume-${group.id}`}
+                  aria-expanded={open}
+                  onClick={() => {
+                    const next = new Set(openedVolumes);
+                    if (next.has(group.id)) next.delete(group.id);
+                    else next.add(group.id);
+                    setOpenVolumeIds(next);
+                  }}
+                >
+                  {group.title}
+                  <small>{group.chapters.length}</small>
+                </button>
+              );
+              if (!open) return [header];
+              return [header, ...group.chapters.map((item) => {
+              const ch = persistedByNumber.get(item.number);
+              const selected = activeChapter === item.number;
+              const statusLabel = authoringBook
+                ? writeMarkLabel(item.mark, isZh)
+                : translateChapterStatus(ch?.status ?? "drafted", t);
+              const dotState = authoringBook ? writeMarkDotState(item.mark) : statusDotState(ch?.status ?? "drafted");
+              const tone = authoringBook
+                ? (item.mark === "adopted" ? "text-foreground" : item.mark === "empty" ? "text-muted-foreground" : "text-mark-text")
+                : statusTone(ch?.status ?? "drafted");
+              return (
+              <div key={item.number} className="flex items-start gap-1">
+                <button
+                  type="button"
+                  className={`dir-item ${selected ? "active" : ""}`}
+                  disabled={chapterSwitchPending}
+                  aria-current={selected ? "page" : undefined}
+                  data-testid={`write-toc-${item.number}`}
+                  data-mark={authoringBook ? item.mark : undefined}
+                  onClick={() => void switchWriteChapter(item.number)}
+                >
+                  {item.title || t("chapter.label").replace("{n}", String(item.number))}
+                  <small className={tone}>
+                    <StageDot state={dotState} />
+                    {" "}{statusLabel}{item.stateMissing ? (isZh ? " · 状态未整理" : " · state unset") : ""} · {(item.wordCount ?? 0).toLocaleString()} {t("book.words")}
+                  </small>
+                </button>
+                {selected ? <DropdownMenu>
+                  <DropdownMenuTrigger
+                    data-testid={`chapter-more-${item.number}`}
+                    aria-label={isZh ? "目录操作" : "Directory actions"}
+                    className="btn-ghost inline-flex h-8 w-8 items-center justify-center"
+                  >
+                    <MoreHorizontal size={14} />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-44">
+                    {!authoringBook && ch?.status === "ready-for-review" ? <DropdownMenuItem data-testid={`chapter-approve-${item.number}`} onClick={() => void handleApprove(item.number)}>{t("book.approve")}</DropdownMenuItem> : null}
+                    <DropdownMenuItem onClick={() => nav.toChapter(bookId, item.number)}>
+                      {authoringBook ? (isZh ? "只读预览" : "Read-only preview") : t("reader.preview")}
+                    </DropdownMenuItem>
+                    {authoringBook && item.stateMissing ? (
+                      <DropdownMenuItem
+                        data-testid={`chapter-settle-${item.number}`}
+                        disabled={bookActionPending === `settle-state-${item.number}`}
+                        onClick={() => void handleSettleWriteState(item.number)}
                       >
-                        {isZh ? "打磨" : "Polish"}
-                      </button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          data-testid={`chapter-more-${ch.number}`}
-                          className="btn-ghost inline-flex h-8 w-8 items-center justify-center"
-                        >
-                          <MoreHorizontal size={16} />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-44">
-                          {ch.status === "ready-for-review" && (
-                            <DropdownMenuItem
-                              variant="destructive"
-                              onClick={async () => {
-                                try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                                catch (e) { setActionMessage(e instanceof Error ? e.message : "Reject failed"); }
-                              }}
-                            >
-                              {t("book.rollbackChapter")}
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuItem
-                            onClick={async () => {
-                              try {
-                                const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                                setActionMessage(auditResult.passed
-                                  ? (isZh ? "审校已通过" : "Audit passed")
-                                  : (isZh ? `审校未过：${auditResult.issues?.length ?? 0} 条` : `Audit failed: ${auditResult.issues?.length ?? 0} issues`));
-                                refetch();
-                              } catch (e) {
-                                setActionMessage(e instanceof Error ? e.message : "Audit failed");
-                              }
-                            }}
-                          >
-                            {t("book.audit")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={rewritingChapters.includes(ch.number)}
-                            onClick={() => {
-                              setBriefPrompt({ kind: "rewrite", chapter: ch.number });
-                              setBriefValue("");
-                            }}
-                          >
-                            {t("book.rewrite")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
-                            onClick={() => {
-                              setBriefPrompt({ kind: "sync", chapter: ch.number });
-                              setBriefValue("");
-                            }}
-                          >
-                            {t("book.syncTruth")}
-                          </DropdownMenuItem>
-                          {ch.status === "state-degraded" && (
-                            <DropdownMenuItem
-                              disabled={bookActionPending === `repair-state-${ch.number}`}
-                              onClick={() => void handleRepairState(ch.number)}
-                            >
-                              {t("book.repairState")}
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuLabel>{t("book.reviseWith")}</DropdownMenuLabel>
-                          {([
-                            ["spot-fix", t("book.spotFix")],
-                            ["polish", t("book.polish")],
-                            ["rewrite", t("book.rewrite")],
-                            ["rework", t("book.rework")],
-                            ["anti-detect", t("book.antiDetect")],
-                          ] as const).map(([mode, label]) => (
-                            <DropdownMenuItem
-                              key={mode}
-                              disabled={revisingChapters.includes(ch.number)}
-                              onClick={() => {
-                                setBriefPrompt({ kind: "revise", chapter: ch.number, mode });
-                                setBriefValue("");
-                              }}
-                            >
-                              {label}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </td>
-                </tr>
-            )}
+                        {isZh ? "整理状态" : "Settle state"}
+                      </DropdownMenuItem>
+                    ) : null}
+                    {!authoringBook ? <>
+                    {ch?.status === "ready-for-review" && (
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={async () => {
+                          try { await postApi(`/books/${bookId}/chapters/${item.number}/reject`); refetch(); }
+                          catch (e) { setActionMessage(e instanceof Error ? e.message : "Reject failed"); }
+                        }}
+                      >
+                        {t("book.rollbackChapter")}
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        try {
+                          const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${item.number}`, { method: "POST" });
+                          setActionMessage(auditResult.passed
+                            ? (isZh ? "审校已通过" : "Audit passed")
+                            : (isZh ? `审校未过：${auditResult.issues?.length ?? 0} 条` : `Audit failed: ${auditResult.issues?.length ?? 0} issues`));
+                          refetch();
+                        } catch (e) {
+                          setActionMessage(e instanceof Error ? e.message : "Audit failed");
+                        }
+                      }}
+                    >
+                      {t("book.audit")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={rewritingChapters.includes(item.number)}
+                      onClick={() => {
+                        setBriefPrompt({ kind: "rewrite", chapter: item.number });
+                        setBriefValue("");
+                      }}
+                    >
+                      {t("book.rewrite")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={syncingChapters.includes(item.number) || item.number !== latestPersistedChapter}
+                      onClick={() => {
+                        setBriefPrompt({ kind: "sync", chapter: item.number });
+                        setBriefValue("");
+                      }}
+                    >
+                      {t("book.syncTruth")}
+                    </DropdownMenuItem>
+                    {ch?.status === "state-degraded" && (
+                      <DropdownMenuItem
+                        disabled={bookActionPending === `repair-state-${item.number}`}
+                        onClick={() => void handleRepairState(item.number)}
+                      >
+                        {t("book.repairState")}
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t("book.reviseWith")}</DropdownMenuLabel>
+                    {([
+                      ["spot-fix", t("book.spotFix")],
+                      ["polish", t("book.polish")],
+                      ["rewrite", t("book.rewrite")],
+                      ["rework", t("book.rework")],
+                      ["anti-detect", t("book.antiDetect")],
+                    ] as const).map(([mode, label]) => (
+                      <DropdownMenuItem
+                        key={mode}
+                        disabled={revisingChapters.includes(item.number)}
+                        onClick={() => {
+                          setBriefPrompt({ kind: "revise", chapter: item.number, mode });
+                          setBriefValue("");
+                        }}
+                      >
+                        {label}
+                      </DropdownMenuItem>
+                    ))}
+                    </> : null}
+                  </DropdownMenuContent>
+                </DropdownMenu> : null}
+              </div>
+              );
+            })];
+            })
+          )}
+          <div className="write-directory-next">
+            <button type="button" className={`dir-item ${activeChapter === firstUnwritten ? "active" : ""}`} disabled={chapterSwitchPending} data-testid="write-toc-next" onClick={() => void switchWriteChapter(firstUnwritten)}>
+              {isZh ? `第 ${firstUnwritten} 章 · 新章` : `Chapter ${firstUnwritten} · New`}
+            </button>
+          </div>
+        </nav>
+        <div className="one-document">
+          <AuthoringWritePanel
+            key={`${bookId}:${writeChapter ?? data.nextChapter}`}
+            bookId={bookId}
+            chapterNumber={activeChapter}
+            chapterTitle={writeDirectory.find((item) => item.number === activeChapter)?.title || data.chapters.find((item) => item.number === activeChapter)?.title}
+            isZh={isZh}
+            onChanged={() => refetch()}
+            onRegisterBeforeLeave={registerWriteGuard}
+            onGoNextChapter={() => void switchWriteChapter(firstUnwrittenChapter(writeDirectory.filter((item) => item.number > activeChapter), activeChapter + 1))}
           />
-        )}
-
-        {chapters.length === 0 && (
-          <LiteraryEmpty
-            title={emptyCopy.title}
-            subtitle={emptyCopy.subtitle}
-            action={emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip) ? emptyCopy.action : undefined}
-            onAction={() => {
-              if (emptyCopy.target === "weave") {
-                nav.toOutline(bookId);
-                return;
-              }
-              const chapter = preflight?.reasons.find((reason) => reason.chapterNumber)?.chapterNumber;
-              if (chapter) nav.toChapter(bookId, chapter);
-            }}
-            className="px-6 py-14 sm:px-8"
-            testId="write-empty"
-          />
-        )}
+          {stage && writeDirectory.length === 0 && (emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip)) && (
+            <LiteraryEmpty
+              title={emptyCopy.title}
+              subtitle={emptyCopy.subtitle}
+              action={emptyCopy.target === "weave" || (emptyCopy.target === "write" && showSkip) ? emptyCopy.action : undefined}
+              onAction={() => {
+                if (emptyCopy.target === "weave") {
+                  nav.toOutline(bookId);
+                  return;
+                }
+                const chapter = preflight?.reasons.find((reason) => reason.chapterNumber)?.chapterNumber;
+                if (chapter) nav.toChapter(bookId, chapter);
+              }}
+              className="px-6 py-14 sm:px-8"
+              testId="write-empty"
+            />
+          )}
+        </div>
       </div>
+
+        {authoringBook ? (
+        <div className="flex flex-wrap items-center gap-2" data-testid="write-export-tools" aria-label={t("book.exportMenu")}>
+          <ExportMenu
+            bookId={bookId}
+            t={t}
+            exportFormat={exportFormat}
+            exportApprovedOnly={exportApprovedOnly}
+            exportHref={exportHref}
+            onFormatChange={setExportFormat}
+            onApprovedOnlyChange={setExportApprovedOnly}
+            onSaved={(path) => setBookActionPending(`saved:${path}`)}
+            onError={(message) => setBookActionPending(message)}
+          />
+          <a href={fanqieHref} download data-testid="export-format-fanqie" className="btn-secondary">{isZh ? "番茄纯文本" : "Tomato plain text"}</a>
+          <FanqieExportFields
+            isZh={isZh}
+            showRange
+            from={fanqieFrom}
+            to={fanqieTo}
+            layout={fanqieLayout}
+            blankLine={fanqieBlankLine}
+            indent={fanqieIndent}
+            onChange={(patch) => {
+              if (patch.from !== undefined) setFanqieFrom(patch.from);
+              if (patch.to !== undefined) setFanqieTo(patch.to);
+              if (patch.layout !== undefined) setFanqieLayout(patch.layout);
+              if (patch.blankLine !== undefined) setFanqieBlankLine(patch.blankLine);
+              if (patch.indent !== undefined) setFanqieIndent(patch.indent);
+            }}
+          />
+        </div>
+        ) : (
+        <details className="write-legacy" data-testid="write-legacy-tools">
+          <summary>{isZh ? "旧管线" : "Legacy pipeline"}</summary>
+          <p className="my-3 text-sm text-muted-foreground">{book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            bookId={bookId}
+            t={t}
+            exportFormat={exportFormat}
+            exportApprovedOnly={exportApprovedOnly}
+            exportHref={exportHref}
+            onFormatChange={setExportFormat}
+            onApprovedOnlyChange={setExportApprovedOnly}
+            onSaved={(path) => setBookActionPending(`saved:${path}`)}
+            onError={(message) => setBookActionPending(message)}
+          />
+          <a href={fanqieHref} download data-testid="book-export-fanqie" className="btn-secondary">{isZh ? "番茄纯文本" : "Tomato plain text"}</a>
+          <div className="inline-flex overflow-hidden rounded-lg bg-primary text-primary-foreground">
+            <button
+              type="button"
+              onClick={handleWriteNext}
+              disabled={writing || drafting || !preflightOk}
+              className="inline-flex h-10 items-center gap-2 px-5 text-[14px] font-medium disabled:opacity-40"
+              data-testid="write-next-primary"
+            >
+              {writing ? <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Feather size={16} />}
+              {writing ? t("dash.writing") : t("cockpit.writeNext")}
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger className="border-l border-primary-foreground/20 px-2">
+                <ChevronDown size={14} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void handleToggleReviewMode()}>
+                  {reviewMode === "manual" ? t("book.reviewManual") : t("book.reviewAuto")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+      <SerialCockpitStrip
+        bookId={bookId}
+        isZh={isZh}
+        skipPreviousApproval={skipPreviousApproval}
+        onSkipChange={setSkipPreviousApproval}
+        showSkip={showSkip}
+        onJumpOutline={() => nav.toOutline(bookId)}
+        onJumpReview={(chapterNumber) => {
+          if (chapterNumber) nav.toChapter(bookId, chapterNumber);
+        }}
+      />
+
+      {reviewQueue.length > 0 && (
+        <div className="ink-notice space-y-2" data-testid="review-queue">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">{isZh ? "等你过目" : "Review queue"}</div>
+            {reviewCount > 0 && (
+              <button type="button" onClick={() => void handleApproveAll()} className="btn-secondary h-8 px-3 text-[13px]">
+                {t("book.approveAll")} ({reviewCount})
+              </button>
+            )}
+          </div>
+          <ul className="space-y-1 text-sm">
+            {groupReviewIssues(reviewQueue).flatMap((group) => group.issues.slice(0, 12).flatMap((item, index) => {
+              const copy = formatReviewIssueCopy(item, isZh);
+              if (!copy) return [];
+              return [(
+                <li key={`${group.dimension}-${item.chapterNumber}-${item.category}-${index}`}>
+                  <span className={isMustFixSeverity(item.severity) ? "text-seal-text font-medium" : "text-mark-text"}>
+                    {copy.severity}
+                  </span>{" "}
+                  {group.dimension ? `${group.dimension} · ` : ""}
+                  {isZh ? "第" : "Ch."}{item.chapterNumber} · {copy.category}: {copy.description}
+                </li>
+              )];
+            }))}
+          </ul>
+        </div>
+      )}
+
+        </details>
+        )}
 
       <ConfirmDialog
         open={Boolean(briefPrompt)}
@@ -758,7 +875,7 @@ export function BookDetail({
           data-testid="chapter-brief-input"
           value={briefValue}
           onChange={(event) => setBriefValue(event.target.value)}
-          className="mt-3 w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="mt-3 w-full rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
 
@@ -780,7 +897,7 @@ export function BookDetail({
           value={overrideValue}
           onChange={(event) => setOverrideValue(event.target.value)}
           placeholder={t("reader.overrideWhy")}
-          className="mt-3 w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="mt-3 w-full rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
     </div>

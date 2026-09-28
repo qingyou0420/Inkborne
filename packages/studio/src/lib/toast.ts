@@ -6,10 +6,16 @@
 
 export type ToastVariant = "info" | "success" | "error";
 
+export interface ToastAction {
+  readonly label: string;
+  readonly onClick: () => void;
+}
+
 export interface ToastItem {
   readonly id: number;
   readonly message: string;
   readonly variant: ToastVariant;
+  readonly action?: ToastAction;
 }
 
 type Listener = (toasts: ReadonlyArray<ToastItem>) => void;
@@ -22,13 +28,13 @@ function emit(): void {
   for (const listener of listeners) listener(toasts);
 }
 
-export function showToast(message: string, variant: ToastVariant = "info"): void {
+export function showToast(message: string, variant: ToastVariant = "info", action?: ToastAction): void {
   const text = message.trim();
   if (!text) return;
-  const item: ToastItem = { id: nextId++, message: text, variant };
+  const item: ToastItem = { id: nextId++, message: text, variant, ...(action?.label.trim() ? { action } : {}) };
   toasts = [...toasts, item];
   emit();
-  window.setTimeout(() => dismissToast(item.id), 4200);
+  window.setTimeout(() => dismissToast(item.id), item.action ? 8000 : 4200);
 }
 
 export function dismissToast(id: number): void {

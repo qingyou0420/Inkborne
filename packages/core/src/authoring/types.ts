@@ -76,6 +76,9 @@ export const InputRefSchema = z.object({
   kind: z.string().min(1),
   id: z.string().min(1),
   version: z.number().int().min(1).optional(),
+  usage: z.enum(["index", "full", "excerpt"]).optional(),
+  reason: z.string().optional(),
+  snippet: z.string().optional(),
 });
 export type InputRef = z.infer<typeof InputRefSchema>;
 
@@ -147,6 +150,7 @@ export const AuthoringRunStatusSchema = z.enum([
 export type AuthoringRunStatus = z.infer<typeof AuthoringRunStatusSchema>;
 
 export const AuthoringRunCheckpointSchema = z.object({
+  requirements: z.string().optional(),
   completedThrough: z.number().int().min(0).optional(),
   remainingStart: z.number().int().min(1).optional(),
   remainingEnd: z.number().int().min(1).optional(),
@@ -155,6 +159,10 @@ export const AuthoringRunCheckpointSchema = z.object({
   missingChapters: z.array(z.number().int().min(1)).default([]),
   completedChapters: z.array(z.number().int().min(1)).default([]),
   producedScope: z.string().optional(),
+  targetChapters: z.number().int().min(1).optional(),
+  revisionArtifactId: z.string().optional(),
+  revisionIssueIds: z.array(z.string()).optional(),
+  revisionReuseStale: z.boolean().optional(),
 });
 export type AuthoringRunCheckpoint = z.infer<typeof AuthoringRunCheckpointSchema>;
 
@@ -195,10 +203,73 @@ export const DependencyWatchSchema = z.object({
   sourceId: z.string().min(1),
   fromVersion: z.number().int().min(1).optional(),
   toVersion: z.number().int().min(1).optional(),
+  fromArtifactId: z.string().min(1).optional(),
+  toArtifactId: z.string().min(1).optional(),
+  impactReportId: z.string().min(1).optional(),
+  openCount: z.number().int().min(0).optional(),
   label: z.string().min(1),
   acknowledged: z.boolean().default(false),
 });
 export type DependencyWatch = z.infer<typeof DependencyWatchSchema>;
+
+export const ImpactItemSchema = z.object({
+  key: z.string().min(1),
+  stage: z.enum(["ground", "weave"]),
+  targetId: z.string().min(1),
+  label: z.string().min(1),
+  verdict: z.enum(["affected", "maybe"]),
+  fields: z.array(z.string()).default([]),
+  reason: z.string().min(1),
+  hint: z.string().optional(),
+  method: z.enum(["llm", "heuristic", "rule"]),
+  snapshot: z.string().optional(),
+  status: z.enum(["open", "reviewed", "regenerated", "dismissed"]).default("open"),
+  resolvedAt: z.string().optional(),
+  resolvedArtifactId: z.string().optional(),
+});
+export type ImpactItem = z.infer<typeof ImpactItemSchema>;
+
+export const ImpactGlobalNoteSchema = z.object({
+  field: z.string().min(1),
+  note: z.string().min(1),
+});
+export type ImpactGlobalNote = z.infer<typeof ImpactGlobalNoteSchema>;
+
+export const ImpactChangeSchema = z.object({
+  field: z.string().min(1),
+  label: z.string().min(1),
+  before: z.string(),
+  after: z.string(),
+});
+export type ImpactChange = z.infer<typeof ImpactChangeSchema>;
+
+export const ImpactReportSchema = z.object({
+  impactId: z.string().min(1),
+  createdAt: z.string().min(1),
+  runId: z.string().optional(),
+  from: z.object({
+    artifactId: z.string().min(1),
+    version: z.number().int().min(1),
+  }),
+  to: z.object({
+    artifactId: z.string().min(1),
+    version: z.number().int().min(1),
+  }),
+  changes: z.array(ImpactChangeSchema).default([]),
+  globals: z.array(ImpactGlobalNoteSchema).default([]),
+  groundReportId: z.string().optional(),
+  weaveReportId: z.string().optional(),
+  items: z.array(ImpactItemSchema).default([]),
+  unmapped: z.array(z.object({
+    target: z.string(),
+    reason: z.string(),
+  })).default([]),
+  method: z.enum(["llm", "heuristic", "mixed"]),
+  degraded: z.object({ reason: z.string().min(1) }).optional(),
+  partial: z.boolean().optional(),
+  supersededBy: z.string().optional(),
+});
+export type ImpactReport = z.infer<typeof ImpactReportSchema>;
 
 export const WorkflowManifestSchema = z.object({
   version: z.literal(1),
@@ -226,6 +297,9 @@ export const WorkflowManifestSchema = z.object({
     chaptersWrittenAdopted: z.number().int().min(0).default(0),
   }).default({}),
   watches: z.array(DependencyWatchSchema).default([]),
+  impactBaseline: z.object({
+    ask: z.string().optional(),
+  }).optional(),
   lastRunId: z.string().optional(),
   updatedAt: z.string().min(1),
 });

@@ -1,22 +1,49 @@
 /**
- * 落笔 authoring: generate candidate, review, adopt.
- *
+ * 落笔 authoring: candidate editing, independent review, and explicit adoption.
  * SPDX-License-Identifier: AGPL-3.0-only
  */
-
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
 import { collapseDuplicateChapterHeadings } from "@actalk/inkos-core/chapter-heading";
-import { postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
+import { isTransientNetworkFetchError } from "../lib/error-copy";
+import { fetchJson, postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
 import { AuthoringStreamError, postAuthoringStream, type AuthoringStreamResult } from "../lib/authoring-stream";
 import { estimateTokenCost, formatPassUsage, priceForServiceRef, usageTotal, type TokenUsage } from "../lib/token-usage";
 import { chapterEditRequest, trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
+import {
+  AUTHORING_SUBMIT_UNKNOWN_MESSAGE,
+  AuthoringSubmitUnknownError,
+  isAuthoringSubmitUnknown,
+  matchActiveAuthoringSubmit,
+  recoverAuthoringSubmit,
+  submitAuthoringAction,
+} from "../lib/recover-authoring-submit";
+import { isAuthoringRunActive, isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
+import { previousChapterSettleHold, producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
+import { writeStateMissing } from "../lib/write-directory";
+import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
-import type { AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
+import type { AuthoringImpactSummary, AuthoringReport, AuthoringWorkspace } from "../lib/authoring-workspace";
 import { currentWriteArtifact, reportForArtifact, resolveAdoptArtifactId, workspaceQuery } from "../lib/authoring-workspace";
+import {
+  findImpactTriageRun,
+  rememberImpactFocus,
+  writeImpactActionLabel,
+  writeImpactBanner,
+} from "../lib/impact-view";
+import { GenerationRequirements } from "./GenerationRequirements";
 import { AuthoringDiffDrawer } from "./AuthoringDiffDrawer";
 import { AuthoringReviewDrawer } from "./AuthoringReviewDrawer";
+import { ManuscriptView } from "./ManuscriptView";
+import { ManuscriptHistoryDrawer } from "./ManuscriptHistoryDrawer";
+import { RegenerateDialog } from "./RegenerateDialog";
+import { useDraftDecision } from "../hooks/use-draft-decision";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { registerNavigationGuard } from "../lib/edit-navigation";
+import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
+import "./write-workspace.css";
 
 const AUTOSAVE_MS = 1500;
 
@@ -37,13 +64,24 @@ function formatElapsed(ms: number): string {
   return `已用 ${minutes} 分 ${rest} 秒`;
 }
 
-function countChars(text: string): number {
-  return text.replace(/\s+/g, "").length;
+// Retain unsaved text when a route temporarily unmounts the editor. This is only
+// a session buffer; formal candidates still go through the authoring API.
+const pendingWriteEdits = new Map<string, { body: string; baseId?: string; savedBody: string }>();
+let unloadGuardInstalled = false;
+function installUnloadGuard() {
+  if (unloadGuardInstalled || typeof window === "undefined") return;
+  unloadGuardInstalled = true;
+  window.addEventListener("beforeunload", (event) => {
+    if (pendingWriteEdits.size === 0) return;
+    event.preventDefault(); event.returnValue = "";
+  });
 }
 
 export interface AuthoringWritePanelHandle {
   flush: () => Promise<void>;
 }
+
+export type WriteLeaveGuard = () => Promise<boolean>;
 
 export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   readonly bookId: string;
@@ -53,6 +91,8 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   readonly generateNonce?: number;
   readonly onBusyChange?: (busy: boolean) => void;
   readonly onChanged?: () => void;
+  readonly onRegisterBeforeLeave?: (guard: WriteLeaveGuard | null) => void;
+  readonly onGoNextChapter?: () => void;
 }>(function AuthoringWritePanel({
   bookId,
   chapterNumber,
@@ -61,34 +101,50 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   generateNonce = 0,
   onBusyChange,
   onChanged,
+  onRegisterBeforeLeave,
+  onGoNextChapter,
 }, ref) {
-  const { data, loading, refetch } = useApi<AuthoringWorkspace>(
+  const { data, error: workspaceError, refetch } = useApi<AuthoringWorkspace>(
     `/authoring/workspace?${workspaceQuery(bookId, undefined, { chapter: chapterNumber })}`,
   );
+  const bufferKey = `${bookId}:${chapterNumber}`;
+  const scope = `chapter:${chapterNumber}`;
   const candidate = currentWriteArtifact(data, chapterNumber);
   const adoptedId = data?.manifest?.adopted?.write?.[String(chapterNumber)];
-  const parentId = candidate?.parentArtifactId && candidate.parentArtifactId !== candidate.artifactId
-    ? candidate.parentArtifactId
-    : undefined;
+  const parentId = candidate?.parentArtifactId && candidate.parentArtifactId !== candidate.artifactId ? candidate.parentArtifactId : undefined;
+  const restoredEdit = useRef(pendingWriteEdits.get(bufferKey));
   const [busy, setBusy] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const [report, setReport] = useState<AuthoringReport | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
-  const [requirement, setRequirement] = useState("");
-  const [body, setBody] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [generation, setGeneration] = useState<{ issueIds?: ReadonlyArray<string>; reuseStale?: boolean } | null>(null);
+  const [requirementNotes, setRequirementNotes] = useState("");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [settleArtifactId, setSettleArtifactId] = useState<string | null>(null);
   const [lengthNote, setLengthNote] = useState("");
   const [generateChoice, setGenerateChoice] = useState(false);
   const [usage, setUsage] = useState<TokenUsage | undefined>();
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [stopping, setStopping] = useState(false);
-  const dirtyRef = useRef(false);
+  const authoringRun = useAuthoringRun(bookId, activeRunId);
+  const decision = useDraftDecision(isZh);
+  const [body, setBody] = useState(restoredEdit.current?.body ?? "");
+  const [dirty, setDirty] = useState(Boolean(restoredEdit.current));
+  const dirtyRef = useRef(dirty);
   const composingRef = useRef(false);
   const runIdRef = useRef("");
   const pendingEditRef = useRef<ReturnType<typeof trackChapterEdit>>(null);
   const inflightRef = useRef<Promise<string | undefined> | null>(null);
-  const bodyRef = useRef("");
-  const lastLoadedId = useRef<string>("");
+  const bodyRef = useRef(restoredEdit.current?.body ?? "");
+  const editBaseId = useRef(restoredEdit.current?.baseId);
+  const savedBodyRef = useRef(restoredEdit.current?.savedBody ?? "");
+  const lastLoadedId = useRef("");
+  const pendingSavedId = useRef<string | undefined>(undefined);
   const timerRef = useRef<number | null>(null);
   const seenGenerate = useRef(generateNonce);
   const candidateRef = useRef(candidate);
@@ -96,26 +152,32 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   bodyRef.current = body;
   candidateRef.current = candidate;
   chapterTitleRef.current = chapterTitle;
-  const artifactUrl = candidate
-    ? `/authoring/artifacts/${encodeURIComponent(candidate.artifactId)}?bookId=${encodeURIComponent(bookId)}`
-    : "";
-  const { data: artifact } = useApi<{ body?: string; meta?: { artifactId?: string } }>(artifactUrl);
-  const chapterUrl = !candidate
-    ? `/books/${encodeURIComponent(bookId)}/chapters/${chapterNumber}`
-    : "";
-  const { data: existingChapter } = useApi<{ content?: string; title?: string; chapterNumber?: number }>(chapterUrl);
+  const artifactUrl = candidate ? `/authoring/artifacts/${encodeURIComponent(candidate.artifactId)}?bookId=${encodeURIComponent(bookId)}` : "";
+  const { data: artifact, error: artifactError, refetch: refetchArtifact } = useApi<{ body?: string; meta?: { artifactId?: string } }>(artifactUrl);
+  const chapterUrl = !candidate ? `/books/${encodeURIComponent(bookId)}/chapters/${chapterNumber}` : "";
+  const { data: existingChapter, loading: chapterLoading } = useApi<{ content?: string; chapterNumber?: number }>(chapterUrl);
   const { data: basis } = useApi<WriteBasis>(
     `/authoring/write/basis?bookId=${encodeURIComponent(bookId)}&chapterNumber=${chapterNumber}`,
   );
   const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
   const artifactForCurrent = artifact?.meta?.artifactId === candidate?.artifactId ? artifact : undefined;
   const chapterForCurrent = existingChapter?.chapterNumber === chapterNumber ? existingChapter : undefined;
+  const ready = Boolean(data) && (candidate ? artifactForCurrent?.body != null : !chapterLoading);
+  const lastWriteRun = selectScopedAuthoringRun(data?.runs, "write", scope);
+  const previousSettleHold = previousChapterSettleHold(data?.runs, chapterNumber);
+  const previousSettleId = previousSettleHold && isAuthoringRunActive(previousSettleHold.status) ? previousSettleHold.runId : null;
+  const previousSettleWatch = useAuthoringRun(bookId, previousSettleId);
+  const previousSettleActive = Boolean(previousSettleId) && (previousSettleWatch.active || !previousSettleWatch.settled);
+  const chapterStateMissing = writeStateMissing({
+    adoptedId,
+    stateArtifactId: data?.writeStateRefs?.[String(chapterNumber)],
+  });
   const rawSaved = artifactForCurrent?.body ?? (!candidate ? chapterForCurrent?.content ?? "" : "");
   const savedBody = collapseDuplicateChapterHeadings(rawSaved, { chapterNumber, title: chapterTitle });
 
   useEffect(() => {
-    onBusyChange?.(Boolean(busy));
-  }, [busy, onBusyChange]);
+    onBusyChange?.(Boolean(busy) || authoringRun.active);
+  }, [busy, authoringRun.active, onBusyChange]);
 
   useEffect(() => registerUnsavedCheck(() => dirtyRef.current || pendingEditRef.current !== null), []);
 
@@ -127,28 +189,47 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
 
   useEffect(() => {
     setUsage(undefined);
+    setLengthNote("");
   }, [bookId, chapterNumber]);
 
   useEffect(() => {
-    const loadKey = candidate?.artifactId ?? `empty:${bookId}:${chapterNumber}`;
-    if (dirtyRef.current || composingRef.current) return;
-    if (candidate) {
-      if (artifactForCurrent?.body == null) return;
-      setBody(collapseDuplicateChapterHeadings(artifactForCurrent.body, { chapterNumber, title: chapterTitle }));
-      lastLoadedId.current = loadKey;
-      return;
+    if (activeRunId) return;
+    if (lastWriteRun && shouldAutoTakeoverAuthoringRun(lastWriteRun)) setActiveRunId(lastWriteRun.runId);
+  }, [activeRunId, lastWriteRun]);
+
+  useEffect(() => {
+    if (!previousSettleWatch.settled) return;
+    void refetch();
+  }, [previousSettleWatch.settled, refetch]);
+
+  useEffect(() => {
+    if (!authoringRun.settled || !authoringRun.run) return;
+    void refetch();
+    onChanged?.();
+    if (authoringRun.run.status === "failed" || authoringRun.run.status === "partial") {
+      setFailure(authoringRun.run.error ?? (isZh ? "这次操作没有完成。" : "This run did not finish."));
+    } else {
+      setFailure(null);
+      const produced = producedArtifactForScope(authoringRun.run, scope);
+      if (produced) pendingSavedId.current = produced;
     }
-    if (chapterForCurrent?.content) {
-      setBody(collapseDuplicateChapterHeadings(chapterForCurrent.content, { chapterNumber, title: chapterTitle }));
-      lastLoadedId.current = loadKey;
-      return;
-    }
-    if (loading) return;
-    if (lastLoadedId.current !== loadKey) {
-      setBody("");
-      lastLoadedId.current = loadKey;
-    }
-  }, [artifactForCurrent?.body, bookId, candidate, chapterForCurrent?.content, chapterNumber, chapterTitle, loading]);
+  }, [authoringRun.settled, authoringRun.run, isZh, onChanged, refetch, scope]);
+
+  useEffect(() => {
+    if (dirtyRef.current || busyRef.current || composingRef.current || !ready) return;
+    if (pendingSavedId.current && candidate?.artifactId !== pendingSavedId.current) return;
+    pendingSavedId.current = undefined;
+    const loadKey = candidate?.artifactId ?? `empty:${bufferKey}`;
+    const nextBody = collapseDuplicateChapterHeadings(
+      artifactForCurrent?.body ?? chapterForCurrent?.content ?? "",
+      { chapterNumber, title: chapterTitle },
+    );
+    if (lastLoadedId.current === loadKey && savedBodyRef.current === nextBody) return;
+    setBody(nextBody);
+    savedBodyRef.current = nextBody;
+    editBaseId.current = candidate?.artifactId;
+    lastLoadedId.current = loadKey;
+  }, [artifactForCurrent?.body, bufferKey, candidate?.artifactId, chapterForCurrent?.content, chapterNumber, chapterTitle, ready, busy, dirty]);
 
   const persistSnapshot = async (
     pending: NonNullable<ReturnType<typeof trackChapterEdit>>,
@@ -182,37 +263,60 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       timerRef.current = null;
     }
     const pending = pendingEditRef.current;
-    if (!pending) return candidateRef.current?.artifactId;
-    pendingEditRef.current = null;
+    if (pending) {
+      pendingEditRef.current = null;
+      dirtyRef.current = false;
+      const sourceArtifactId = pending.artifactId;
+      const holder: { current?: Promise<string | undefined> } = {};
+      holder.current = (async () => {
+        try {
+          const savedId = await persistSnapshot(pending);
+          const newer = pendingEditRef.current;
+          if (
+            savedId
+            && newer
+            && newer.bookId === pending.bookId
+            && newer.chapterNumber === pending.chapterNumber
+            && newer.artifactId === sourceArtifactId
+          ) {
+            pendingEditRef.current = { ...newer, artifactId: savedId };
+          }
+          if (savedId) {
+            setDirty(false);
+            savedBodyRef.current = pending.content;
+            editBaseId.current = savedId;
+            pendingSavedId.current = savedId;
+            lastLoadedId.current = savedId;
+            pendingWriteEdits.delete(bufferKey);
+          }
+          return savedId;
+        } catch (error) {
+          if (!pendingEditRef.current) {
+            pendingEditRef.current = pending;
+            dirtyRef.current = true;
+          }
+          throw error;
+        } finally {
+          if (inflightRef.current === holder.current) inflightRef.current = null;
+        }
+      })();
+      inflightRef.current = holder.current;
+      return holder.current;
+    }
+    if (!dirtyRef.current) return pendingSavedId.current ?? candidateRef.current?.artifactId;
+    const baseId = editBaseId.current;
+    const saved = baseId
+      ? await putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(baseId)}`, { bookId, body: bodyRef.current })
+      : await postApi<{ artifactId: string }>("/authoring/write/hand", { bookId, chapterNumber, title: chapterTitle, body: bodyRef.current });
     dirtyRef.current = false;
-    const sourceArtifactId = pending.artifactId;
-    const holder: { current?: Promise<string | undefined> } = {};
-    holder.current = (async () => {
-      try {
-        const savedId = await persistSnapshot(pending);
-        const newer = pendingEditRef.current;
-        if (
-          savedId
-          && newer
-          && newer.bookId === pending.bookId
-          && newer.chapterNumber === pending.chapterNumber
-          && newer.artifactId === sourceArtifactId
-        ) {
-          pendingEditRef.current = { ...newer, artifactId: savedId };
-        }
-        return savedId;
-      } catch (error) {
-        if (!pendingEditRef.current) {
-          pendingEditRef.current = pending;
-          dirtyRef.current = true;
-        }
-        throw error;
-      } finally {
-        if (inflightRef.current === holder.current) inflightRef.current = null;
-      }
-    })();
-    inflightRef.current = holder.current;
-    return holder.current;
+    setDirty(false);
+    savedBodyRef.current = bodyRef.current;
+    editBaseId.current = saved.artifactId;
+    pendingSavedId.current = saved.artifactId;
+    lastLoadedId.current = saved.artifactId;
+    pendingWriteEdits.delete(bufferKey);
+    await refetch();
+    return saved.artifactId;
   };
 
   const persistRef = useRef(persistIfDirty);
@@ -229,8 +333,8 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       void persistIfDirty().catch((error) => {
-        const busy = error instanceof Error && /BOOK_BUSY|正在写|写入被占用/.test(error.message);
-        if (busy) return;
+        const lockBusy = error instanceof Error && /BOOK_BUSY|正在写|写入被占用/.test(error.message);
+        if (lockBusy) return;
         showToast(error instanceof Error ? error.message : String(error), "error");
       });
     }, AUTOSAVE_MS);
@@ -252,18 +356,36 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     };
   }, [bookId, chapterNumber]);
 
-  const run = async (label: string, fn: () => Promise<unknown>, notifyParent = false) => {
+  const [submitUnknown, setSubmitUnknown] = useState<string | null>(null);
+  const lookupWorkspaceRuns = () => fetchJson<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { chapter: chapterNumber })}`);
+  const run = async (label: string, fn: () => Promise<unknown>, notifyParent = false): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
     setBusy(label);
+    setFailure(null);
+    let keepBusy = false;
     try {
-      const result = await fn();
+      await fn();
       await refetch();
       if (notifyParent) onChanged?.();
-      return result;
+      return true;
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), "error");
-      return undefined;
+      if (isAuthoringSubmitUnknown(error)) {
+        keepBusy = true;
+        setSubmitUnknown(label);
+        setFailure(error.message);
+        setBusy("unknown");
+        return false;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      setFailure(message);
+      showToast(message, "error");
+      return false;
     } finally {
-      setBusy(null);
+      if (!keepBusy) {
+        busyRef.current = false;
+        setBusy(null);
+      }
     }
   };
 
@@ -283,9 +405,11 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     snapshot: string,
   ): Promise<AuthoringStreamResult | undefined> => {
     setBusy(label);
+    busyRef.current = true;
     setStopping(false);
     setStartedAt(Date.now());
     composingRef.current = true;
+    setEditing(true);
     runIdRef.current = "";
     let streamed = "";
     try {
@@ -304,7 +428,14 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       } else {
         setBody(result.body || streamed);
         dirtyRef.current = false;
+        setDirty(false);
         pendingEditRef.current = null;
+        pendingWriteEdits.delete(bufferKey);
+        if (result.artifactId) {
+          pendingSavedId.current = result.artifactId;
+          editBaseId.current = result.artifactId;
+          savedBodyRef.current = result.body || streamed;
+        }
         if (usageTotal(result.usage)) setUsage(result.usage);
         setLengthNote(result.lengthNote ?? "");
         if (result.lengthNote) showToast(result.lengthNote, "info");
@@ -320,6 +451,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       if (explicitMiss) {
         setBody(snapshot);
         dirtyRef.current = false;
+        setDirty(false);
         pendingEditRef.current = null;
       } else if (streamed) {
         setBody(streamed);
@@ -334,22 +466,27 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       runIdRef.current = "";
       setStartedAt(null);
       setStopping(false);
+      busyRef.current = false;
       setBusy(null);
     }
   };
 
-  const startGenerate = (mode: "hand" | "fresh") => {
+  const startGenerate = (mode: "hand" | "fresh", requirements = requirementNotes) => {
     setGenerateChoice(false);
     void (async () => {
       const snapshot = bodyRef.current;
       const hand = mode === "hand";
       try {
         const parentArtifactId = await persistIfDirty();
+        const notes = generationReviewNotes(
+          report ?? reportForArtifact(data?.reports, candidate?.artifactId) ?? null,
+          [pendingSavedId.current ?? candidate?.artifactId],
+        );
         await runStream("generate", "/authoring/write/generate/stream", {
           bookId,
           chapterNumber,
           title: chapterTitle,
-          requirements: requirement || undefined,
+          requirements: withGenerationReview(requirements, notes) || undefined,
           ...(hand && snapshot.trim() ? { baseBody: snapshot } : {}),
           ...(parentArtifactId ? { parentArtifactId } : {}),
         }, snapshot);
@@ -359,13 +496,18 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     })();
   };
 
-  const requestGenerate = () => {
+  const requestGenerate = (requirements = requirementNotes) => {
     const handEdited = dirtyRef.current || candidate?.source === "hand" || (body.trim() !== "" && body !== savedBody);
     if (handEdited) {
       setGenerateChoice(true);
       return;
     }
-    startGenerate("fresh");
+    startGenerate("fresh", requirements);
+  };
+
+  const generateChapter = async (requirements = "") => {
+    requestGenerate(requirements);
+    return true;
   };
 
   useEffect(() => {
@@ -374,98 +516,315 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     requestGenerate();
   }, [generateNonce]);
 
-  const editorLocked = busy === "generate" || busy === "revise";
-  const liveCount = countChars(body);
+  const actionsRef = useRef({ save: async (): Promise<boolean> => false, leave: async (): Promise<boolean> => false });
+  const discardEdits = () => {
+    setBody(savedBodyRef.current);
+    dirtyRef.current = false;
+    setDirty(false);
+    pendingEditRef.current = null;
+    pendingWriteEdits.delete(bufferKey);
+    setEditing(false);
+  };
+  actionsRef.current = {
+    save: async () => {
+      if (busyRef.current) return false;
+      if (!editing) return true;
+      if (!dirtyRef.current) { setEditing(false); return true; }
+      return run("save", async () => { await persistIfDirty(); setEditing(false); });
+    },
+    leave: async () => {
+      if (busyRef.current || composingRef.current) {
+        setFailure(isZh ? "当前操作尚未结束，请稍后切换章节。" : "Wait for the current operation before switching chapters.");
+        return false;
+      }
+      if (!dirtyRef.current) { setEditing(false); return true; }
+      const answer = await decision.ask();
+      if (answer === "cancel") { setEditing(true); return false; }
+      if (answer === "discard") { discardEdits(); return true; }
+      return run("save", async () => { await persistIfDirty(); setEditing(false); });
+    },
+  };
+  useEffect(() => {
+    onRegisterBeforeLeave?.(() => actionsRef.current.leave());
+    return () => onRegisterBeforeLeave?.(null);
+  }, [onRegisterBeforeLeave]);
+  useEffect(() => {
+    if (!dirty) return;
+    return registerNavigationGuard(() => actionsRef.current.leave());
+  }, [dirty]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || event.altKey || document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      void actionsRef.current.save();
+    };
+    installUnloadGuard();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const editorLocked = busy === "generate" || busy === "revise" || composingRef.current;
+  const liveCount = body.replace(/\s+/g, "").length;
   const elapsedLabel = startedAt ? formatElapsed(now - startedAt) : "";
   const progressLabel = editorLocked
     ? `${stopping ? (isZh ? "正在停下" : "Stopping") : (busy === "revise" ? (isZh ? "正在按意见改" : "Revising") : (isZh ? "正在写" : "Writing"))} · ${elapsedLabel} · ${isZh ? `已写 ${liveCount.toLocaleString("zh-CN")} 字` : `${liveCount.toLocaleString("en-US")} chars`}`
     : "";
-  const shownRun = data?.runs?.find((run) => run.runId && run.runId === candidate?.runId);
+  const shownRun = data?.runs?.find((item) => item.runId && item.runId === candidate?.runId);
   const runUsage = shownRun?.usage;
   const shownUsage = usage ?? runUsage;
   const usageCost = usageTotal(shownUsage)
     ? estimateTokenCost(usageTotal(shownUsage), priceForServiceRef(shownRun?.modelSnapshot?.serviceRef, serviceConfig?.services))
     : "";
   const usageLabel = formatPassUsage(shownUsage, isZh, usageCost);
-  const leftId = parentId && parentId !== candidate?.artifactId ? parentId : undefined;
   const workspaceReport = reportForArtifact(data?.reports, candidate?.artifactId) ?? null;
-  const activeReport = report ?? workspaceReport;
+  const storedReport = report ?? workspaceReport;
+  const activeReport = storedReport && dirty ? { ...storedReport, stale: true, staleReason: isZh ? "正文已有未保存手改，这份报告对应修改前的稿件。" : "Unsaved edits have changed the reviewed text." } : storedReport;
+  const writeRunCompleted = authoringRun.settled && authoringRun.run?.status === "completed";
+  const softenTransientRefreshError = (message: string | null) => (
+    message && writeRunCompleted && data && isTransientNetworkFetchError(message) ? null : message
+  );
+  const error = failure
+    ?? softenTransientRefreshError(authoringRun.error)
+    ?? softenTransientRefreshError(workspaceError)
+    ?? softenTransientRefreshError(artifactError);
+  const switchedInBackground = dirty && candidate?.artifactId !== editBaseId.current;
+  const history = (data?.artifacts ?? []).filter((item) => item.stage === "write" && item.scope === scope);
+  const selectVersion = async (artifactId: string) => {
+    await persistIfDirty();
+    await postApi("/authoring/write/select", { bookId, chapterNumber, artifactId });
+    pendingSavedId.current = undefined;
+    setHistoryOpen(false);
+    setDiffOpen(false);
+  };
+  const adopt = async () => {
+    const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
+    const result = await postApi<{ message?: string; settled?: boolean; runId?: string; status?: string; artifactId?: string; lengthNote?: string }>("/authoring/write/adopt", { bookId, artifactId });
+    if (result.lengthNote) {
+      setLengthNote(result.lengthNote);
+      showToast(result.lengthNote, "info");
+    }
+    if (isBackgroundAuthoringStart(result) && result.runId) {
+      setSettleArtifactId(artifactId);
+      setActiveRunId(result.runId);
+    }
+    showToast(result.message ?? (isZh ? "章节已采用" : "Chapter adopted"), result.settled === false ? "info" : "success", {
+      label: isZh ? "写下一章" : "Write next chapter",
+      onClick: () => onGoNextChapter ? onGoNextChapter() : goBookAuthoringStage(bookId, "write"),
+    });
+  };
+  const reviewCurrent = () => {
+    if (editing || dirty || busyRef.current) return Promise.resolve(false);
+    setReportOpen(true);
+    return run("review", async () => {
+      const artifactId = pendingSavedId.current ?? candidate?.artifactId;
+      if (!artifactId) throw new Error(isZh ? "先写本章或生成候选。" : "Write or generate a candidate first.");
+      const submitted = await submitAuthoringAction<AuthoringReport & { runId?: string; status?: string }>({
+        post: () => postApi("/authoring/write/review", { bookId, artifactId, coverage: `第 ${chapterNumber} 章` }),
+        readWorkspace: lookupWorkspaceRuns,
+        match: matchActiveAuthoringSubmit("write", "review", scope),
+      });
+      if (submitted.kind === "bound") {
+        setActiveRunId(submitted.run.runId);
+        setSubmitUnknown(null);
+        return;
+      }
+      if (submitted.kind === "unknown") throw new AuthoringSubmitUnknownError();
+      const next = submitted.result;
+      if (isBackgroundAuthoringStart(next) && next.runId) {
+        setActiveRunId(next.runId);
+        return;
+      }
+      setReport(next);
+    });
+  };
+  const generationNotes = generationReviewNotes(activeReport, [pendingSavedId.current ?? candidate?.artifactId]);
+  const abandonRun = () => {
+    if (runIdRef.current) {
+      stopWriting();
+      return;
+    }
+    if (!activeRunId) return;
+    void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
+  };
+  const retryFailedRun = () => {
+    const action = writeRetryAction(authoringRun.run?.operation);
+    if (action === "settle") {
+      retrySettle(authoringRun.run?.producedArtifactIds?.[0] ?? settleArtifactId);
+      return;
+    }
+    if (action === "review") {
+      void reviewCurrent();
+      return;
+    }
+    void generateChapter(requirementNotes);
+  };
+  const retrySettle = (artifactId?: string | null) => {
+    if (!artifactId) return;
+    void run("settle", async () => {
+      const result = await postApi<{ runId?: string; status?: string }>("/authoring/write/settle", { bookId, artifactId });
+      if (result.runId) setActiveRunId(result.runId);
+    });
+  };
+  const copyChapter = () => {
+    const text = renderFanqieChapter({
+      chapterNumber,
+      title: chapterTitle,
+      markdown: body,
+    });
+    void copyToClipboard(text)
+      .then(() => showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success"))
+      .catch((copyError) => showToast(copyError instanceof Error ? copyError.message : "复制失败", "error"));
+  };
+  const locked = Boolean(busy) || authoringRun.active || composingRef.current;
+  const generateHeld = previousSettleActive;
+  const targetWords = basis?.targetWordCount ?? data?.canon?.chapterWordCount;
+  const currentWords = liveCount;
+  const runStatus = editorLocked
+    ? progressLabel
+    : authoringRun.active
+      ? (isZh
+        ? `${authoringRun.run?.progressLabel ?? `正在写第 ${chapterNumber} 章`}${authoringRun.elapsed ? ` · 已 ${authoringRun.elapsed}` : ""}`
+        : `${authoringRun.run?.progressLabel ?? `Writing ch.${chapterNumber}`}${authoringRun.elapsed ? ` · ${authoringRun.elapsed}` : ""}`)
+      : authoringRun.run?.status === "failed"
+        ? (authoringRun.run.error ?? (isZh ? "这次操作失败" : "This run failed"))
+        : null;
+  const triage = findImpactTriageRun(data?.runs);
+  const impactBanner = writeImpactBanner({
+    impact: data?.impact,
+    watches: data?.manifest?.watches,
+    chapterNumber,
+    triageRunning: triage?.status === "running" || triage?.status === "pausing",
+    authoringBook: data?.authoringBook,
+    isZh,
+  });
+  const showLiveEditor = editing || composingRef.current || editorLocked;
 
   return (
-    <section className="space-y-3 rounded-2xl border border-border/60 bg-card/70 p-4" data-testid="authoring-write-panel">
-      <div>
-        <h2 className="font-serif text-lg">
-          {isZh ? `第 ${chapterNumber} 章` : `Chapter ${chapterNumber}`}
-          {chapterTitle ? ` · ${chapterTitle}` : ""}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {candidate
-            ? (isZh ? `候选 v${candidate.version}${adoptedId ? " · 已有采用稿" : ""}` : `Candidate v${candidate.version}${adoptedId ? " · adopted exists" : ""}`)
-            : (isZh ? "还没有本章候选稿" : "No candidate yet")}
-        </p>
-        {data?.manifest?.watches?.some((watch) => !watch.acknowledged) ? (
-          <p className="text-xs text-mark-text">
-            {isZh ? "正典或设定已有新采用版，审查依据可能需要更新。" : "Canon or settings changed; review basis may be stale."}
-          </p>
-        ) : null}
-      </div>
-      <details className="rounded-xl border border-border/70 bg-background/60 px-3 py-2" data-testid="write-chapter-basis">
-        <summary className="cursor-pointer text-sm">{isZh ? "本章依据" : "This chapter"}</summary>
-        <div className="mt-3 space-y-2 text-sm leading-6">
-          <p>
-            <span className="text-muted-foreground">{isZh ? "这一章要写" : "Plan"} · </span>
-            {(basis?.title || chapterTitle) ? `${basis?.title || chapterTitle}。` : ""}
-            {basis?.summary || (isZh ? "还没有章纲。" : "No chapter plan yet.")}
-          </p>
-          {basis?.goal ? (
-            <p>
-              <span className="text-muted-foreground">{isZh ? "本卷目标" : "Volume"} · </span>
-              {basis.goal}
-            </p>
-          ) : null}
-          <p>
-            <span className="text-muted-foreground">{isZh ? "上一章结尾" : "Previous ending"} · </span>
-            {basis?.previousEnding || (isZh ? "这是开头，没有上一章。" : "This is the opening.")}
-          </p>
-          {basis?.progress ? (
-            <p>
-              <span className="text-muted-foreground">{isZh ? "写到哪了" : "Progress"} · </span>
-              {basis.progress}
-            </p>
-          ) : null}
-          <p>
-            <span className="text-muted-foreground">{isZh ? "字数" : "Length"} · </span>
-            {isZh
-              ? `现在 ${liveCount.toLocaleString("zh-CN")} 字${basis?.targetWordCount ? `，这一章打算写 ${basis.targetWordCount.toLocaleString("zh-CN")} 字` : ""}`
-              : `${liveCount.toLocaleString("en-US")}${basis?.targetWordCount ? ` / ${basis.targetWordCount.toLocaleString("en-US")}` : ""}`}
-          </p>
+    <section className={`manuscript-workspace ${reportOpen ? "review-is-open" : ""}`} data-testid="authoring-write-panel" aria-busy={Boolean(busy)}>
+      <header className="manuscript-heading">
+        <div className="manuscript-version">
+          <span>{candidate ? candidate.artifactId === adoptedId ? (isZh ? `已采用 v${candidate.version}` : `Adopted v${candidate.version}`) : (isZh ? `候选 v${candidate.version}` : `Candidate v${candidate.version}`) : (isZh ? "本章草稿" : "Chapter draft")}</span>
+          {adoptedId ? <span>{isZh ? "已有采用稿" : "Adopted draft available"}</span> : null}
         </div>
-      </details>
-      {progressLabel ? (
-        <p className="text-sm text-muted-foreground" data-testid="write-progress">{progressLabel}</p>
-      ) : null}
-      <textarea
-        className="min-h-[220px] w-full rounded-md border border-border bg-background px-3 py-2 font-serif text-sm leading-6"
-        placeholder={isZh ? "候选正文会出现在这里，可直接修改。" : "Candidate text appears here and can be edited."}
+        <h1>{isZh ? `第 ${chapterNumber} 章` : `Chapter ${chapterNumber}`}{chapterTitle ? ` ${chapterTitle}` : ""}</h1>
+        <div className="manuscript-meta">
+          <span>{targetWords
+            ? (isZh ? `${currentWords.toLocaleString()} / 约 ${targetWords.toLocaleString()} 字` : `${currentWords.toLocaleString()} / ~${targetWords.toLocaleString()} words`)
+            : `${currentWords.toLocaleString()} ${isZh ? "字" : "characters"}`}</span>
+        </div>
+        {previousSettleActive ? <p className="manuscript-notice" data-testid="write-previous-settle-hold">{isZh ? `正在整理第 ${chapterNumber - 1} 章状态，完成后可写下一章` : `Settling chapter ${chapterNumber - 1} before writing the next chapter.`}</p> : null}
+        {chapterStateMissing && !previousSettleActive ? <p className="manuscript-notice" data-testid="write-state-missing">{isZh ? "本章已采用，但状态尚未整理。" : "This chapter is adopted, but its state is not settled."}</p> : null}
+        {impactBanner ? (
+          <div className="manuscript-notice" data-testid="write-impact-banner">
+            <p>{impactBanner.text}</p>
+            {impactBanner.chapterText ? <p>{impactBanner.chapterText}</p> : null}
+            {impactBanner.globalsText ? <p data-testid="write-impact-globals">{impactBanner.globalsText}</p> : null}
+            {impactBanner.actions.length > 0 ? (
+              <p className="flex flex-wrap gap-2">
+                {impactBanner.actions.map((action) => (
+                  <button
+                    key={action}
+                    type="button"
+                    className="btn-ghost"
+                    data-testid={`write-impact-${action}`}
+                    onClick={() => {
+                      if (action === "ground") goBookAuthoringStage(bookId, "ground");
+                      else if (action === "weave") goBookAuthoringStage(bookId, "weave");
+                      else if (action === "chapter") {
+                        rememberImpactFocus(`chapter:${chapterNumber}`);
+                        goBookAuthoringStage(bookId, "weave");
+                      } else if (action === "recompute") {
+                        void run("impact", async () => {
+                          const result = await postApi<{ runId?: string; status?: string }>("/authoring/impact/recompute", { bookId });
+                          if (result.runId) setActiveRunId(result.runId);
+                          showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+                        });
+                      } else {
+                        void run("impact", async () => {
+                          await postApi<{ ok: boolean; impact?: AuthoringImpactSummary }>("/authoring/impact/resolve", { bookId, as: "reviewed" });
+                        });
+                      }
+                    }}
+                  >
+                    {writeImpactActionLabel(action, isZh)}
+                  </button>
+                ))}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {switchedInBackground ? <p className="manuscript-notice">{isZh ? "候选已在别处更新。你的手改已保留，保存将另存为新候选。" : "Another candidate was selected. Your edits are retained and will save as a new candidate."}</p> : null}
+        <details className="rounded-xl border border-border/70 bg-background/60 px-3 py-2" data-testid="write-chapter-basis">
+          <summary className="cursor-pointer text-sm">{isZh ? "本章依据" : "This chapter"}</summary>
+          <div className="mt-3 space-y-2 text-sm leading-6">
+            <p>
+              <span className="text-muted-foreground">{isZh ? "这一章要写" : "Plan"} · </span>
+              {(basis?.title || chapterTitle) ? `${basis?.title || chapterTitle}。` : ""}
+              {basis?.summary || (isZh ? "还没有章纲。" : "No chapter plan yet.")}
+            </p>
+            {basis?.goal ? (
+              <p>
+                <span className="text-muted-foreground">{isZh ? "本卷目标" : "Volume"} · </span>
+                {basis.goal}
+              </p>
+            ) : null}
+            <p>
+              <span className="text-muted-foreground">{isZh ? "上一章结尾" : "Previous ending"} · </span>
+              {basis?.previousEnding || (isZh ? "这是开头，没有上一章。" : "This is the opening.")}
+            </p>
+            {basis?.progress ? (
+              <p>
+                <span className="text-muted-foreground">{isZh ? "写到哪了" : "Progress"} · </span>
+                {basis.progress}
+              </p>
+            ) : null}
+            <p>
+              <span className="text-muted-foreground">{isZh ? "字数" : "Length"} · </span>
+              {isZh
+                ? `现在 ${liveCount.toLocaleString("zh-CN")} 字${basis?.targetWordCount ? `，这一章打算写 ${basis.targetWordCount.toLocaleString("zh-CN")} 字` : ""}`
+                : `${liveCount.toLocaleString("en-US")}${basis?.targetWordCount ? ` / ${basis.targetWordCount.toLocaleString("en-US")}` : ""}`}
+            </p>
+          </div>
+        </details>
+        {progressLabel ? <p className="text-sm text-muted-foreground" data-testid="write-progress">{progressLabel}</p> : null}
+        {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
+        {usageLabel ? <p className="text-xs text-muted-foreground" data-testid="write-token-usage">{usageLabel}</p> : null}
+      </header>
+      {error ? <div className="manuscript-error" role="alert"><span>{error}</span>{!failure ? <button type="button" className="btn-ghost" onClick={() => { void refetch(); void refetchArtifact(); }}>{isZh ? "重新加载" : "Retry loading"}</button> : null}{submitUnknown ? <button type="button" className="btn-ghost" data-testid="authoring-submit-check" onClick={() => {
+        void recoverAuthoringSubmit({
+          readWorkspace: lookupWorkspaceRuns,
+          match: matchActiveAuthoringSubmit("write", submitUnknown === "review" ? "review" : submitUnknown === "revise" ? "revise" : "generate", scope),
+        }).then((recovered) => {
+          if (recovered.kind === "bound") {
+            setActiveRunId(recovered.run.runId);
+            setSubmitUnknown(null);
+            setFailure(null);
+            busyRef.current = false;
+            setBusy(null);
+          } else setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
+        });
+      }}>{isZh ? "核对" : "Check"}</button> : null}</div> : null}
+      {showLiveEditor ? <textarea
+        className="manuscript-editor prose-body"
+        aria-label={isZh ? `第 ${chapterNumber} 章候选正文` : `Chapter ${chapterNumber} candidate text`}
+        placeholder={!ready ? (isZh ? "正在打开稿件…" : "Opening manuscript…") : (isZh ? "从这一章的第一句话开始。" : "Begin with the first sentence of this chapter.")}
         value={body}
+        readOnly={(locked && !composingRef.current) || !ready}
         disabled={editorLocked}
         onChange={(event) => {
-          const next = event.target.value;
-          pendingEditRef.current = trackChapterEdit(bookId, chapterNumber, next, savedBody, candidate?.artifactId);
+          if (busyRef.current || composingRef.current || !ready) return;
+          const value = event.target.value;
+          const changed = value !== savedBodyRef.current;
+          pendingEditRef.current = trackChapterEdit(bookId, chapterNumber, value, savedBody, candidate?.artifactId);
           dirtyRef.current = pendingEditRef.current !== null;
-          setBody(next);
+          setDirty(changed);
+          setBody(value);
+          setFailure(null);
+          if (changed) pendingWriteEdits.set(bufferKey, { body: value, baseId: editBaseId.current, savedBody: savedBodyRef.current });
+          else pendingWriteEdits.delete(bufferKey);
         }}
         data-testid="write-candidate-body"
-      />
-      <p className="text-xs text-muted-foreground">
-        {isZh ? "停笔一会儿会自动保存手改。换章或离开前也会先存下来。" : "Edits save automatically after a short pause, and before you leave."}
-      </p>
-        {lengthNote ? <p className="text-sm text-mark-text">{lengthNote}</p> : null}
-        {usageLabel ? (
-          <p className="text-xs text-muted-foreground" data-testid="write-token-usage">
-            {usageLabel}
-          </p>
-        ) : null}
+      /> : !ready ? <p role="status" className="py-12 text-muted-foreground">{isZh ? "正在打开稿件…" : "Opening manuscript…"}</p> : body.trim() ? <ManuscriptView body={body} className="write-manuscript-reading" /> : <p className="py-16 text-muted-foreground">{isZh ? "这一章，还在等第一句话。" : "This chapter is waiting for its first sentence."}</p>}
       {generateChoice ? (
         <div className="space-y-2 rounded-xl border border-border bg-background px-3 py-3" data-testid="write-generate-choice">
           <p className="text-sm">{isZh ? "这一章有手改。要基于手改继续写，还是另起一稿？" : "This chapter has hand edits. Rewrite from them, or start a fresh draft?"}</p>
@@ -482,182 +841,82 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           </div>
         </div>
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
-          disabled={Boolean(busy) || body === savedBody || !body.trim()}
-          onClick={() => void run("save", () => persistIfDirty())}
-        >
-          {isZh ? "保存手改" : "Save edits"}
-        </button>
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-40"
-          disabled={!body.trim()}
-          data-testid="write-copy-chapter"
-          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
-          onClick={() => {
-            const text = renderFanqieChapter({
-              chapterNumber,
-              title: chapterTitle,
-              markdown: body,
-            });
-            void copyToClipboard(text)
-              .then(() => showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success"))
-              .catch((error) => showToast(error instanceof Error ? error.message : "复制失败", "error"));
-          }}
-        >
-          {isZh ? "复制本章" : "Copy chapter"}
-        </button>
+      <div className="manuscript-actions" data-testid="write-action-bar">
+        <span className="manuscript-save-status" role="status" aria-live="polite">
+          <strong>{isZh ? "落笔" : "Write"}</strong>
+          {runStatus ?? (busy === "save" ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : candidate ? (isZh ? "草稿已保存" : "Draft saved") : (isZh ? "尚未保存候选" : "No candidate saved"))}
+          {editorLocked ? <button type="button" className="btn-ghost" data-testid="write-stop" onClick={stopWriting} disabled={stopping || (!runIdRef.current && !startedAt)}>{stopping ? (isZh ? "正在停下…" : "Stopping…") : (isZh ? "停止" : "Stop")}</button> : null}
+          {authoringRun.active ? <button type="button" className="btn-ghost" data-testid="authoring-abandon-run" onClick={abandonRun}>{isZh ? "放弃这次运行" : "Abandon run"}</button> : null}
+          {authoringRun.run?.status === "failed" ? <button type="button" className="btn-ghost" onClick={retryFailedRun}>{isZh ? "重试" : "Retry"}</button> : null}
+        </span>
+        <div className="manuscript-action-buttons">
+          {editing ? <>
+          <button type="button" className="quiet" disabled={locked || !dirty || !ready} onClick={() => void actionsRef.current.save()} aria-keyshortcuts="Control+s Meta+s" data-testid="write-save"><Save size={14} />{isZh ? "保存" : "Save"}</button>
+          <button type="button" className="quiet" disabled={locked} onClick={() => void actionsRef.current.leave()}>{isZh ? "取消" : "Cancel"}</button>
+          </> : <>
+          <button type="button" disabled={locked || !ready} onClick={() => setEditing(true)}>{isZh ? "编辑" : "Edit"}</button>
+          {candidate ? <>
+          <button type="button" disabled={locked || !ready || dirty} onClick={() => void reviewCurrent()}>{busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : (isZh ? "审查" : "Review")}</button>
+          <button type="button" disabled={locked || !ready || dirty || candidate.artifactId === adoptedId} onClick={() => void run("adopt", adopt, true)}><Check size={14} />{busy === "adopt" ? (isZh ? "采用中…" : "Adopting…") : candidate.artifactId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
+          <DropdownMenu><DropdownMenuTrigger className="quiet" disabled={locked || dirty} aria-label={isZh ? "更多操作" : "More actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">
+            <DropdownMenuItem disabled={generateHeld} onClick={() => setGeneration({})}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
+            {chapterStateMissing ? <DropdownMenuItem data-testid="write-settle-state" onClick={() => retrySettle(adoptedId)}>{isZh ? "整理状态" : "Settle state"}</DropdownMenuItem> : null}
+            <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!storedReport} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!parentId} onClick={() => setDiffOpen(true)}>{isZh ? "比较修改前后" : "Compare versions"}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!body.trim()} data-testid="write-copy-chapter" onClick={copyChapter}>{isZh ? "复制本章" : "Copy chapter"}</DropdownMenuItem>
+          </DropdownMenuContent></DropdownMenu>
+          </> : <><button type="button" className="primary" disabled={locked || generateHeld || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={locked || !ready} /></>}
+          </>}
+        </div>
       </div>
-      <textarea
-        className="min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-        placeholder={isZh ? "本章要求、重点场景、保持的文风（可选）" : "Optional chapter notes"}
-        value={requirement}
-        disabled={editorLocked}
-        onChange={(event) => setRequirement(event.target.value)}
-      />
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-          disabled={Boolean(busy)}
-          onClick={requestGenerate}
-          data-testid="write-generate"
-        >
-          {busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "开始写本章" : "Write this chapter")}
-        </button>
-        {editorLocked ? (
-          <button
-            type="button"
-            className="rounded-lg border border-border px-3 py-2 text-sm"
-            onClick={stopWriting}
-            disabled={stopping || (!runIdRef.current && !startedAt)}
-            data-testid="write-stop"
-          >
-            {stopping ? (isZh ? "正在停下…" : "Stopping…") : (isZh ? "停止" : "Stop")}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-          disabled={(!candidate && !body.trim()) || Boolean(busy)}
-          onClick={() => void run("review", async () => {
-            const artifactId = await persistIfDirty() ?? candidate?.artifactId;
-            if (!artifactId) throw new Error(isZh ? "先写本章或生成候选。" : "Write or generate a candidate first.");
-            const next = await postApi<AuthoringReport>("/authoring/write/review", {
-              bookId,
-              artifactId,
-              coverage: `第 ${chapterNumber} 章`,
-            });
-            setReport(next);
-            setReportOpen(true);
-            return next;
-          })}
-        >
-          {isZh ? "审查本章" : "Review chapter"}
-        </button>
-        {workspaceReport && !reportOpen ? (
-          <button
-            type="button"
-            className="rounded-lg border border-border px-3 py-2 text-sm"
-            onClick={() => {
-              setReport(workspaceReport);
-              setReportOpen(true);
-            }}
-          >
-            {isZh ? "打开审查" : "Open review"}
-          </button>
-        ) : null}
-        {candidate && leftId ? (
-          <button
-            type="button"
-            className="rounded-lg border border-border px-3 py-2 text-sm"
-            onClick={() => setDiffOpen(true)}
-          >
-            {isZh ? "比较版本" : "Compare"}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40"
-          disabled={(!candidate && !body.trim()) || Boolean(busy)}
-          onClick={() => void run("adopt", async () => {
-            const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-            const result = await postApi<{ message?: string; settled?: boolean; lengthNote?: string }>("/authoring/write/adopt", {
-              bookId,
-              artifactId,
-            });
-            if (result.lengthNote) {
-              setLengthNote(result.lengthNote);
-              showToast(result.lengthNote, "info");
-            }
-            showToast(result.message ?? (isZh ? "章节已采用" : "Chapter adopted"), result.settled === false ? "info" : "success");
-            return result;
-          }, true)}
-        >
-          {isZh ? "采用此稿" : "Adopt draft"}
-        </button>
-      </div>
-
+      <RegenerateDialog open={Boolean(generation)} title={isZh ? (generation?.issueIds ? "按意见重新创作" : "创作本章") : "Write chapter"} scopeLabel={isZh ? `第 ${chapterNumber} 章` : `Chapter ${chapterNumber}`} isZh={isZh} busy={Boolean(busy)} error={failure} reportSummary={generation?.issueIds && activeReport ? activeReport.summary : generationNotes} onClose={() => setGeneration(null)} onConfirm={async (requirements) => {
+        if (!generation || (!generation.issueIds && generateHeld)) return false;
+        if (generation.issueIds && activeReport && candidate) {
+          const snapshot = bodyRef.current;
+          const result = await runStream("revise", "/authoring/write/revise/stream", {
+            bookId,
+            artifactId: pendingSavedId.current ?? candidate.artifactId,
+            reportId: activeReport.reportId,
+            selectedIssueIds: generation.issueIds,
+            reuseStale: generation.reuseStale,
+            extraRequirement: requirements,
+          }, snapshot);
+          if (result?.artifactId) setDiffOpen(true);
+          setGeneration(null);
+          return Boolean(result);
+        }
+        requestGenerate(withGenerationReview(requirements, generationNotes));
+        setGeneration(null);
+        return true;
+      }} />
+      <ManuscriptHistoryDrawer open={historyOpen} bookId={bookId} title={isZh ? "本章版本" : "Chapter versions"} artifacts={history} currentId={candidate?.artifactId} adoptedId={adoptedId} isZh={isZh} busy={Boolean(busy)} onClose={() => setHistoryOpen(false)} onRestore={(artifactId, restoredBody) => run("restore", async () => {
+        const restored = await putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(artifactId)}`, { bookId, body: restoredBody }); pendingSavedId.current = restored.artifactId;
+      })} />
       <AuthoringReviewDrawer
+        key={activeReport?.reportId ?? "no-report"}
         open={reportOpen}
         title={isZh ? `落笔审查 · 第 ${chapterNumber} 章` : `Write review · ch.${chapterNumber}`}
         report={activeReport}
-        currentArtifactId={candidate?.artifactId}
+        currentArtifactId={pendingSavedId.current ?? candidate?.artifactId}
         isZh={isZh}
-        busy={busy === "revise"}
+        busy={busy === "review" || busy === "revise"}
+        reviseDisabled={Boolean(busy) || editing || dirty}
+        error={failure}
+        progressLabel={progressLabel}
+        onRetry={() => void reviewCurrent()}
+        onStop={busy === "revise" ? stopWriting : undefined}
         onClose={() => setReportOpen(false)}
         onRevise={(issueIds, reuseStale) => {
           if (!candidate || !activeReport) return;
-          void (async () => {
-            const snapshot = bodyRef.current;
-            const result = await runStream("revise", "/authoring/write/revise/stream", {
-              bookId,
-              artifactId: candidate.artifactId,
-              reportId: activeReport.reportId,
-              selectedIssueIds: issueIds,
-              reuseStale,
-            }, snapshot);
-            if (result?.artifactId) setDiffOpen(true);
-          })();
-        }}
-        progressLabel={progressLabel}
-        onStop={stopWriting}
-      />
-      <AuthoringDiffDrawer
-        open={diffOpen}
-        bookId={bookId}
-        leftId={leftId}
-        rightId={candidate?.artifactId}
-        adoptedId={adoptedId && adoptedId !== leftId && adoptedId !== candidate?.artifactId ? adoptedId : undefined}
-        isZh={isZh}
-        onClose={() => setDiffOpen(false)}
-        onKeep={() => {
-          if (!leftId) {
-            setDiffOpen(false);
-            return;
-          }
-          void run("keep", async () => {
-            await postApi("/authoring/write/select", {
-              bookId,
-              chapterNumber,
-              artifactId: leftId,
-            });
-            dirtyRef.current = false;
-            pendingEditRef.current = null;
-            setDiffOpen(false);
-          });
-        }}
-        onAdopt={() => {
-          void run("adopt", async () => {
-            const artifactId = resolveAdoptArtifactId(await persistIfDirty(), candidate?.artifactId);
-            return postApi("/authoring/write/adopt", { bookId, artifactId });
-          }, true);
-          setDiffOpen(false);
+          if (editing || dirty) { showToast(isZh ? "请先保存或取消当前修改。" : "Save or cancel your edits first.", "info"); return; }
+          setGeneration({ issueIds, reuseStale });
         }}
       />
+      <AuthoringDiffDrawer open={diffOpen} bookId={bookId} leftId={parentId} rightId={candidate?.artifactId} adoptedId={adoptedId && adoptedId !== parentId && adoptedId !== candidate?.artifactId ? adoptedId : undefined} isZh={isZh} onClose={() => setDiffOpen(false)} onKeep={() => {
+        if (parentId) void run("keep", () => selectVersion(parentId));
+      }} onAdopt={() => { void run("adopt", async () => { await adopt(); setDiffOpen(false); }, true); }} />
+      {decision.dialog}
     </section>
   );
 });

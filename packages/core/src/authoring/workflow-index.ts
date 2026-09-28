@@ -121,6 +121,12 @@ function pointerFromReport(report: AuthoringReviewReport): WorkflowReportPointer
   };
 }
 
+export async function loadWorkflowIndex(rootDir: string): Promise<WorkflowIndex> {
+  const existing = await readIndex(rootDir);
+  if (existing) return existing;
+  return scanWorkflowIndex(rootDir);
+}
+
 export async function ensureWorkflowIndex(rootDir: string): Promise<WorkflowIndex> {
   const existing = await readIndex(rootDir);
   if (existing) return existing;

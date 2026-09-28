@@ -18,7 +18,7 @@ const SECTION_MAP: ReadonlyArray<{ key: keyof CanonDocument; heading: string }> 
 
 function yamlEscape(value: string): string {
   if (!value) return '""';
-  if (/[:#[\]{}&*?]|^\s|\s$/.test(value)) return JSON.stringify(value);
+  if (/[:#[\]{}&*?"'\\\r\n]|^\s|\s$/.test(value)) return JSON.stringify(value);
   return value;
 }
 
@@ -58,7 +58,14 @@ export function parseCanon(markdown: string): CanonDocument {
       for (const line of yaml.split(/\r?\n/)) {
         const eq = line.indexOf(":");
         if (eq <= 0) continue;
-        meta[line.slice(0, eq).trim()] = line.slice(eq + 1).trim().replace(/^"|"$/g, "");
+        const raw = line.slice(eq + 1).trim();
+        let value = raw;
+        if (raw.startsWith('"') && raw.endsWith('"')) {
+          try { value = String(JSON.parse(raw)); } catch { value = raw.slice(1, -1); }
+        } else if (raw.startsWith("'") && raw.endsWith("'")) {
+          value = raw.slice(1, -1).replace(/''/g, "'");
+        }
+        meta[line.slice(0, eq).trim()] = value;
       }
     }
   }
@@ -104,18 +111,30 @@ export function parseCanon(markdown: string): CanonDocument {
 export function canonFromCompat(input: {
   readonly title: string;
   readonly genre?: string;
+  readonly targetChapters?: number;
+  readonly chapterWordCount?: number;
   readonly storyCard?: string;
   readonly authorIntent?: string;
   readonly storyFrame?: string;
+  readonly storyBible?: string;
 }): CanonDocument {
-  const card = input.storyCard?.trim() ?? "";
-  const intent = input.authorIntent?.trim() ?? "";
-  const frame = input.storyFrame?.trim() ?? "";
+  // Legacy documents have their own headings. Keep their full text inside a
+  // canon field without letting an embedded ## become a new canon section.
+  const nested = (text?: string) => (text?.trim() ?? "").replace(/^#{1,2}(?=\s)/gm, "###");
+  const card = nested(input.storyCard);
+  const intent = nested(input.authorIntent);
+  const frame = nested(input.storyFrame);
+  const bible = nested(input.storyBible);
+  const proposition = frame && bible
+    ? `### 故事框架\n\n${frame}\n\n### 故事资料\n\n${bible}`
+    : frame || bible;
   return CanonDocumentSchema.parse({
     title: input.title,
     genre: input.genre,
-    oneLine: firstNonEmpty(card, intent).slice(0, 200),
-    proposition: frame.slice(0, 800),
+    targetChapters: input.targetChapters,
+    chapterWordCount: input.chapterWordCount,
+    oneLine: firstNonEmpty(card, intent),
+    proposition,
     protagonist: "",
     conflict: "",
     voice: "",
@@ -127,4 +146,51 @@ export function canonFromCompat(input: {
 
 function firstNonEmpty(...values: string[]): string {
   return values.find((value) => value.trim()) ?? "";
+}
+
+export const CANON_IMPACT_FIELDS = [
+  { field: "title", label: "书名", kind: "text" },
+  { field: "genre", label: "类型", kind: "text" },
+  { field: "targetChapters", label: "目标章数", kind: "number" },
+  { field: "chapterWordCount", label: "每章字数", kind: "number" },
+  { field: "oneLine", label: "一句话故事", kind: "text" },
+  { field: "proposition", label: "核心命题", kind: "text" },
+  { field: "protagonist", label: "主角与核心欲望", kind: "text" },
+  { field: "conflict", label: "主要冲突", kind: "text" },
+  { field: "voice", label: "叙事视角与文风", kind: "text" },
+  { field: "boundaries", label: "故事边界", kind: "text" },
+  { field: "direction", label: "初始方向", kind: "text" },
+] as const;
+
+export type CanonImpactField = (typeof CANON_IMPACT_FIELDS)[number]["field"];
+
+export interface CanonFieldChange {
+  readonly field: CanonImpactField;
+  readonly label: string;
+  readonly before: string;
+  readonly after: string;
+  readonly kind: "text" | "number";
+}
+
+function canonFieldText(value: unknown): string {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+/** Field-level canon diff. `openQuestions` is intentionally ignored. */
+export function canonFieldDiff(from: CanonDocument, to: CanonDocument): CanonFieldChange[] {
+  const changes: CanonFieldChange[] = [];
+  for (const spec of CANON_IMPACT_FIELDS) {
+    const before = canonFieldText(from[spec.field]);
+    const after = canonFieldText(to[spec.field]);
+    if (before === after) continue;
+    changes.push({
+      field: spec.field,
+      label: spec.label,
+      before,
+      after,
+      kind: spec.kind,
+    });
+  }
+  return changes;
 }

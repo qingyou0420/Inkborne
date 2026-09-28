@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,6 +24,39 @@ async function seedBook(root: string): Promise<string> {
 }
 
 describe("resolveBookStage migration", () => {
+  it("uses manifest adoption facts before compatibility text or old timestamps", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkborne-candidate-stage-"));
+    try {
+      const bookDir = join(root, "candidate-book");
+      const storyDir = join(bookDir, "story");
+      await mkdir(join(storyDir, "workflow"), { recursive: true });
+      await writeFile(join(storyDir, "author_intent.md"), "作者的完整构思。", "utf-8");
+      await writeFile(join(storyDir, "story_card.md"), "确认卡只是创作约定。", "utf-8");
+      await writeFile(join(storyDir, "workflow.json"), JSON.stringify({
+        lastStage: "weave", askConfirmedAt: "old", groundConfirmedAt: "old", weaveLockedAt: "old",
+      }), "utf-8");
+      const manifestPath = join(storyDir, "workflow", "manifest.json");
+      await writeFile(manifestPath, JSON.stringify({ candidates: { ask: "ask-first" }, adopted: {} }), "utf-8");
+      const input = { bookDir, bookExists: true, nextChapter: 1, chaptersWritten: 0 };
+      const pending = await resolveBookStage(input);
+      expect(pending).toEqual({
+        stage: "ask", steps: { ask: "current", ground: "todo", weave: "todo", write: "todo" }, workflow: { lastStage: "ask" },
+      });
+      expect(JSON.parse(await readFile(join(storyDir, "workflow.json"), "utf-8"))).toEqual({ lastStage: "ask" });
+      await writeFile(join(storyDir, "canon.md"), "# 已采用正典\n\n作者采用的内容。", "utf-8");
+      // Older canon files may lack an adopted.ask record; their stages must not rewind.
+      const legacyCanon = await resolveBookStage(input);
+      expect(legacyCanon.stage).toBe("ground");
+      await writeFile(manifestPath, JSON.stringify({ candidates: { ask: "ask-first" }, adopted: { ask: "ask-first" } }), "utf-8");
+      const adopted = await resolveBookStage(input);
+      expect(adopted.stage).toBe("ground");
+      expect(adopted.steps.ask).toBe("done");
+      expect(adopted.steps.weave).toBe("todo");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("writes workflow.json for an old book and does not rewind to 问心", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkborne-stage-"));
     const bookDir = await seedBook(root);

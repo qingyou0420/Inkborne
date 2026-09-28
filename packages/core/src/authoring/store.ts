@@ -5,14 +5,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
 import { quarantineCorruptFile } from "../utils/quarantine-corrupt.js";
 import { z } from "zod";
 import {
-  ensureWorkflowIndex,
+  ensureWorkflowIndex, loadWorkflowIndex,
   filterWorkflowArtifacts,
   noteWorkflowArtifact,
   noteWorkflowReport,
@@ -23,12 +23,14 @@ import {
   AuthoringArtifactMetaSchema,
   AuthoringReviewReportSchema,
   AuthoringRunRecordSchema,
+  ImpactReportSchema,
   SettingsCatalogSchema,
   WorkflowManifestSchema,
   type AuthoringArtifactMeta,
   type AuthoringReviewReport,
   type AuthoringRunRecord,
   type AuthoringStage,
+  type ImpactReport,
   type SettingsCatalog,
   type WorkflowManifest,
 } from "./types.js";
@@ -185,12 +187,48 @@ export async function saveManifest(root: AuthoringStoreRoot, manifest: z.input<t
   await writeFileAtomic(join(authoringRootDir(root), "manifest.json"), renderManifest(manifest));
 }
 
-export async function saveRun(root: AuthoringStoreRoot, run: z.input<typeof AuthoringRunRecordSchema> | AuthoringRunRecord): Promise<void> {
-  const parsed = AuthoringRunRecordSchema.parse({ ...run, updatedAt: nowIso() });
+export type ReplaceJsonFileOptions = {
+  readonly renameFile?: (from: string, to: string) => Promise<void>;
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function replaceJsonFile(
+  dest: string,
+  content: string,
+  options?: ReplaceJsonFileOptions | ((from: string, to: string) => Promise<void>),
+): Promise<void> {
+  const renameFile = typeof options === "function" ? options : options?.renameFile ?? rename;
+  await mkdir(dirname(dest), { recursive: true });
+  const tmp = `${dest}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, "utf-8");
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await renameFile(tmp, dest);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await delay(20 * (attempt + 1));
+    }
+  }
+  await rm(tmp, { force: true }).catch(() => undefined);
+  throw lastError;
+}
+
+export async function saveRun(
+  root: AuthoringStoreRoot,
+  run: z.input<typeof AuthoringRunRecordSchema> | AuthoringRunRecord,
+  options?: ReplaceJsonFileOptions,
+): Promise<void> {
   const rootDir = authoringRootDir(root);
-  await writeFileAtomic(
+  const parsed = AuthoringRunRecordSchema.parse({ ...run, updatedAt: nowIso() });
+  await replaceJsonFile(
     join(rootDir, "runs", `${parsed.runId}.json`),
     `${JSON.stringify(parsed, null, 2)}\n`,
+    options,
   );
   await noteWorkflowRun(rootDir, parsed);
 }
@@ -200,11 +238,36 @@ export async function loadRun(root: AuthoringStoreRoot, runId: string): Promise<
 }
 
 export async function listRuns(root: AuthoringStoreRoot): Promise<AuthoringRunRecord[]> {
-  const index = await ensureWorkflowIndex(authoringRootDir(root));
-  return [...index.runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const dir = join(authoringRootDir(root), "runs");
+  if (!(await exists(dir))) return [];
+  const files = await readdir(dir);
+  const items: AuthoringRunRecord[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json") || file.endsWith(".control.json")) continue;
+    try {
+      const run = await readJson(join(dir, file), (raw) => AuthoringRunRecordSchema.parse(raw));
+      if (run) items.push(run);
+    } catch {
+      continue;
+    }
+  }
+  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export type AuthoringRunControl = "none" | "pause" | "cancel";
+
+export class AuthoringRunCancelledError extends Error {
+  override readonly name = "AuthoringRunCancelledError";
+  constructor(message = "这次运行已放弃") {
+    super(message);
+  }
+}
+
+export async function throwIfRunCancelled(root: AuthoringStoreRoot, runId: string): Promise<void> {
+  if (await loadRunControl(root, runId) === "cancel") {
+    throw new AuthoringRunCancelledError();
+  }
+}
 
 export async function saveRunControl(
   root: AuthoringStoreRoot,
@@ -265,7 +328,7 @@ export async function loadArtifact(
 }
 
 export async function listArtifacts(root: AuthoringStoreRoot, stage?: AuthoringStage): Promise<AuthoringArtifactMeta[]> {
-  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const index = await loadWorkflowIndex(authoringRootDir(root));
   return filterWorkflowArtifacts(index, stage ? { stage } : {});
 }
 
@@ -284,7 +347,7 @@ export async function loadReport(root: AuthoringStoreRoot, reportId: string): Pr
 }
 
 export async function listReports(root: AuthoringStoreRoot, stage?: AuthoringStage): Promise<AuthoringReviewReport[]> {
-  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const index = await loadWorkflowIndex(authoringRootDir(root));
   return loadIndexedReports(root, index, (report) => (stage ? report.stage === stage : true));
 }
 
@@ -312,7 +375,7 @@ export async function loadAuthoringWorkspaceLists(
   readonly reports: AuthoringReviewReport[];
   readonly runs: AuthoringRunRecord[];
 }> {
-  const index = await ensureWorkflowIndex(authoringRootDir(root));
+  const index = await loadWorkflowIndex(authoringRootDir(root));
   const sortedRuns = () => index.runs.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   if (query.summary) {
     return { artifacts: [], reports: [], runs: sortedRuns() };
@@ -337,6 +400,47 @@ export async function loadAuthoringWorkspaceLists(
       : index.runs
   ).slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return { artifacts, reports, runs };
+}
+
+export async function saveImpactReport(
+  root: AuthoringStoreRoot,
+  report: z.input<typeof ImpactReportSchema> | ImpactReport,
+): Promise<ImpactReport> {
+  const dir = join(authoringRootDir(root), "impact");
+  await mkdir(dir, { recursive: true });
+  const parsed = ImpactReportSchema.parse(report);
+  await writeFile(join(dir, `${parsed.impactId}.json`), `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+  return parsed;
+}
+
+export async function loadImpactReport(root: AuthoringStoreRoot, impactId: string): Promise<ImpactReport | undefined> {
+  return readJson(join(authoringRootDir(root), "impact", `${impactId}.json`), (raw) => ImpactReportSchema.parse(raw));
+}
+
+export async function listImpactReports(root: AuthoringStoreRoot): Promise<ImpactReport[]> {
+  const dir = join(authoringRootDir(root), "impact");
+  if (!(await exists(dir))) return [];
+  const files = await readdir(dir);
+  const items: ImpactReport[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    const report = await readJson(join(dir, file), (raw) => ImpactReportSchema.parse(raw));
+    if (report) items.push(report);
+  }
+  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function loadCurrentImpact(root: AuthoringStoreRoot): Promise<ImpactReport | undefined> {
+  const manifest = await loadManifest(root);
+  const mentioned = manifest.watches
+    .map((watch) => watch.impactReportId)
+    .filter((id): id is string => Boolean(id) && id !== "pending");
+  for (const id of mentioned) {
+    const report = await loadImpactReport(root, id);
+    if (report && !report.supersededBy) return report;
+  }
+  const listed = await listImpactReports(root);
+  return listed.find((report) => !report.supersededBy);
 }
 
 export function reportAppliesTo(report: AuthoringReviewReport, artifactId: string): boolean {

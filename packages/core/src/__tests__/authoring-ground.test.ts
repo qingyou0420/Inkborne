@@ -9,7 +9,7 @@ import {
   generateGroundEntries,
   proposeSettingsCatalog,
 } from "../authoring/stages/ground.js";
-import { loadSettingsCatalog } from "../authoring/store.js";
+import { listRuns, loadSettingsCatalog, newRunId, saveRunControl } from "../authoring/store.js";
 import type { AuthoringLlmFn } from "../authoring/types.js";
 
 function project() {
@@ -53,6 +53,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let catalogCalls = 0;
@@ -77,6 +78,9 @@ describe("ground stage", () => {
     const result = await generateGroundEntries(ctx);
     expect(result.generated).toContain("shen");
     expect(result.failed).toContain("port");
+    const failedRun = (await listRuns(ctx.root)).find((run) => run.runId === result.runId);
+    expect(failedRun?.status).toBe("partial");
+    expect(failedRun?.error).toContain("夜港：地点生成失败");
     await adoptGroundEntries({ ...ctx, entryIds: ["shen"] });
     const catalog = await loadSettingsCatalog(ctx.root);
     const shen = catalog.entries.find((entry) => entry.id === "shen");
@@ -84,6 +88,31 @@ describe("ground stage", () => {
     const body = await readFile(join(created.bookDir, shen!.file), "utf-8");
     expect(body).toContain("港口会计");
     await expect(readFile(join(created.bookDir, "story", "outline", "volume_map.md"), "utf-8")).rejects.toThrow();
+  });
+
+  it("marks an empty generate target list completed instead of leaving it running", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-empty-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm: async () => "" };
+    const result = await generateGroundEntries({ ...ctx, entryIds: ["missing"] });
+    expect(result).toMatchObject({ generated: [], failed: [], runId: expect.any(String) });
+    const run = (await listRuns(ctx.root)).find((item) => item.runId === result.runId);
+    expect(run?.status).toBe("completed");
+    expect(run?.progressLabel).toBe("没有需要生成的条目");
   });
 
   it("merges proposed catalog identities and keeps adopted links (R7-02)", async () => {
@@ -101,6 +130,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let round = 0;
@@ -155,6 +185,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let round = 0;
@@ -190,6 +221,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     let round = 0;
@@ -211,8 +243,8 @@ describe("ground stage", () => {
           ],
         });
       }
-      if (text.includes("永夜规则")) return "太阳永不升起。";
-      return "只有南北两片大陆。";
+        if (text.includes("撰写设定条目「永夜规则」")) return "太阳永不升起。";
+        return "只有南北两片大陆。";
     };
     const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
     await proposeSettingsCatalog(ctx);
@@ -257,6 +289,7 @@ describe("ground stage", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
       },
     });
     const cases = [
@@ -283,7 +316,7 @@ describe("ground stage", () => {
             ],
           });
         }
-        if (text.includes("永夜规则")) return "太阳永不升起。";
+        if (text.includes("撰写设定条目「永夜规则」")) return "太阳永不升起。";
         return "只有南北两片大陆。";
       };
       const book = await createLightweightBook({
@@ -299,6 +332,7 @@ describe("ground stage", () => {
           boundaries: "",
           direction: "",
           openQuestions: [],
+          targetChapters: 12,
         },
       });
       const bookCtx = { root: { projectRoot: root, bookId: book.bookId }, project: project(), llm };
@@ -321,5 +355,139 @@ describe("ground stage", () => {
       expect(geoBody).toContain("南北两片大陆");
       expect(nightBody).not.toContain("南北两片大陆");
     }
+  });
+
+  it("includes other generated entries when writing the next setting", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-peers-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const prompts: string[] = [];
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({
+          categories: ["人物", "地点"],
+          entries: [
+            { id: "shen", category: "人物", name: "沈砚" },
+            { id: "port", category: "地点", name: "夜港" },
+          ],
+        });
+      }
+      prompts.push(text);
+      if (text.includes("夜港")) return "夜港靠铁皮仓库存账。";
+      return "沈砚，港口会计，想赎回自己。MARK-PEER-SHEN";
+    };
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project(), llm };
+    await proposeSettingsCatalog(ctx);
+    await generateGroundEntries(ctx);
+    expect(prompts[0]).not.toContain("MARK-PEER-SHEN");
+    expect(prompts[1]).toContain("MARK-PEER-SHEN");
+    expect(prompts[1]).toContain("同书其他条目摘要");
+  });
+
+  it("persists catalog attachments after each generated entry", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-partial-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    let generated = 0;
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({
+          categories: ["人物", "地点"],
+          entries: [
+            { id: "shen", category: "人物", name: "沈砚" },
+            { id: "port", category: "地点", name: "夜港" },
+          ],
+        });
+      }
+      generated += 1;
+      if (generated === 2) {
+        const catalog = await loadSettingsCatalog(ctx.root);
+        expect(catalog.entries.find((entry) => entry.id === "shen")?.candidateArtifactId).toBeTruthy();
+        throw new Error("第二项中断");
+      }
+      return "沈砚，港口会计。";
+    };
+    await proposeSettingsCatalog({ ...ctx, llm });
+    const result = await generateGroundEntries({ ...ctx, llm });
+    expect(result.generated).toEqual(["shen"]);
+    expect(result.failed).toEqual(["port"]);
+    const catalog = await loadSettingsCatalog(ctx.root);
+    expect(catalog.entries.find((entry) => entry.id === "shen")?.candidateArtifactId).toBeTruthy();
+    expect(catalog.entries.find((entry) => entry.id === "port")?.candidateArtifactId).toBeFalsy();
+  });
+
+  it("cancels remaining ground entries and keeps already attached catalog items", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-ground-cancel-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "港口",
+        oneLine: "会计找账本",
+        proposition: "",
+        protagonist: "沈砚",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 12,
+      },
+    });
+    const runId = newRunId();
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const names: string[] = [];
+    const llm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({
+          categories: ["人物", "地点"],
+          entries: [
+            { id: "shen", category: "人物", name: "沈砚" },
+            { id: "port", category: "地点", name: "夜港" },
+          ],
+        });
+      }
+      names.push(text.includes("夜港") ? "夜港" : "沈砚");
+      await saveRunControl(ctx.root, runId, "cancel");
+      return "沈砚，港口会计。";
+    };
+    await proposeSettingsCatalog({ ...ctx, llm });
+    const result = await generateGroundEntries({ ...ctx, llm, runId });
+    expect(names).toEqual(["沈砚"]);
+    expect(result.generated).toEqual(["shen"]);
+    expect(result.failed).toEqual([]);
+    expect((await listRuns(ctx.root)).find((run) => run.runId === runId)?.status).toBe("cancelled");
+    const catalog = await loadSettingsCatalog(ctx.root);
+    expect(catalog.entries.find((entry) => entry.id === "shen")?.candidateArtifactId).toBeTruthy();
+    expect(catalog.entries.find((entry) => entry.id === "port")?.candidateArtifactId).toBeFalsy();
   });
 });
