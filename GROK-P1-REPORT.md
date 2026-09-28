@@ -170,3 +170,92 @@ e2272bf fix: show corrupt books, aligned chapters, and safer studio APIs
 94c3852 fix: keep partial drafts, usage, and quarantined book files
 ```
 
+## 第二轮返工
+
+对照 `d8c5a7b` 上的云端第二轮审阅。下面第 1–5 项都对过 `git diff d8c5a7b..HEAD` 和测试，没有再发现需要另补的功能遗漏。本轮只多补了第 4 项的同类缺口：已经存在的 `.overflow` 不再被盖掉。
+
+### 1. 保存检索设置时，迁移失败不能丢掉项目里的密钥
+
+`1e69e80`。主要文件：`packages/core/src/llm/research-search-secret.ts`，接口在 `packages/studio/src/api/server.ts`。`RESEARCH_SEARCH_KEY_NOT_STORED` 从 `packages/core/src/index.ts` 导出。
+
+只有同一把密钥已经写入用户目录、并且读回一致之后，才从 `inkos.json` 删掉 `apiKey`。迁移或写入失败时：
+
+- 非密钥设置没有变化：不写 `inkos.json`，原字节不变。
+- 非密钥设置有变化：重写 `researchSearch`，原来的 `apiKey` 原样留在文件里。
+- 请求带了新的 `apiKey`，但写不进用户目录：抛出「检索密钥没有写进用户数据目录」。`PUT /api/v1/project/research-search` 把这句映射成 HTTP 400，正文是 `{ ok: false, error, keyStorage: "project" }`。用户目录从一开始就不可写时，`inkos.json` 原字节不变，旧密钥还在，新密钥也不会被当成已经保存。
+
+返回值 `keyStorage` 标明这次报告的密钥是从哪里读回的：和用户目录读回的一致为 `user-data`，只还在 `inkos.json` 里为 `project`。没有密钥时不带这个字段。密钥只留在项目文件里时，不会标成 `user-data`。
+
+测试在 `packages/core/src/__tests__/research-search-secret.test.ts`：
+
+- `keeps inkos.json bytes and does not claim the key was migrated when a save cannot write the user directory`
+- `keeps the project apiKey when a non-key change cannot be migrated`
+- `rejects a new key when the user directory cannot be written and leaves the old key in place`
+- 原有 `moves the key out of inkos.json and only reports the last four characters` 仍通过：用户目录可写时，迁走之后 `inkos.json` 不再含 `apiKey`
+
+### 2. 单条 run 和织卷继续先脱敏
+
+`965ec20`。`packages/studio/src/api/authoring-routes.ts` 里，`GET /api/v1/authoring/runs/:runId` 和织卷继续的 `loadRun` 都先过 `sanitizeAuthoringRun`，再交给后面的逻辑。`modelSnapshot` 里的 `headers`、`apiKey`、`token`、`authorization` 会去掉，`error` 里的 `sk-` 换成「已隐藏」。磁盘上的 run 文件不改。`packages/studio/src/api/server.test.ts` 的 core mock 补上了 `sanitizeAuthoringRun` 和 `RESEARCH_SEARCH_KEY_NOT_STORED`。
+
+测试在 `packages/studio/src/api/authoring-run-public.test.ts`：
+
+- `strips secret fields from a single run and redacts sk- text in the error`
+- `does not return secret fields when weave continue has nothing left to resume`
+
+### 3. 两边密钥不一致时，两把都留
+
+同 `1e69e80`。`migrateResearchSearchKey` 发现用户目录里已经有另一把不同的密钥时直接返回，不改 `inkos.json`。项目里那把还没写到别处，不会被删。用户目录那把也不动。读运行时仍优先用用户目录里的密钥。
+
+测试：`does not delete a project key that differs from the key already in the user directory`（同一文件）。用户目录是 key A、`inkos.json` 是 key B 时，迁移和一次不改密钥的保存之后，B 仍在 `inkos.json`，A 仍在 `research-search.json`。
+
+### 4. `.1` 改名为 `.2` 失败时，不破坏已有的 `.1`
+
+`66d9344`。`packages/desktop/lib/log-rotate.cjs`。`.1` 改不成 `.2` 时，不再把当前日志复制到 `.1` 上盖掉旧备份，而是复制到 `<log>.overflow` 再截断当前文件。复制也失败则警告一次并返回 false。`packages/desktop/main.cjs` 在文件已经超限且轮转返回 false 时不再追加。
+
+测试：`does not overwrite .1 when renaming it to .2 fails`（`packages/desktop/tests/log-rotate.test.ts`）。
+
+### `.overflow` 已经存在时不再覆盖
+
+`8e5d49d`。上一次同样失败留下的 `<log>.overflow` 还在时，这次 `.1` → `.2` 再失败就不再覆盖它：警告一次，返回 false，不截断当前日志。`.1` 和 `.overflow` 的原内容都保持不动。超限文件不再追加，仍靠 `main.cjs` 在轮转失败时停写。当前日志改名为 `.1` 失败、且 `.1` 已经存在时，走的也是这一条，不会盖掉已有的 `.overflow`。
+
+测试：`does not overwrite an existing .overflow when renaming .1 to .2 fails`。
+
+### 5. 长模型名和路径不再被当成密钥
+
+同 `1e69e80`。`packages/core/src/utils/redact-secrets.ts`。长度规则收成：只隐藏连续不少于 40 位、纯字母数字、并且同时含有字母和数字的串。带 `_` 或 `-` 的长串不再由这条规则隐藏。`sk-`、`Bearer`、`apiKey=` 三条不变。
+
+测试在 `packages/core/src/__tests__/redact-secrets.test.ts`：
+
+- `leaves long model names and file paths alone`（`accounts/fireworks/models/llama-v3p1-405b-instruct-long-context-2024`，以及 `D:\Grisia Studio\Inkborne\packages\core\src\authoring\stages\write.ts`）
+- `still hides an unbroken high-entropy alphanumeric string`
+- 原有 `hides sk- keys, bearer tokens, and long key strings` 仍通过
+
+### 本轮不做
+
+- 退出对话框端到端。退出框在 Electron 主进程里用同步对话框挡住关窗，现有装置测不到真窗口点选。
+- `proposeSettingsCatalog`、`reviseWeave`、`reviseGroundEntry` 的 run 记录。这三处仍会调用模型，但不记 run，留到下一版。
+
+### cli 测试 worker
+
+上一会话串行验证中途，cli 包曾因 vitest worker 崩溃失败（tinypool `Channel closed` / `ERR_IPC_CHANNEL_CLOSED`）。当时 `packages/cli/package.json` 被改成 `1.8.0`，并留下 `.package.json.publish-backup`。这两处已经恢复，重跑后通过。本会话这次 `pnpm test` 一次通过，没有复现。`pnpm test` 和 `pnpm build` 之后，`packages/cli/package.json` 里 `@actalk/inkos-core` 和 `@actalk/inkos-studio` 仍是 `workspace:*`，没有 `.package.json.publish-backup`。
+
+### 验证
+
+四条命令退出码都是 0。符号链接跳过仍是 core 两条、desktop 一条（`copyTree`）。
+
+| 命令 | 结果 |
+|---|---|
+| `pnpm typecheck` | 通过 |
+| `pnpm lint` | 通过 |
+| `pnpm test` | 通过。core 2131 过、2 跳过；studio 820 过；cli 235 过；desktop 61 过、1 跳过。合计 3247 过、3 跳过 |
+| `pnpm build` | 通过。Vite 5369 个模块，约 19.2 秒。主包仍有超过 500 kB 的既有警告 |
+
+`git log --oneline d8c5a7b..HEAD`（写这一节时报告提交还没进去，提交后会多一行 `docs: P1 rework round 2 report`）：
+
+```
+8e5d49d fix: keep an existing log overflow backup
+66d9344 fix: keep the previous log backup when rotation rename fails
+965ec20 fix: sanitize single authoring runs before they reach the client
+1e69e80 fix: keep research-search keys and stop redacting long names
+```
+
