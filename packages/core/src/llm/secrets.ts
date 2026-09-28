@@ -192,13 +192,21 @@ function serializeSecrets(secrets: SecretsFile): string {
   return `${JSON.stringify({ services: secrets.services }, null, 2)}\n`;
 }
 
+function snapshotFromReadError(error: unknown): ReadSnapshot {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ENOENT" || code === "ENOTDIR") return snapshotFromRaw(null, true);
+  if (code === "EISDIR" || code === "EACCES" || code === "EPERM") {
+    return { exists: true, corrupt: true, data: emptySecrets() };
+  }
+  throw error;
+}
+
 async function readSnapshot(path: string): Promise<ReadSnapshot> {
   try {
     const raw = await readFile(path, "utf-8");
     return snapshotFromRaw(raw, false);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return snapshotFromRaw(null, true);
-    throw error;
+    return snapshotFromReadError(error);
   }
 }
 
@@ -207,8 +215,7 @@ function readSnapshotSync(path: string): ReadSnapshot {
     const raw = readFileSync(path, "utf-8");
     return snapshotFromRaw(raw, false);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return snapshotFromRaw(null, true);
-    throw error;
+    return snapshotFromReadError(error);
   }
 }
 

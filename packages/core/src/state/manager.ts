@@ -188,8 +188,8 @@ export function formatBookWriteLockCopy(
       ? `${Math.max(1, Math.round(heldMs / 1000))} 秒`
       : `${Math.round(heldMs / 60_000)} 分钟`
     : undefined;
-  const where = stage ? `（${stage}${held ? `，已 ${held}` : ""}）` : (held ? `（已 ${held}）` : "");
-  return `这本书正在被写入${where}。请等它写完，或确认没有别的写作任务后再强制放开。`;
+  const where = [error.bookId, stage, held ? `已 ${held}` : ""].filter(Boolean).join("，");
+  return `写入被占用：这本书正在被写入${where ? `（${where}）` : ""}。请等它写完，或确认没有别的写作任务后再强制放开。`;
 }
 
 export class StateManager {
