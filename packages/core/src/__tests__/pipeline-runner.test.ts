@@ -820,7 +820,7 @@ describe("PipelineRunner", () => {
       const currentFocus = await readFile(join(storyDir, "current_focus.md"), "utf-8");
       const runtimeDir = await stat(join(storyDir, "runtime"));
 
-      expect(authorIntent).toContain("Author Intent");
+      expect(authorIntent).toContain("作者意图");
       expect(currentFocus).toContain("Current Focus");
       expect(runtimeDir.isDirectory()).toBe(true);
     } finally {
