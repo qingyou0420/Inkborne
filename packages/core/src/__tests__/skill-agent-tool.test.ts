@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSkillRegistry } from "../skills/index.js";
 import { createUseSkillTool } from "../agent/skill-tool.js";
+import { hasNodeSqliteFts5 } from "./sqlite-fts5.js";
+
+const ftsIt = hasNodeSqliteFts5() ? it : it.skip;
 
 describe("use_skill agent tool", () => {
   let root: string;
@@ -91,7 +94,7 @@ describe("use_skill agent tool", () => {
     expect(activated).toEqual(["writer-distillation"]);
   });
 
-  it("retrieves relevant Skill references by natural-language query", async () => {
+  ftsIt("retrieves relevant Skill references by natural-language query", async () => {
     const baseDir = join(root, "long-writing");
     await mkdir(join(baseDir, "references"), { recursive: true });
     await writeFile(

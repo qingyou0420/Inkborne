@@ -501,10 +501,6 @@ function createWindow(targetUrl) {
   });
 }
 
-function firstRunFileUrl() {
-  return `file://${path.join(__dirname, "first-run.html")}`;
-}
-
 /** @type {Electron.BrowserWindow | null} */
 let updatePanelWindow = null;
 

@@ -66,6 +66,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:full": "node ./scripts/run-vitest-with-fts.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

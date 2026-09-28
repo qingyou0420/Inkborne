@@ -12,7 +12,6 @@ directories:
 files:
   - main.cjs
   - preload.cjs
-  - first-run.html
   - update-panel.html
   - icon.png
   - icon.ico

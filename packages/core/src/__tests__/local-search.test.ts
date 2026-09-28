@@ -4,9 +4,12 @@ import {
   splitMarkdownForSearch,
   tokenizeSearchText,
 } from "../retrieval/local-search.js";
+import { hasNodeSqliteFts5 } from "./sqlite-fts5.js";
+
+const ftsIt = hasNodeSqliteFts5() ? it : it.skip;
 
 describe("LocalSearchIndex", () => {
-  it("retrieves Chinese and English evidence with FTS5 BM25", () => {
+  ftsIt("retrieves Chinese and English evidence with FTS5 BM25", () => {
     const index = new LocalSearchIndex(":memory:");
     try {
       index.replaceScope("story", [
@@ -35,7 +38,7 @@ describe("LocalSearchIndex", () => {
     }
   });
 
-  it("replaces stale projection rows instead of retaining old evidence", () => {
+  ftsIt("replaces stale projection rows instead of retaining old evidence", () => {
     const index = new LocalSearchIndex(":memory:");
     try {
       index.replaceScope("materials", [{
@@ -62,7 +65,7 @@ describe("LocalSearchIndex", () => {
     }
   });
 
-  it("keeps identical document ids isolated across scopes", () => {
+  ftsIt("keeps identical document ids isolated across scopes", () => {
     const index = new LocalSearchIndex(":memory:");
     try {
       index.replaceScope("story", [{

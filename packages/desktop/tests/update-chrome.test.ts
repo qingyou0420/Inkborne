@@ -33,7 +33,6 @@ describe("desktop update chrome", () => {
     const main = read("main.cjs");
     const panel = read("update-panel.html");
     const yml = read("electron-builder.yml");
-    const firstRun = read("first-run.html");
 
     expect(existsSync(join(desktopDir, "update-panel.html"))).toBe(true);
     expect(main).toMatch(/label: "帮助"/);
@@ -60,7 +59,9 @@ describe("desktop update chrome", () => {
     expect(panel).not.toMatch(/silent:\s*true/);
 
     expect(yml).toMatch(/^\s*- update-panel\.html$/m);
-    expect(firstRun).toMatch(/系统 → 检查更新/);
+    expect(yml).not.toMatch(/first-run\.html/);
+    expect(main).not.toMatch(/first-run\.html/);
+    expect(existsSync(join(desktopDir, "first-run.html"))).toBe(false);
     expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Inkborne");
   });
 });

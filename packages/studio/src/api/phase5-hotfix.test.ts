@@ -39,6 +39,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     bookDir(id: string): string {
       return join(this.root, "books", id);
     }
+    async acquireBookLock(): Promise<() => Promise<void>> {
+      return async () => undefined;
+    }
   }
 
   class MockPipelineRunner {
@@ -67,6 +70,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   }
 
   return {
+    ...actual,
     StateManager: MockStateManager,
     PipelineRunner: MockPipelineRunner,
     Scheduler: MockScheduler,
