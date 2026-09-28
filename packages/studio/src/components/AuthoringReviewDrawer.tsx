@@ -16,8 +16,10 @@ export function AuthoringReviewDrawer({
   currentArtifactId,
   isZh,
   busy,
+  progressLabel,
   onClose,
   onRevise,
+  onStop,
 }: {
   readonly open: boolean;
   readonly title: string;
@@ -25,8 +27,10 @@ export function AuthoringReviewDrawer({
   readonly currentArtifactId?: string;
   readonly isZh: boolean;
   readonly busy?: boolean;
+  readonly progressLabel?: string;
   readonly onClose: () => void;
   readonly onRevise: (selectedIssueIds: ReadonlyArray<string>, reuseStale?: boolean) => void;
+  readonly onStop?: () => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [reuseStale, setReuseStale] = useState(false);
@@ -82,10 +86,12 @@ export function AuthoringReviewDrawer({
               </label>
             ))
           )}
+          {busy && progressLabel ? <p className="text-sm text-muted-foreground">{progressLabel}</p> : null}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
               className="rounded-lg border border-border px-3 py-2 text-sm"
+              disabled={busy}
               onClick={() => setSelected(issues.map((issue) => issue.issueId))}
             >
               {isZh ? "全选" : "Select all"}
@@ -93,10 +99,16 @@ export function AuthoringReviewDrawer({
             <button
               type="button"
               className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-              disabled={busy || selected.length === 0 || blocked}
-              onClick={() => onRevise(selected, reuseStale)}
+              disabled={busy ? !onStop : selected.length === 0 || blocked}
+              onClick={() => {
+                if (busy) onStop?.();
+                else onRevise(selected, reuseStale);
+              }}
+              data-testid={busy ? "write-stop" : "write-revise"}
             >
-              {isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`}
+              {busy
+                ? (isZh ? "停止" : "Stop")
+                : (isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`)}
             </button>
           </div>
         </div>

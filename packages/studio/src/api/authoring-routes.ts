@@ -5,6 +5,7 @@
  */
 
 import type { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import {
   AUTHORING_ROLE_IDS,
   AUTHORING_ROLE_META,
@@ -17,8 +18,11 @@ import {
   ensureAuthoringDraft,
   fillMissingAuthoringRoles,
   generateAskCanon,
+  formatBookWriteLockCopy,
   generateChapterDraft,
   generateGroundEntries,
+  isBookWriteLockError,
+  loadWriteChapterBasis,
   generateWeaveRange,
   listArtifacts,
   listReports,
@@ -42,6 +46,7 @@ import {
   reviewGroundEntries,
   reviewWeave,
   reviseAskCanon,
+  requestWriteRunCancel,
   reviseChapterDraft,
   reviseGroundEntry,
   reviseWeave,
@@ -59,6 +64,19 @@ interface AuthoringRouteDeps {
   readonly root: string;
   readonly loadProject: () => Promise<ProjectConfig>;
   readonly saveRoles: (roles: ProjectConfig["authoringRoles"]) => Promise<void>;
+}
+
+function streamFailure(error: unknown): string {
+  if (isBookWriteLockError(error)) {
+    return JSON.stringify({
+      code: "BOOK_BUSY",
+      message: formatBookWriteLockCopy(error, "zh"),
+      owner: error.owner,
+    });
+  }
+  return JSON.stringify({
+    message: error instanceof Error ? error.message : String(error),
+  });
 }
 
 function storeRoot(projectRoot: string, body: { bookId?: string; draftId?: string }): AuthoringStoreRoot {
@@ -250,6 +268,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
   app.post("/api/v1/authoring/runs/:runId/cancel", async (c) => {
     const body = await c.req.json<{ bookId?: string; draftId?: string }>().catch(() => ({}));
     await saveRunControl(storeRoot(deps.root, body), c.req.param("runId"), "cancel");
+    requestWriteRunCancel(c.req.param("runId"));
     return c.json({ ok: true, action: "cancel" });
   });
 
@@ -546,6 +565,55 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     return c.json(result);
   });
 
+  app.get("/api/v1/authoring/write/basis", async (c) => {
+    const bookId = c.req.query("bookId") || undefined;
+    const chapterNumber = Number(c.req.query("chapterNumber"));
+    if (!bookId || !Number.isInteger(chapterNumber) || chapterNumber < 1) {
+      return c.json({ error: "需要书和章节号" }, 400);
+    }
+    const basis = await loadWriteChapterBasis(storeRoot(deps.root, { bookId }), chapterNumber);
+    return c.json(basis);
+  });
+
+  app.post("/api/v1/authoring/write/generate/stream", async (c) => {
+    const body = await c.req.json<{
+      bookId: string;
+      chapterNumber: number;
+      title?: string;
+      requirements?: string;
+      baseBody?: string;
+      parentArtifactId?: string;
+    }>();
+    const project = await deps.loadProject();
+    let runId = "";
+    return streamSSE(c, async (stream) => {
+      stream.onAbort(() => {
+        if (runId) requestWriteRunCancel(runId);
+      });
+      try {
+        const result = await generateChapterDraft({
+          root: storeRoot(deps.root, body),
+          project,
+          chapterNumber: body.chapterNumber,
+          title: body.title,
+          requirements: body.requirements,
+          baseBody: body.baseBody,
+          parentArtifactId: body.parentArtifactId,
+          onRunStart: async (id) => {
+            runId = id;
+            await stream.writeSSE({ event: "start", data: JSON.stringify({ runId: id }) });
+          },
+          onTextDelta: async (delta) => {
+            await stream.writeSSE({ event: "delta", data: JSON.stringify({ delta }) });
+          },
+        });
+        await stream.writeSSE({ event: "done", data: JSON.stringify(result) });
+      } catch (error) {
+        await stream.writeSSE({ event: "error", data: streamFailure(error) }).catch(() => undefined);
+      }
+    });
+  });
+
   app.post("/api/v1/authoring/write/review", async (c) => {
     const body = await c.req.json<{ bookId: string; artifactId: string; coverage?: string }>();
     const project = await deps.loadProject();
@@ -578,6 +646,45 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       reuseStale: body.reuseStale,
     });
     return c.json(result);
+  });
+
+  app.post("/api/v1/authoring/write/revise/stream", async (c) => {
+    const body = await c.req.json<{
+      bookId: string;
+      artifactId: string;
+      reportId: string;
+      selectedIssueIds: string[];
+      extraRequirement?: string;
+      reuseStale?: boolean;
+    }>();
+    const project = await deps.loadProject();
+    let runId = "";
+    return streamSSE(c, async (stream) => {
+      stream.onAbort(() => {
+        if (runId) requestWriteRunCancel(runId);
+      });
+      try {
+        const result = await reviseChapterDraft({
+          root: storeRoot(deps.root, body),
+          project,
+          artifactId: body.artifactId,
+          reportId: body.reportId,
+          selectedIssueIds: body.selectedIssueIds ?? [],
+          extraRequirement: body.extraRequirement,
+          reuseStale: body.reuseStale,
+          onRunStart: async (id) => {
+            runId = id;
+            await stream.writeSSE({ event: "start", data: JSON.stringify({ runId: id }) });
+          },
+          onTextDelta: async (delta) => {
+            await stream.writeSSE({ event: "delta", data: JSON.stringify({ delta }) });
+          },
+        });
+        await stream.writeSSE({ event: "done", data: JSON.stringify(result) });
+      } catch (error) {
+        await stream.writeSSE({ event: "error", data: streamFailure(error) }).catch(() => undefined);
+      }
+    });
   });
 
   app.post("/api/v1/authoring/write/adopt", async (c) => {

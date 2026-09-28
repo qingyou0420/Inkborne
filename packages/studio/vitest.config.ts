@@ -14,6 +14,7 @@ export default defineConfig({
       "@actalk/inkos-core/forecast/schema": resolve(__dirname, "../core/src/forecast/schema.ts"),
       "@actalk/inkos-core/volume-map-tree": resolve(__dirname, "../core/src/volume-map-tree.ts"),
       "@actalk/inkos-core/review-author-copy": resolve(__dirname, "../core/src/review-author-copy.ts"),
+      "@actalk/inkos-core/chapter-heading": resolve(__dirname, "../core/src/chapter-heading.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },
