@@ -33,6 +33,13 @@ function safeRelativePath(relativePath: string): string {
   return normalized;
 }
 
+let atomicWritesInFlightCount = 0;
+
+/** How many atomic file commits are between start and finish in this process. */
+export function atomicWritesInFlight(): number {
+  return atomicWritesInFlightCount;
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -44,6 +51,15 @@ async function exists(path: string): Promise<boolean> {
 }
 
 export async function commitAtomicFileSet(input: AtomicFileSet): Promise<void> {
+  atomicWritesInFlightCount += 1;
+  try {
+    await commitAtomicFileSetInner(input);
+  } finally {
+    atomicWritesInFlightCount = Math.max(0, atomicWritesInFlightCount - 1);
+  }
+}
+
+async function commitAtomicFileSetInner(input: AtomicFileSet): Promise<void> {
   const renameFile = input.renameFile ?? rename;
   const writes = input.writes.map((entry) => ({
     ...entry,

@@ -5,6 +5,7 @@ import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { tr } from "../lib/app-language";
+import { actionErrorText, isActionError } from "../lib/error-copy";
 import { FileInput, BookCopy, Feather, BookMarked, Upload, Wand2 } from "lucide-react";
 import { waitForStudioBookReady } from "../lib/book-ready";
 
@@ -81,9 +82,9 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: chText, splitRegex: chSplitRegex || undefined }),
       });
-      setStatus(`Imported ${data.importedCount} chapters`);
+      setStatus(`已导入 ${data.importedCount ?? 0} 章`);
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(actionErrorText(e));
     }
     setLoading(false);
   };
@@ -108,7 +109,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
       }
       setStatus(tr("母本导入成功", "Canon imported successfully"));
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(actionErrorText(e));
     }
     setLoading(false);
   };
@@ -134,7 +135,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         nav.toBook(data.bookId);
       }
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(actionErrorText(e));
     }
     setLoading(false);
   };
@@ -153,7 +154,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         nav.toBook(data.bookId);
       }
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(actionErrorText(e));
     }
     setLoading(false);
   };
@@ -172,7 +173,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         nav.toBook(data.bookId);
       }
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(actionErrorText(e));
     }
     setLoading(false);
   };
@@ -378,7 +379,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         )}
 
         {status && (
-          <div className={`text-sm px-3 py-2 rounded-lg ${status.startsWith("Error") ? "bg-destructive/10 text-destructive" : "bg-ok/15 text-foreground"}`}>
+          <div className={`text-sm px-3 py-2 rounded-lg ${isActionError(status) ? "bg-destructive/10 text-destructive" : "bg-ok/15 text-foreground"}`}>
             {status}
           </div>
         )}

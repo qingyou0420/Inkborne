@@ -4,11 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { getEndpoint } from "../llm/providers/index.js";
 import { resolveServicePreset } from "../llm/service-presets.js";
-import { loadSecrets, type SecretsFile } from "../llm/secrets.js";
+import { loadSecrets, loadSecretsSync, type SecretsFile } from "../llm/secrets.js";
 import type { AgentLLMOverride, LLMConfig, ProjectConfig } from "../models/project.js";
 import {
   AUTHORING_ROLE_IDS,
@@ -138,10 +136,7 @@ export async function loadRoleApiKeys(projectRoot: string): Promise<Record<strin
 
 export function loadRoleApiKeysSync(projectRoot: string): Record<string, string> {
   try {
-    const raw = readFileSync(join(projectRoot, ".inkos", "secrets.json"), "utf-8");
-    const parsed = JSON.parse(raw) as SecretsFile;
-    if (!parsed || typeof parsed !== "object" || !parsed.services) return {};
-    return apiKeysFromSecrets(parsed);
+    return apiKeysFromSecrets(loadSecretsSync(projectRoot));
   } catch {
     return {};
   }

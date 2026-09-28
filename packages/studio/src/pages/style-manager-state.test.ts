@@ -3,16 +3,16 @@ import { buildStyleStatusNotice } from "./StyleManager";
 
 describe("buildStyleStatusNotice", () => {
   it("surfaces analyze errors even when no profile is available yet", () => {
-    expect(buildStyleStatusNotice("Error: analyze failed", "")).toEqual({
+    expect(buildStyleStatusNotice("失败：分析没有完成", "")).toEqual({
       tone: "error",
-      message: "Error: analyze failed",
+      message: "失败：分析没有完成",
     });
   });
 
   it("falls back to import status when there is no analyze error", () => {
-    expect(buildStyleStatusNotice("", "Style guide imported successfully!")).toEqual({
+    expect(buildStyleStatusNotice("", "文风已导入")).toEqual({
       tone: "success",
-      message: "Style guide imported successfully!",
+      message: "文风已导入",
     });
   });
 

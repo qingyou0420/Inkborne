@@ -5,6 +5,7 @@
  */
 
 import { fetchJson, useApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
 import { useEffect, useMemo, useState } from "react";
@@ -193,7 +194,7 @@ export function BookStudy({
       </div>
     );
   }
-  if (error) return <div className="text-destructive p-8">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const book = data.book;

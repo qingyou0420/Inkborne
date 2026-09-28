@@ -5,6 +5,7 @@
  */
 
 import { fetchJson, useApi } from "../hooks/use-api";
+import { pageErrorText } from "../lib/error-copy";
 import { useEffect, useMemo, useState } from "react";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
@@ -266,7 +267,7 @@ export function OutlineWorkspace({
       </div>
     );
   }
-  if (error) return <div className="text-destructive p-8">Error: {error}</div>;
+  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
   if (!data) return null;
 
   const empty = tree.volumeCount === 0 && tree.chapterCount === 0;

@@ -71,6 +71,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     isSafeBookId: actual.isSafeBookId,
     chatCompletion: vi.fn(),
     loadProjectConfig: loadProjectConfigMock,
+    maskApiKey: actual.maskApiKey,
+    describeSecretsLocation: actual.describeSecretsLocation,
+    listInProcessBookLocks: () => [],
+    atomicWritesInFlight: () => 0,
     GLOBAL_ENV_PATH: join(tmpdir(), "inkos-global.env"),
   };
 });

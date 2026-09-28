@@ -25,6 +25,10 @@ describe("desktop update chrome", () => {
     expect(preload).toMatch(/installUpdate:/);
     expect(preload).toMatch(/app:installUpdate/);
     expect(preload).toMatch(/openUpdatePanel:/);
+    expect(preload).toMatch(/openLogDir:/);
+    expect(preload).toMatch(/app:openLogDir/);
+    expect(preload).toMatch(/openProjectDir:/);
+    expect(preload).toMatch(/app:openProjectDir/);
     expect(preload).toMatch(/exposeInMainWorld\("fantaWriter"/);
     expect(preload).not.toMatch(/window\.fw\b/);
   });
@@ -38,6 +42,8 @@ describe("desktop update chrome", () => {
     expect(existsSync(join(desktopDir, "update-panel.html"))).toBe(true);
     expect(main).toMatch(/label: "帮助"/);
     expect(main).toMatch(/label: "检查更新"/);
+    expect(main).toMatch(/label: "打开日志目录"/);
+    expect(main).toMatch(/label: "打开项目目录"/);
     expect(main).toMatch(/openUpdatePanel/);
     expect(main).toMatch(/openCheckUpdateUi/);
     expect(main).toMatch(/buttons: \["检查更新", "关闭"\]/);

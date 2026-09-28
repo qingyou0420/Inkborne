@@ -133,25 +133,114 @@ function upsertCustomService(services, entry) {
   return next;
 }
 
-function writeSecrets(root, service, apiKey) {
-  const dir = path.join(root, ".inkos");
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, "secrets.json");
-  let data = { services: {} };
-  if (fs.existsSync(file)) {
-    try {
-      data = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!data || typeof data !== "object" || !data.services) data = { services: {} };
-    } catch {
-      data = { services: {} };
-    }
+function emptySecrets() {
+  return { services: {} };
+}
+
+function readSecretsFile(file) {
+  if (!fs.existsSync(file)) return { corrupt: false, data: emptySecrets() };
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return { corrupt: true, data: emptySecrets() };
   }
+  if (!parsed || typeof parsed !== "object" || !parsed.services || typeof parsed.services !== "object") {
+    return { corrupt: false, data: emptySecrets() };
+  }
+  return { corrupt: false, data: parsed };
+}
+
+function nonEmptySecretKeys(data) {
+  const out = {};
+  const services = data && data.services ? data.services : {};
+  for (const [id, entry] of Object.entries(services)) {
+    const apiKey = entry && typeof entry.apiKey === "string" ? entry.apiKey.trim() : "";
+    if (apiKey) out[id] = apiKey;
+  }
+  return out;
+}
+
+function writeSecretsAtomic(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${Date.now().toString(36)}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ services: data.services || {} }, null, 2)}\n`, "utf8");
+  fs.renameSync(tmp, file);
+}
+
+function secretsContain(saved, required) {
+  const have = nonEmptySecretKeys(saved);
+  for (const [id, apiKey] of Object.entries(nonEmptySecretKeys(required))) {
+    if (have[id] !== apiKey) return false;
+  }
+  return true;
+}
+
+function writeProjectSecrets(root, service, apiKey) {
+  const file = path.join(root, ".inkos", "secrets.json");
+  const current = readSecretsFile(file);
+  if (current.corrupt) {
+    throw new Error("项目里的密钥文件损坏，已停止写入，避免把原文件覆盖掉");
+  }
+  const data = { services: { ...nonEmptyEntries(current.data) } };
   const id = String(service || "").trim() || customServiceId();
   const key = String(apiKey || "").trim();
   if (key) data.services[id] = { apiKey: key };
   else delete data.services[id];
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  writeSecretsAtomic(file, data);
   return file;
+}
+
+function nonEmptyEntries(data) {
+  const services = {};
+  for (const [id, apiKey] of Object.entries(nonEmptySecretKeys(data))) {
+    services[id] = { apiKey };
+  }
+  return services;
+}
+
+function mergeSecretFiles(primary, fallback) {
+  return { services: { ...nonEmptyEntries(fallback), ...nonEmptyEntries(primary) } };
+}
+
+function legacyKeysKept(saved, legacy) {
+  for (const id of Object.keys(nonEmptySecretKeys(legacy))) {
+    if (!nonEmptySecretKeys(saved)[id]) return false;
+  }
+  return true;
+}
+
+function writeSecrets(root, service, apiKey, opts) {
+  const userDataDir = String((opts && opts.userDataDir) || process.env.INKOS_USER_DATA || "").trim();
+  if (!userDataDir) return writeProjectSecrets(root, service, apiKey);
+
+  const legacyFile = path.join(root, ".inkos", "secrets.json");
+  const userFile = path.join(userDataDir, "secrets.json");
+  const legacy = readSecretsFile(legacyFile);
+  const user = readSecretsFile(userFile);
+  if (legacy.corrupt || user.corrupt) {
+    throw new Error("密钥文件损坏，已停止迁移，避免把原来的密钥覆盖掉");
+  }
+  const merged = mergeSecretFiles(user.data, legacy.data);
+  const id = String(service || "").trim() || customServiceId();
+  const key = String(apiKey || "").trim();
+  if (key) merged.services[id] = { apiKey: key };
+  else delete merged.services[id];
+  try {
+    writeSecretsAtomic(userFile, merged);
+    const verify = readSecretsFile(userFile);
+    if (verify.corrupt || !secretsContain(verify.data, merged)) {
+      throw new Error("用户数据目录里的密钥没有校验通过");
+    }
+    if (Object.keys(nonEmptySecretKeys(legacy.data)).length > 0 && legacyKeysKept(verify.data, legacy.data)) {
+      try { writeSecretsAtomic(legacyFile, emptySecrets()); } catch { /* 新文件已写好，旧文件留着下次再清 */ }
+    }
+    return userFile;
+  } catch (error) {
+    if (legacy.corrupt) throw error;
+    writeSecretsAtomic(legacyFile, merged);
+    return legacyFile;
+  }
 }
 
 function writeProjectLlm(root, opts) {
@@ -196,7 +285,9 @@ function writeProjectLlm(root, opts) {
  */
 function saveFirstRunLlm(root, opts) {
   const written = writeProjectLlm(root, opts);
-  const secretsPath = writeSecrets(root, written.serviceId, opts && opts.apiKey);
+  const secretsPath = writeSecrets(root, written.serviceId, opts && opts.apiKey, {
+    userDataDir: opts && opts.userDataDir,
+  });
   return { ...written, secretsPath };
 }
 

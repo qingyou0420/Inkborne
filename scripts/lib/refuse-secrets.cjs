@@ -1,6 +1,6 @@
 /**
  * Refuse env/secrets files in a packed engine or installer tree.
- * Keys stay in the user's project `.inkos/secrets.json`, never in git or NSIS.
+ * Keys stay in the desktop user-data secrets.json (or a project file before migration), never in git or NSIS.
  */
 const fs = require("fs");
 const path = require("path");

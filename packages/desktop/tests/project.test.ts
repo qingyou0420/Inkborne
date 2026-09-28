@@ -20,13 +20,13 @@ const {
   resolveSavedProjectRoot: (savedRoot?: string) => string;
   isAbsoluteRoot: (root: string) => boolean;
   ensureProjectLayout: (root: string) => string;
-  writeSecrets: (root: string, service: string, apiKey: string) => string;
+  writeSecrets: (root: string, service: string, apiKey: string, opts?: { userDataDir?: string }) => string;
   writeProjectLlm: (root: string, opts: { name?: string; baseUrl: string; model: string }) => {
     configPath: string;
     serviceId: string;
     name: string;
   };
-  saveFirstRunLlm: (root: string, opts: { name?: string; baseUrl: string; model: string; apiKey: string }) => {
+  saveFirstRunLlm: (root: string, opts: { name?: string; baseUrl: string; model: string; apiKey: string; userDataDir?: string }) => {
     configPath: string;
     secretsPath: string;
     serviceId: string;
@@ -199,5 +199,69 @@ describe("first-run Studio service listing", () => {
       { services: { custom: { apiKey: "sk-hidden" } } },
     );
     expect(listed).toEqual([]);
+  });
+
+  it("moves an existing project key into the user data folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-migrate-"));
+    const userDir = mkdtempSync(join(tmpdir(), "fw-userdata-"));
+    temps.push(dir, userDir);
+    const root = ensureProjectLayout(dir);
+    const previous = process.env.INKOS_USER_DATA;
+    delete process.env.INKOS_USER_DATA;
+    try {
+      writeFileSync(
+        join(root, ".inkos", "secrets.json"),
+        `${JSON.stringify({ services: { deepseek: { apiKey: "sk-keep" } } }, null, 2)}\n`,
+        "utf8",
+      );
+      const written = saveFirstRunLlm(root, {
+        name: "自定义",
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-v4-pro",
+        apiKey: "sk-new",
+        userDataDir: userDir,
+      });
+      expect(written.secretsPath).toBe(join(userDir, "secrets.json"));
+      const userSecrets = JSON.parse(readFileSync(join(userDir, "secrets.json"), "utf8")) as {
+        services: Record<string, { apiKey: string }>;
+      };
+      expect(userSecrets.services["custom:自定义"]?.apiKey).toBe("sk-new");
+      expect(userSecrets.services.deepseek?.apiKey).toBe("sk-keep");
+      const legacy = readFileSync(join(root, ".inkos", "secrets.json"), "utf8");
+      expect(JSON.parse(legacy).services).toEqual({});
+      expect(legacy).not.toContain("sk-keep");
+      expect(legacy).not.toContain("sk-new");
+    } finally {
+      if (previous === undefined) delete process.env.INKOS_USER_DATA;
+      else process.env.INKOS_USER_DATA = previous;
+    }
+  });
+
+  it("keeps the merged key in the project file when the user data folder cannot be written", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fw-migrate-fail-"));
+    temps.push(dir);
+    const root = ensureProjectLayout(dir);
+    const blocker = join(dir, "blocked");
+    writeFileSync(blocker, "nope", "utf8");
+    writeFileSync(
+      join(root, ".inkos", "secrets.json"),
+      `${JSON.stringify({ services: { deepseek: { apiKey: "sk-keep" } } }, null, 2)}\n`,
+      "utf8",
+    );
+    const previous = process.env.INKOS_USER_DATA;
+    delete process.env.INKOS_USER_DATA;
+    try {
+      const file = writeSecrets(root, "custom:自定义", "sk-new", { userDataDir: join(blocker, "child") });
+      expect(file).toBe(join(root, ".inkos", "secrets.json"));
+      const secrets = JSON.parse(readFileSync(file, "utf8")) as {
+        services: Record<string, { apiKey: string }>;
+      };
+      expect(secrets.services["custom:自定义"]?.apiKey).toBe("sk-new");
+      expect(secrets.services.deepseek?.apiKey).toBe("sk-keep");
+      expect(existsSync(join(blocker, "child", "secrets.json"))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.INKOS_USER_DATA;
+      else process.env.INKOS_USER_DATA = previous;
+    }
   });
 });
