@@ -55,7 +55,7 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   },
   {
     pattern: /BACKGROUND_SAVE_DEFERRED/g,
-    replacement: "落笔还在进行，这次后台保存没写上，落笔写完后可以再试",
+    replacement: "写作任务还在进行，这次后台保存没写上，等它完成后可以再试",
   },
   {
     pattern: /This in-process lock is not recovered automatically while the holder is still alive\. Abort the running task or POST \/api\/v1\/books\/:id\/lock\/force-release, then retry\./g,

@@ -69,15 +69,16 @@ describe("localizeKnownRuntimeMessage", () => {
 
   it("maps a deferred background save to plain Chinese without rewriting other lock errors", () => {
     expect(localizeKnownRuntimeMessage("BACKGROUND_SAVE_DEFERRED")).toBe(
-      "落笔还在进行，这次后台保存没写上，落笔写完后可以再试",
+      "写作任务还在进行，这次后台保存没写上，等它完成后可以再试",
     );
     expect(localizeKnownRuntimeMessage("第 1-3 章修订失败：BACKGROUND_SAVE_DEFERRED。已保留原规划，请重试修订。")).toBe(
-      "第 1-3 章修订失败：落笔还在进行，这次后台保存没写上，落笔写完后可以再试。已保留原规划，请重试修订。",
+      "第 1-3 章修订失败：写作任务还在进行，这次后台保存没写上，等它完成后可以再试。已保留原规划，请重试修订。",
     );
     const generic = localizeKnownRuntimeMessage(
       'Book "醉词" is locked by an active write (pid:123 started:2026-09-06T00:00:00.000Z). This in-process lock is not recovered automatically while the holder is still alive. Abort the running task or POST /api/v1/books/:id/lock/force-release, then retry.',
     );
     expect(generic).toContain("写入被占用");
+    expect(generic).not.toContain("写作任务还在进行");
     expect(generic).not.toContain("落笔还在进行");
   });
 

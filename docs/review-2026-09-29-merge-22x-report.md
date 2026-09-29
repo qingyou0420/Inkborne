@@ -199,3 +199,35 @@
 释放书锁时，原先先从 `processBookLocks` 删掉本进程记录，再异步 `unlink` 删 `.write.lock`。这两步之间进程内已经没有持有者，后台重试会去独占创建锁文件。Windows 上正在删除（delete-pending）的文件再次 `open` 会报 `EPERM`（有时是 `EACCES` / `EBUSY`），不是 `EEXIST`。创建循环只把 `EEXIST` 当成锁被占用，其它错误直接抛出；`withBackgroundBookWrite` 只重试 `BookWriteLockError`，这次后台保存就失败。落笔放锁的那一瞬间后台正好重试时，产品里也会发生，不只是测试。
 
 修法有两处，都在 `packages/core/src/state/manager.ts`。释放时先停心跳，按 token 校验后再删锁文件，然后才从 `processBookLocks` 移除本进程记录。下一个抢锁者要么仍看到持有者（`BookWriteLockError`，后台会重试，前台仍立即失败），要么看到文件已经删干净。token 对不上就不删文件，`ENOENT` 仍不告警。读文件或删除失败时在 `finally` 里移除本进程记录，避免记录永远留着把书锁死。创建锁文件的 4 次循环里，`EPERM` / `EACCES` / `EBUSY` 视为文件正在被删除或被占用，间隔 25 毫秒再试；次数用完仍失败就抛 `BookWriteLockError`，不再抛原始 `EPERM`，也不会在这一层无限重试。
+
+## 第三轮审查返工
+
+版本仍是 2.2.10。没有打 tag，没有改 master。审查意见里「重试次数按当前持锁者重新判断」这条缝按原样保留：`withBackgroundBookWrite` 每次失败仍看这一次的持锁阶段，不把「曾经为写阶段拉长过等待」记下来。没有把清单盖掉，作者再试一次即可。
+
+### 1. 绑定已有书时，正典文件和 book.json 也进同一把锁
+
+`createLightweightBook` 在「书已存在且已经绑到这本书」时，不再先写 `story/canon.md` 和 `book.json` 再抢锁。这两次写入和清单的重读、问心指针补字段放进同一次 `withBookWriteLock`（阶段名仍是「绑定已有书」，`waitMs` 仍是 0）。进锁后才建 `story` 目录、写正典正文，并由 `syncBookJsonTitle` 重读 `book.json` 再写书名、类型、目标章数、每章字数。没有 `fromArtifact` 时同样进这把锁，只改这两个文件，不动清单。抢不到锁就立刻抛 `BookWriteLockError`，回调不执行，正典、`book.json`、清单和问心稿都不落盘。
+
+测试在 `packages/core/src/__tests__/authoring-book-create.test.ts`。锁被占着时，有来源稿和无来源稿两条都抛占锁错误，`story/canon.md` 和 `book.json` 与调用前逐字节一致；有来源稿时清单时间和问心稿仍不出现。锁空着时，有来源稿会把新正文和每章字数写上，无来源稿会把新书名、章数和每章字数写上。原先「只改问心栏、织卷和设定保留」的断言还在。
+
+### 2. 织卷改指针和影响审查的长等待可以取消
+
+`generateWeaveStructure`、`generateWeaveRange`、`reviseWeave`（含按章修订）在运行开始时 `beginAuthoringRun`，把得到的 `AbortSignal` 传进 `withBackgroundBookWrite`。模型调用仍不接收这个信号，织卷中途停模型还是上一轮记下的旧限制。取消路由本来就会 `abortAuthoringRun`；信号中止后，等锁在下一次检查或等待定时器里抛 `AuthoringRunCancelledError`，指针回调不进入。影响审查的 `triageCanonImpact` 同样登记这次 run，把信号传给 `saveImpactManifest` 里的 `withBackgroundBookWrite`。模型调用同样不接这个信号。
+
+测试在 `authoring-background-lock.test.ts`：落笔占着锁时生成分卷，等到织卷已经开始抢锁再 `abortAuthoringRun`，很快抛 `AuthoringRunCancelledError`；随后放开落笔的锁，清单里的 weave 指针和 `updatedAt` 仍是等待前的值。
+
+### 3. 放弃后台保存时不再只写「落笔」
+
+`packages/studio/src/lib/error-copy.ts` 把 `BACKGROUND_SAVE_DEFERRED` 译成「写作任务还在进行，这次后台保存没写上，等它完成后可以再试」。core 里这个错误的 `message` 仍是错误码本身，没有另一句中文默认文案。`error-copy.test.ts` 的两条期望改成新句子；普通「写入被占用」仍不会被换成这句。
+
+### 4. 织卷删稿时，清单读失败就留下稿和索引
+
+`discardUnreferencedWeaveDraft` 在 `loadManifest` 抛错时 `console.warn` 一句（经 `redactSecrets`）并返回，不删稿件目录，也不 `forgetWorkflowArtifact`。只有清单读成功，且 `candidates.weave` 与 `adopted.weave` 都不是这篇稿，才删除。
+
+测试：改指针时让抢锁抛错，并让随后的 `loadManifest` 抛出带 `sk-` 的错误。稿件目录和索引里的织卷项都还在，清单指针仍空。警告里没有密钥原文。
+
+### 5. 锁文件权限错误用尽重试后，原因留在日志里
+
+`StateManager` 创建锁文件遇到 `EPERM` / `EACCES` / `EBUSY`，4 次仍失败时，`console.warn` 打出尝试次数和最后一次错误码，整句经过 `redactSecrets`，不把路径放进这句。抛出的仍是 `BookWriteLockError`（码 `BOOK_BUSY`），作者可见的 `message` 不含 `EPERM`。错误对象上另有非展示字段 `lastErrorCode`，给排查用。调用方仍只按占锁错误重试。
+
+测试：一直抛 `EPERM` 时得到 `BookWriteLockError`，`message` 不含 `EPERM`，`console.warn` 的参数里有 `EPERM` 和 `after 4 attempts`。原先「抖一下然后拿到锁」和「用尽之后不是 EPERM 而是占锁错误」的断言还在。
