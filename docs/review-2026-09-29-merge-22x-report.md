@@ -107,3 +107,47 @@
 | `pnpm build` | 通过 |
 
 未升版本、未打 tag、未推 master。原目录 `Inkborne`（`work/authoring-next`）与 `Inkborne-grok-p1`（`master`）未改分支。
+
+## 第一轮审查返工
+
+版本仍是 2.2.10。没有打 tag，没有改 master。五件事都在 `integrate/2.2x-into-master` 上修完。
+
+### 1. 后台落盘改走同一把写锁
+
+问心、研墨、织卷、影响审查改清单（研墨还改设定目录）时，不再在锁外整份覆盖 `manifest.json`。长的模型调用仍在锁外；只有落盘进 `withBackgroundBookWrite`（`packages/core/src/authoring/book-lock.ts`）。它调用原来的 `withBookWriteLock`，`waitMs` 仍是 0，没有第二把锁。进锁后重新读取最新清单或目录，只改自己那一栏再写回。
+
+锁被占用时，后台落盘按次数和时间重试（默认 25 次、间隔 200 毫秒），可用 `AbortSignal` 取消。到上限仍拿不到锁，就抛出原来的 `BookWriteLockError`。落笔和手改继续走 `withBookWriteLock`，锁被占用立刻失败。
+
+影响审查若是从「采用」里调用的，当时已经拿着这把锁，用 `locked: true` 直接改自己的 `watches` / `impactBaseline`，避免同一把锁重入。
+
+涉及：`book-lock.ts`，`stages/ask.ts`，`stages/ground.ts`，`stages/weave.ts`，`stages/impact.ts`。
+
+测试：`packages/core/src/__tests__/authoring-background-lock.test.ts`。锁被占用时落笔立刻失败、后台落盘会重试并在锁放开后成功；重试途中取消则不写入；超过次数上限抛出锁错误。问心生成与落笔采用交错时，已采用的章节不会被问心落盘盖掉。
+
+### 2. 失败原因先打码
+
+织卷、研墨写入 run 的 `error`，实时事件 `authoring:run` 里的 `run.error`，以及 `recordRunFailure` 打到 `console.error` 的失败原因，都先经过 `redactSecrets`。问心失败路径同样打码。打码是幂等的，不含密钥的原文不会被改掉。
+
+涉及：`stages/weave.ts`，`stages/ground.ts`，`stages/ask.ts`，`packages/studio/src/api/authoring-routes.ts`。
+
+测试：`authoring-run-abort.test.ts` 里假密钥 `sk-` 不会出现在织卷、研墨的 run 文件中，文件里是「已隐藏」。`authoring-routes-prf.test.ts` 覆盖推送事件、run 文件，以及 run 文件无法读取时的日志。
+
+### 3. 取消会中止这次模型调用
+
+`packages/core/src/authoring/run-abort.ts` 按「书 + run」登记一个 `AbortController`。取消路由先 `abortAuthoringRun` 中止该书该 run 的信号；没有登记时仍走原来的 `requestWriteRunCancel`（按 run id 中止，落笔流式任务还在用这条）。run 结束时 `endAuthoringRun` 清掉登记。
+
+落笔流式和整理状态都登记并传入模型调用。问心生成、修订和研墨生成把同一信号传进模型调用；保存候选前再看一次信号和取消标记，已取消就不写候选。
+
+涉及：`run-abort.ts`，`stages/write.ts`，`stages/ask.ts`，`stages/ground.ts`，`authoring-routes.ts`，`packages/core/src/index.ts`（对外导出登记函数和后台落盘）。
+
+测试：`authoring-run-abort.test.ts` 覆盖问心、研墨在信号中止后不保存新候选，以及研墨在取消标记写下之后、模型已经返回时不保存该条。`authoring-routes-prf.test.ts` 覆盖取消路由会把已登记的信号中止。原有研墨用例改为：已经落盘的条目保留，后一条在保存前被取消则不写入。
+
+### 4. 缺失密钥的中文提示
+
+`API key not found for service "..."` 加进 `packages/studio/src/lib/error-copy.ts`。界面提示：还没有保存该接口的密钥，请打开「模型配置」保存密钥。
+
+测试：`packages/studio/src/lib/error-copy.test.ts`。
+
+### 5. 删掉没人读的上次章节
+
+去掉 `App.tsx` 里对 `rememberLastChapter` 的写入，并删除已无调用方的 `packages/studio/src/lib/last-chapter.ts`。刷新后停在哪一章，仍只由偏好里的 `lastChapters` 决定（`BookDetail.tsx`）。`serial-cockpit` 里「上一章状态」的用例与这个文件无关，保留。
