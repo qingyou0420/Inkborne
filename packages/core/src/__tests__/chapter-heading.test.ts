@@ -66,4 +66,22 @@ describe("chapter heading duplicates", () => {
     expect(split.body).toBe("雨还在下。");
     expect(split.body).not.toContain("第八章");
   });
+
+  it("splits a same-chapter hash heading and a plain heading line", () => {
+    const hashed = splitChapterHeading("# 第9章 立听不名\n\n正文…", 9);
+    expect(hashed.title).toBe("第9章 立听不名");
+    expect(hashed.body).toBe("正文…");
+    const plain = splitChapterHeading("第9章 立听不名\n\n正文…", 9);
+    expect(plain.title).toBe("第9章 立听不名");
+    expect(plain.body).toBe("正文…");
+  });
+
+  it("keeps a different chapter number and a sentence that only starts like a heading", () => {
+    const other = splitChapterHeading("# 第8章 立听不名\n\n正文…", 9);
+    expect(other.title).toBe("");
+    expect(other.body).toBe("# 第8章 立听不名\n\n正文…");
+    const sentence = splitChapterHeading("第9章就出事了。\n\n正文…", 9);
+    expect(sentence.title).toBe("");
+    expect(sentence.body).toBe("第9章就出事了。\n\n正文…");
+  });
 });

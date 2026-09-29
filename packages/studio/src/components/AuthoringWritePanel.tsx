@@ -4,7 +4,7 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Check, MoreHorizontal, PenLine, Save } from "lucide-react";
-import { collapseDuplicateChapterHeadings } from "@actalk/inkos-core/chapter-heading";
+import { collapseDuplicateChapterHeadings, splitChapterHeading } from "@actalk/inkos-core/chapter-heading";
 import { isTransientNetworkFetchError } from "../lib/error-copy";
 import { fetchJson, postApi, putApi, retryingBookBusy, useApi } from "../hooks/use-api";
 import { AuthoringStreamError, postAuthoringStream, type AuthoringStreamResult } from "../lib/authoring-stream";
@@ -564,7 +564,10 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   }, []);
 
   const editorLocked = busy === "generate" || busy === "revise" || composingRef.current;
-  const liveCount = body.replace(/\s+/g, "").length;
+  // Editor state is filled after paint. Until then, read the saved manuscript.
+  const manuscriptSource = (editing || dirty || editorLocked || body.length > 0) ? body : savedBody;
+  const readingBody = splitChapterHeading(manuscriptSource, chapterNumber).body;
+  const liveCount = readingBody.replace(/\s+/g, "").length;
   const elapsedLabel = startedAt ? formatElapsed(now - startedAt) : "";
   const progressLabel = editorLocked
     ? `${stopping ? (isZh ? "正在停下" : "Stopping") : (busy === "revise" ? (isZh ? "正在按意见改" : "Revising") : (isZh ? "正在写" : "Writing"))} · ${elapsedLabel} · ${isZh ? `已写 ${liveCount.toLocaleString("zh-CN")} 字` : `${liveCount.toLocaleString("en-US")} chars`}`
@@ -824,7 +827,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           else pendingWriteEdits.delete(bufferKey);
         }}
         data-testid="write-candidate-body"
-      /> : !ready ? <p role="status" className="py-12 text-muted-foreground">{isZh ? "正在打开稿件…" : "Opening manuscript…"}</p> : body.trim() ? <ManuscriptView body={body} className="write-manuscript-reading" /> : <p className="py-16 text-muted-foreground">{isZh ? "这一章，还在等第一句话。" : "This chapter is waiting for its first sentence."}</p>}
+      /> : !ready ? <p role="status" className="py-12 text-muted-foreground">{isZh ? "正在打开稿件…" : "Opening manuscript…"}</p> : readingBody.trim() ? <ManuscriptView body={readingBody} className="write-manuscript-reading" /> : <p className="py-16 text-muted-foreground">{isZh ? "这一章，还在等第一句话。" : "This chapter is waiting for its first sentence."}</p>}
       {generateChoice ? (
         <div className="space-y-2 rounded-xl border border-border bg-background px-3 py-3" data-testid="write-generate-choice">
           <p className="text-sm">{isZh ? "这一章有手改。要基于手改继续写，还是另起一稿？" : "This chapter has hand edits. Rewrite from them, or start a fresh draft?"}</p>
@@ -890,7 +893,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         setGeneration(null);
         return true;
       }} />
-      <ManuscriptHistoryDrawer open={historyOpen} bookId={bookId} title={isZh ? "本章版本" : "Chapter versions"} artifacts={history} currentId={candidate?.artifactId} adoptedId={adoptedId} isZh={isZh} busy={Boolean(busy)} onClose={() => setHistoryOpen(false)} onRestore={(artifactId, restoredBody) => run("restore", async () => {
+      <ManuscriptHistoryDrawer open={historyOpen} bookId={bookId} title={isZh ? "本章版本" : "Chapter versions"} artifacts={history} currentId={candidate?.artifactId} adoptedId={adoptedId} chapterNumber={chapterNumber} isZh={isZh} busy={Boolean(busy)} onClose={() => setHistoryOpen(false)} onRestore={(artifactId, restoredBody) => run("restore", async () => {
         const restored = await putApi<{ artifactId: string }>(`/authoring/artifacts/${encodeURIComponent(artifactId)}`, { bookId, body: restoredBody }); pendingSavedId.current = restored.artifactId;
       })} />
       <AuthoringReviewDrawer
