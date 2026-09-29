@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +49,24 @@ function project() {
       "ask.main": { modelId: "ask-main" },
     },
   });
+}
+
+function lockFsError(code: "EPERM" | "EACCES" | "EBUSY"): NodeJS.ErrnoException {
+  const error = new Error(`${code}: operation not permitted, open`) as NodeJS.ErrnoException;
+  error.code = code;
+  error.syscall = "open";
+  return error;
+}
+
+/** Private lock helpers stay on the prototype; tests reach them without exporting. */
+function bookLockInternals(): {
+  createLockFile(this: StateManager, lockPath: string, metadata: object): Promise<void>;
+  unlinkWithRetry(this: StateManager, lockPath: string): Promise<void>;
+} {
+  return StateManager.prototype as unknown as {
+    createLockFile(this: StateManager, lockPath: string, metadata: object): Promise<void>;
+    unlinkWithRetry(this: StateManager, lockPath: string): Promise<void>;
+  };
 }
 
 function settledFlag(promise: Promise<unknown>): () => boolean {
@@ -385,5 +403,92 @@ describe("background authoring writes share the book lock", () => {
     expect(logged).toContain("closeImpactItems after adopt failed");
     expect(logged).not.toContain("sk-supersecretvalue");
     expect(logged).toContain(redactSecrets("sk-supersecretvalue"));
+  });
+
+  it("retries a transient EPERM while creating the lock file and then acquires it", async () => {
+    const { bookId } = await book();
+    const internals = bookLockInternals();
+    const original = internals.createLockFile;
+    let eperm = 0;
+    const create = vi.spyOn(internals, "createLockFile").mockImplementation(async function (this: StateManager, lockPath, metadata) {
+      if (eperm < 2) {
+        eperm += 1;
+        throw lockFsError("EPERM");
+      }
+      return original.call(this, lockPath, metadata);
+    });
+
+    const release = await new StateManager(projectRoot).acquireBookLock(bookId, {
+      stage: "落笔",
+      taskId: "eperm-retry",
+    }, { waitMs: 0 });
+    releases.push(release);
+    expect(eperm).toBe(2);
+    expect(create).toHaveBeenCalledTimes(3);
+    expect((await stat(join(projectRoot, "books", bookId, ".write.lock"))).isFile()).toBe(true);
+  });
+
+  it("turns an exhausted Windows lock race into BookWriteLockError instead of EPERM", async () => {
+    const { bookId } = await book();
+    const create = vi.spyOn(bookLockInternals(), "createLockFile").mockImplementation(async () => {
+      throw lockFsError("EPERM");
+    });
+    const error = await new StateManager(projectRoot).acquireBookLock(bookId, {
+      stage: "落笔",
+      taskId: "eperm-exhausted",
+    }, { waitMs: 0 }).then(() => {
+      throw new Error("expected the lock acquire to fail busy");
+    }, (caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(BookWriteLockError);
+    expect(error).toMatchObject({ code: "BOOK_BUSY" });
+    expect((error as NodeJS.ErrnoException).code).not.toBe("EPERM");
+    expect(create).toHaveBeenCalledTimes(4);
+    expect(new StateManager(projectRoot).inspectBookLock(bookId)).toBeNull();
+  });
+
+  it("does not surface EPERM when this process acquires again as soon as release finishes", async () => {
+    const { bookId } = await book();
+    const manager = new StateManager(projectRoot);
+    const release = await manager.acquireBookLock(bookId, {
+      stage: "落笔",
+      taskId: "release-race",
+    });
+    const internals = bookLockInternals();
+    const original = internals.unlinkWithRetry;
+    let entered = 0;
+    let unblock = () => {};
+    const gate = new Promise<void>((resolveGate) => {
+      unblock = resolveGate;
+    });
+    vi.spyOn(internals, "unlinkWithRetry").mockImplementation(async function (this: StateManager, lockPath) {
+      entered += 1;
+      await gate;
+      return original.call(this, lockPath);
+    });
+
+    const releasing = release();
+    try {
+      await vi.waitFor(() => {
+        expect(entered).toBe(1);
+      });
+      expect(manager.inspectBookLock(bookId)).toMatchObject({ stage: "落笔", inProcess: true });
+      const raced = await manager.acquireBookLock(bookId, { stage: "问心候选" }, { waitMs: 0 }).then(() => {
+        throw new Error("expected the lock to stay held until the file is gone");
+      }, (caught: unknown) => caught);
+      expect(raced).toBeInstanceOf(BookWriteLockError);
+      expect(raced).toMatchObject({ code: "BOOK_BUSY" });
+      expect((raced as NodeJS.ErrnoException).code).not.toBe("EPERM");
+
+      unblock();
+      await releasing;
+      expect(manager.inspectBookLock(bookId)).toBeNull();
+      const again = await manager.acquireBookLock(bookId, { stage: "问心候选" }, { waitMs: 0 });
+      releases.push(again);
+      expect((await stat(join(projectRoot, "books", bookId, ".write.lock"))).isFile()).toBe(true);
+    } finally {
+      unblock();
+      await releasing.catch(() => undefined);
+    }
   });
 });

@@ -193,3 +193,9 @@
 `closeImpactItemsAfterAdopt` 的 `console.warn` 改为只打 `redactSecrets` 之后的失败原因，不再把原始错误对象打出去。
 
 测试仍在 `authoring-background-lock.test.ts`：持锁回调里 `locked: true` 能把影响项写成已再生，并且这次关闭不再抢锁；同一回调里再套一层 `withBookWriteLock` 仍然立刻失败。不在持锁上下文里 `locked: true` 抛 `BookWriteLockNotHeldError`，清单不被改写。采纳后的关闭失败时，警告里的 `sk-` 密钥会变成「已隐藏」。
+
+### 4. Windows 上抢锁偶发 EPERM
+
+释放书锁时，原先先从 `processBookLocks` 删掉本进程记录，再异步 `unlink` 删 `.write.lock`。这两步之间进程内已经没有持有者，后台重试会去独占创建锁文件。Windows 上正在删除（delete-pending）的文件再次 `open` 会报 `EPERM`（有时是 `EACCES` / `EBUSY`），不是 `EEXIST`。创建循环只把 `EEXIST` 当成锁被占用，其它错误直接抛出；`withBackgroundBookWrite` 只重试 `BookWriteLockError`，这次后台保存就失败。落笔放锁的那一瞬间后台正好重试时，产品里也会发生，不只是测试。
+
+修法有两处，都在 `packages/core/src/state/manager.ts`。释放时先停心跳，按 token 校验后再删锁文件，然后才从 `processBookLocks` 移除本进程记录。下一个抢锁者要么仍看到持有者（`BookWriteLockError`，后台会重试，前台仍立即失败），要么看到文件已经删干净。token 对不上就不删文件，`ENOENT` 仍不告警。读文件或删除失败时在 `finally` 里移除本进程记录，避免记录永远留着把书锁死。创建锁文件的 4 次循环里，`EPERM` / `EACCES` / `EBUSY` 视为文件正在被删除或被占用，间隔 25 毫秒再试；次数用完仍失败就抛 `BookWriteLockError`，不再抛原始 `EPERM`，也不会在这一层无限重试。

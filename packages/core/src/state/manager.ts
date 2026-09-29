@@ -18,6 +18,9 @@ import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } fro
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
 const BOOK_LOCK_RELEASE_RETRIES = 4;
+const BOOK_LOCK_CREATE_ATTEMPTS = 4;
+/** Windows open of a delete-pending lock file. Stay inside 10-50ms. */
+const BOOK_LOCK_CREATE_RETRY_MS = 25;
 /** Lock file missing while book dir exists: still-acquiring vs leftover after delete. */
 const BOOK_LOCK_ORPHAN_FILE_MS = 2_000;
 /** Same-engine entry with no abort and no independently observed live task. */
@@ -388,12 +391,22 @@ export class StateManager {
 
     try {
       let acquired = false;
-      for (let attempt = 0; attempt < 4 && !acquired; attempt++) {
+      for (let attempt = 0; attempt < BOOK_LOCK_CREATE_ATTEMPTS && !acquired; attempt++) {
         try {
           await this.createLockFile(lockPath, owner.metadata);
           acquired = true;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException | undefined)?.code !== "EEXIST") {
+          const code = (error as NodeJS.ErrnoException | undefined)?.code;
+          // A delete-pending lock (Windows EPERM/EACCES/EBUSY) is busy, not fatal.
+          // Retry inside this bounded loop; callers only retry BookWriteLockError.
+          const retryable = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+          if (retryable) {
+            if (attempt < BOOK_LOCK_CREATE_ATTEMPTS - 1) {
+              await new Promise((resolveDelay) => setTimeout(resolveDelay, BOOK_LOCK_CREATE_RETRY_MS));
+            }
+            continue;
+          }
+          if (code !== "EEXIST") {
             throw error;
           }
 
@@ -429,9 +442,8 @@ export class StateManager {
         released = true;
         if (owner.heartbeatTimer) clearInterval(owner.heartbeatTimer);
         await owner.heartbeatTask;
-        if (processBookLocks.get(lockKey)?.metadata.token === owner.metadata.token) {
-          processBookLocks.delete(lockKey);
-        }
+        // Unlink before dropping the in-process record. Removing it first lets
+        // the next acquire open a delete-pending lock and get EPERM on Windows.
         try {
           const snapshot = await this.readLockSnapshot(lockPath);
           if (snapshot.metadata?.token !== owner.metadata.token) {
@@ -441,6 +453,10 @@ export class StateManager {
         } catch (error) {
           if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
             console.warn(`[inkos] Failed to release book lock ${lockPath}: ${String(error)}`);
+          }
+        } finally {
+          if (processBookLocks.get(lockKey)?.metadata.token === owner.metadata.token) {
+            processBookLocks.delete(lockKey);
           }
         }
       };
