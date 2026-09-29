@@ -14,6 +14,7 @@ import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bookDirHasCorruptBookJson, readBookJsonFile } from "./book-json.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
+import { redactSecrets } from "../utils/redact-secrets.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -152,12 +153,15 @@ export function expireInProcessBookLockForTest(projectRoot: string, bookId: stri
 export class BookWriteLockError extends Error {
   readonly code = "BOOK_BUSY";
   readonly owner?: BookLockOwnerInfo;
+  /** Last filesystem code after a busy-retry gave up. Not part of the author-facing message. */
+  readonly lastErrorCode?: string;
 
   constructor(
     readonly bookId: string,
     readonly lockPath: string,
     lockData?: string,
     owner?: BookLockOwnerInfo,
+    lastErrorCode?: string,
   ) {
     const inProcess = owner?.inProcess === true;
     const recoveryHint = inProcess
@@ -168,6 +172,7 @@ export class BookWriteLockError extends Error {
     );
     this.name = "BookWriteLockError";
     this.owner = owner;
+    this.lastErrorCode = lastErrorCode;
   }
 }
 
@@ -391,6 +396,7 @@ export class StateManager {
 
     try {
       let acquired = false;
+      let lastRetryCode: string | undefined;
       for (let attempt = 0; attempt < BOOK_LOCK_CREATE_ATTEMPTS && !acquired; attempt++) {
         try {
           await this.createLockFile(lockPath, owner.metadata);
@@ -401,6 +407,7 @@ export class StateManager {
           // Retry inside this bounded loop; callers only retry BookWriteLockError.
           const retryable = code === "EPERM" || code === "EACCES" || code === "EBUSY";
           if (retryable) {
+            lastRetryCode = code;
             if (attempt < BOOK_LOCK_CREATE_ATTEMPTS - 1) {
               await new Promise((resolveDelay) => setTimeout(resolveDelay, BOOK_LOCK_CREATE_RETRY_MS));
             }
@@ -432,7 +439,10 @@ export class StateManager {
       }
 
       if (!acquired) {
-        throw new BookWriteLockError(bookId, lockPath);
+        console.warn(redactSecrets(
+          `[inkos] book lock create failed after ${BOOK_LOCK_CREATE_ATTEMPTS} attempts (${lastRetryCode ?? "unknown"})`,
+        ));
+        throw new BookWriteLockError(bookId, lockPath, undefined, undefined, lastRetryCode);
       }
 
       this.startLockHeartbeat(lockPath, lockKey, owner);

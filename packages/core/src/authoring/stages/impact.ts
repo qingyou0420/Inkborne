@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseVolumeMapTree } from "../../utils/volume-map-tree.js";
 import { bookWriteLockHeld, BookWriteLockNotHeldError, withBackgroundBookWrite } from "../book-lock.js";
+import { beginAuthoringRun, endAuthoringRun, isAuthoringRunAbort } from "../run-abort.js";
 import { CANON_IMPACT_FIELDS, canonFieldDiff, parseCanon, type CanonFieldChange } from "../canon.js";
 import {
   isConstraintSetting,
@@ -291,9 +292,10 @@ function reminderUnresolved(report: ImpactReport | undefined): boolean {
 async function saveImpactManifest(
   root: AuthoringStoreRoot,
   patch: (manifest: WorkflowManifest) => WorkflowManifest | Promise<WorkflowManifest>,
-  options?: { readonly locked?: boolean },
+  options?: { readonly locked?: boolean; readonly signal?: AbortSignal },
 ): Promise<void> {
   const write = async () => {
+    if (options?.signal?.aborted) throw new AuthoringRunCancelledError();
     const latest = await loadManifest(root);
     const next = await patch(latest);
     if (next === latest) return;
@@ -307,13 +309,13 @@ async function saveImpactManifest(
     await write();
     return;
   }
-  await withBackgroundBookWrite(root, "影响审查", write);
+  await withBackgroundBookWrite(root, "影响审查", write, { signal: options?.signal });
 }
 
 async function syncImpactWatches(
   root: AuthoringStoreRoot,
   report: ImpactReport,
-  options?: { readonly acknowledgeDegraded?: boolean; readonly locked?: boolean },
+  options?: { readonly acknowledgeDegraded?: boolean; readonly locked?: boolean; readonly signal?: AbortSignal },
 ): Promise<void> {
   await saveImpactManifest(root, (manifest) => {
     const counts = openCounts(report.items);
@@ -345,7 +347,7 @@ async function syncImpactWatches(
         ? { ask: report.to.artifactId }
         : (manifest.impactBaseline ?? { ask: report.from.artifactId }),
     };
-  }, { locked: options?.locked });
+  }, { locked: options?.locked, signal: options?.signal });
 }
 
 async function persistImpactRun(
@@ -883,6 +885,8 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
   const toCanon = parseCanon(toArt.body);
   const changes = canonFieldDiff(fromCanon, toCanon);
   const runId = input.runId ?? newRunId();
+  const signal = beginAuthoringRun(input.root.bookId, runId);
+  try {
   const createdAt = (await loadRun(input.root, runId))?.createdAt ?? nowIso();
   const scope = `impact:${fromId}..${toId}`;
   const baseRun = {
@@ -919,7 +923,7 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
           )),
           impactBaseline: { ask: toId },
         };
-      });
+      }, { signal });
     }
     return { unchanged: true };
   }
@@ -1137,7 +1141,21 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
   if (previous && previous.impactId !== report.impactId) {
     await saveImpactReport(input.root, { ...previous, supersededBy: report.impactId });
   }
-  await syncImpactWatches(input.root, report);
+  try {
+    await syncImpactWatches(input.root, report, { signal });
+  } catch (error) {
+    if (!isAuthoringRunAbort(error, signal)) throw error;
+    await persistImpactRun(input.root, {
+      ...baseRun,
+      status: "cancelled",
+      progressDone: batches.length,
+      progressTotal: Math.max(batches.length, 1),
+      progressLabel: "已放弃这次影响分辨",
+      reportId: report.impactId,
+      modelSnapshot: resolved.snapshot,
+    }, input.onProgress);
+    throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
+  }
   await persistImpactRun(input.root, {
     ...baseRun,
     status: cancelled ? "cancelled" : partial ? "partial" : "completed",
@@ -1153,6 +1171,9 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
   }, input.onProgress);
   if (cancelled) throw new AuthoringRunCancelledError();
   return { impactId: report.impactId, report };
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
+  }
 }
 
 async function closeMatchingItems(

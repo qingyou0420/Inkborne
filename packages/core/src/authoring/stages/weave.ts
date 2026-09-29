@@ -26,9 +26,11 @@ import { completeRole, completeRoleObserved } from "../llm.js";
 import { combineAuthoringUsage } from "../token-usage.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
+import { beginAuthoringRun, endAuthoringRun } from "../run-abort.js";
 import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   authoringRootDir,
+  AuthoringRunCancelledError,
   loadArtifact,
   loadManifest,
   loadReport,
@@ -552,12 +554,17 @@ function composeAuthoringPreamble(base: string | undefined, generated: string): 
 
 /** Remove a draft whose pointer update threw, unless the manifest already names it. */
 async function discardUnreferencedWeaveDraft(root: AuthoringStoreRoot, artifactId: string): Promise<void> {
+  let manifest;
   try {
-    const manifest = await loadManifest(root);
-    if (manifest.candidates.weave === artifactId || manifest.adopted.weave === artifactId) return;
-  } catch {
-    /* still remove the draft we just wrote; the pointer update did not finish */
+    manifest = await loadManifest(root);
+  } catch (error) {
+    console.warn(
+      "[authoring] kept weave draft because the manifest could not be read",
+      redactSecrets(error instanceof Error ? error.message : String(error)),
+    );
+    return;
   }
+  if (manifest.candidates.weave === artifactId || manifest.adopted.weave === artifactId) return;
   await rm(join(authoringRootDir(root), "artifacts", artifactId), { recursive: true, force: true }).catch(() => undefined);
   await forgetWorkflowArtifact(authoringRootDir(root), artifactId).catch(() => undefined);
 }
@@ -591,6 +598,7 @@ async function persistWeaveCandidate(input: {
   readonly source?: "generate" | "revise" | "hand";
   readonly inputRefs?: readonly InputRef[];
   readonly scope?: string;
+  readonly signal?: AbortSignal;
 }): Promise<string> {
   const assembled = assembleVolumes(input.beats, input.volumes, input.bookOutline);
   const source = input.sourceMarkdown ?? input.baseMarkdown ?? "";
@@ -638,6 +646,7 @@ async function persistWeaveCandidate(input: {
   }, null, 2)}\n`);
   const generatedCount = input.beats.filter((beat) => beat.summary && beat.summary !== "（待补概要）").length;
   await commitWeaveCandidatePointer(input.root, artifactId, () => withBackgroundBookWrite(input.root, "织卷候选", async () => {
+    if (input.signal?.aborted) throw new AuthoringRunCancelledError();
     const manifest = await loadManifest(input.root);
     await saveManifest(input.root, {
       ...manifest,
@@ -649,7 +658,7 @@ async function persistWeaveCandidate(input: {
       },
       lastRunId: input.runId,
     });
-  }));
+  }, { signal: input.signal }));
   return artifactId;
 }
 
@@ -726,6 +735,7 @@ export async function generateWeaveStructure(input: WeaveRuntime & {
     createdAt: startedAt,
     updatedAt: startedAt,
   });
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   let raw = "";
   try {
     raw = await completeRole(resolved, [
@@ -757,6 +767,7 @@ export async function generateWeaveStructure(input: WeaveRuntime & {
       source: "generate",
       inputRefs: ctx.refs,
       scope: "structure",
+      signal,
     });
     await saveRun(input.root, {
       runId,
@@ -776,6 +787,25 @@ export async function generateWeaveStructure(input: WeaveRuntime & {
     });
     return { artifactId, runId, volumes, bookOutline };
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError || signal.aborted) {
+      await saveRun(input.root, {
+        runId,
+        stage: "weave",
+        operation: "generate",
+        roleId: "weave.main",
+        status: "cancelled",
+        bookId: input.root.bookId,
+        progressDone: 0,
+        progressTotal: expectedCount ?? 1,
+        progressLabel: "已放弃这次分卷",
+        modelSnapshot: resolved.snapshot,
+        producedArtifactIds: [],
+        checkpoint: { targetChapters: target, producedScope: "structure" },
+        createdAt: startedAt,
+        updatedAt: new Date().toISOString(),
+      });
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
+    }
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
     await saveRun(input.root, {
       runId,
@@ -796,6 +826,8 @@ export async function generateWeaveStructure(input: WeaveRuntime & {
     });
     await writeWeaveDiagnostics(input.root, runId, raw);
     throw error;
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 
@@ -985,6 +1017,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
     };
   };
 
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   const writeCandidate = async (beats: WeaveChapterBeat[]): Promise<string> => {
     const parentMeta = candidateLoaded?.meta;
     const id = await persistWeaveCandidate({
@@ -1000,6 +1033,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
       runId,
       parent: parentMeta ? { artifactId: parentMeta.artifactId, version: parentMeta.version } : undefined,
       inputRefs: ctx.refs,
+      signal,
     });
     const saved = await loadArtifact(input.root, id);
     if (saved?.body) seedMarkdown = saved.body;
@@ -1007,6 +1041,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   };
 
   let raw = "";
+  try {
   try {
     for (const batch of batches) {
       const batchStart = batch[0]!;
@@ -1061,6 +1096,10 @@ export async function generateWeaveRange(input: WeaveRuntime & {
       await saveRun(input.root, writeCheckpoint(remaining.length === 0 ? "completed" : "running", { remaining }));
     }
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError || signal.aborted) {
+      await saveRun(input.root, writeCheckpoint("cancelled"));
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
+    }
     const beats = mergeBeats(collected, [], requestedStart, requestedEnd);
     if (beats.some((beat) => isFilledBeat(beat))) {
       artifactId = await writeCandidate(beats);
@@ -1083,6 +1122,9 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   const complete = remaining.length === 0;
   await saveRun(input.root, writeCheckpoint(complete ? "completed" : "partial", { remaining }));
   return { beats, runId, artifactId, status: complete ? "completed" : "partial" };
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
+  }
 }
 
 export async function reviewWeave(input: WeaveRuntime & {
@@ -1260,6 +1302,8 @@ async function reviseWeaveChapters(
       createdAt, updatedAt: new Date().toISOString(),
     });
   };
+  const signal = beginAuthoringRun(input.root.bookId, runId);
+  try {
   await saveProgress("running");
   const missing = requested.filter((n) => !completed.has(n));
   let text = "";
@@ -1312,9 +1356,10 @@ async function reviseWeaveChapters(
       };
       await saveArtifact(input.root, nextMeta, nextMarkdown);
       await commitWeaveCandidatePointer(input.root, nextId, () => withBackgroundBookWrite(input.root, "织卷候选", async () => {
+        if (signal.aborted) throw new AuthoringRunCancelledError();
         const manifest = await loadManifest(input.root);
         await saveManifest(input.root, { ...manifest, candidates: { ...manifest.candidates, weave: nextId } });
-      }));
+      }, { signal }));
       latest = { meta: nextMeta, body: nextMarkdown };
       markdown = nextMarkdown;
       artifactId = nextId;
@@ -1324,12 +1369,19 @@ async function reviseWeaveChapters(
     await saveProgress("completed");
     return artifactId || original.meta.artifactId;
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError || signal.aborted) {
+      await saveProgress("cancelled");
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
+    }
     const cause = redactSecrets(error instanceof Error ? error.message : String(error));
     const message = `第 ${batchLabel} 章修订失败：${cause}。已保留原规划${completed.size ? "和已完成的修订，可继续剩余修订" : "，请重试修订"}。`;
     await saveProgress(completed.size ? "partial" : "failed", message);
     await writeWeaveDiagnostics(input.root, runId, text);
     if (completed.size) return artifactId || original.meta.artifactId;
     throw new Error(message, { cause: error });
+  }
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 
@@ -1396,6 +1448,7 @@ export async function reviseWeave(input: WeaveRuntime & {
     createdAt: startedAt,
     updatedAt: startedAt,
   });
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   let text = "";
   try {
   text = await completeRole(resolved, [
@@ -1432,6 +1485,7 @@ export async function reviseWeave(input: WeaveRuntime & {
         ...ctx.refs,
       ],
       scope: "structure",
+      signal,
     });
     await saveRun(input.root, {
       runId,
@@ -1453,6 +1507,27 @@ export async function reviseWeave(input: WeaveRuntime & {
     });
     return artifactId;
   } catch (error) {
+    if (error instanceof AuthoringRunCancelledError || signal.aborted) {
+      await saveRun(input.root, {
+        runId,
+        stage: "weave",
+        operation: "revise",
+        roleId: "weave.main",
+        status: "cancelled",
+        bookId: input.root.bookId,
+        scope: "structure",
+        progressDone: 0,
+        progressTotal: 1,
+        progressLabel: "已放弃这次修订",
+        modelSnapshot: resolved.snapshot,
+        producedArtifactIds: [],
+        reportId: report.reportId,
+        checkpoint: { producedScope: "structure" },
+        createdAt: startedAt,
+        updatedAt: new Date().toISOString(),
+      });
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
+    }
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
     await saveRun(input.root, {
       runId,
@@ -1475,5 +1550,7 @@ export async function reviseWeave(input: WeaveRuntime & {
     });
     await writeWeaveDiagnostics(input.root, runId, text);
     throw error;
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }

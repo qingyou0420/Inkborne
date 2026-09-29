@@ -13,9 +13,11 @@ import {
   withBackgroundBookWrite,
   withBookWriteLock,
 } from "../authoring/book-lock.js";
+import { abortAuthoringRun } from "../authoring/run-abort.js";
 import { generateAskCanon } from "../authoring/stages/ask.js";
 import { closeImpactItems, closeImpactItemsAfterAdopt } from "../authoring/stages/impact.js";
 import { generateWeaveStructure } from "../authoring/stages/weave.js";
+import * as authoringStore from "../authoring/store.js";
 import { AuthoringRunCancelledError, listArtifacts, loadManifest, saveImpactReport, saveManifest } from "../authoring/store.js";
 import { BookWriteLockError, StateManager, isBookWriteLockError, isBookWriteLockMessage, resetProcessBookLocksForTest } from "../state/manager.js";
 import { redactSecrets } from "../utils/redact-secrets.js";
@@ -34,6 +36,20 @@ const canonJson = JSON.stringify({
   targetChapters: 12,
   chapterWordCount: 2000,
 });
+
+function weaveProject() {
+  return ProjectConfigSchema.parse({
+    name: "lock-test",
+    version: "0.1.0",
+    llm: {
+      provider: "custom",
+      model: "weave-main",
+      baseUrl: "https://unused.invalid/v1",
+      apiKey: "stub",
+    },
+    authoringRoles: { "weave.main": { modelId: "weave-main" } },
+  });
+}
 
 function project() {
   return ProjectConfigSchema.parse({
@@ -331,6 +347,73 @@ describe("background authoring writes share the book lock", () => {
     expect(names.filter((name) => name.startsWith("weave-"))).toEqual([]);
   });
 
+  it("cancels a weave pointer wait while 落笔 holds the lock and leaves the pointer unchanged", async () => {
+    const { root, bookId } = await book();
+    const before = await loadManifest(root);
+    const acquire = vi.spyOn(StateManager.prototype, "acquireBookLock");
+    await hold(bookId, "落笔");
+    const heldAttempts = acquire.mock.calls.length;
+    const runId = "weave-abort-lock";
+    const pending = generateWeaveStructure({
+      root,
+      project: weaveProject(),
+      runId,
+      llm: async () => JSON.stringify({
+        bookOutline: "覆盖结构",
+        volumes: [{ volumeNumber: 1, title: "全", startChapter: 1, endChapter: 12, body: "全书" }],
+      }),
+    });
+    const done = settledFlag(pending);
+    await waitForMoreLockAttempts(acquire, heldAttempts);
+    expect(done()).toBe(false);
+    expect(abortAuthoringRun(bookId, runId)).toBe(true);
+    await expect(pending).rejects.toBeInstanceOf(AuthoringRunCancelledError);
+    await releases.shift()!();
+    const after = await loadManifest(root);
+    expect(after.candidates.weave).toBe(before.candidates.weave);
+    expect(after.adopted.weave).toBe(before.adopted.weave);
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
+  it("keeps the weave draft when the pointer update fails and the manifest cannot be read", async () => {
+    const { root, bookId } = await book();
+    const before = (await listArtifacts(root)).map((item) => item.artifactId);
+    let failReads = false;
+    const originalLoad = authoringStore.loadManifest;
+    vi.spyOn(authoringStore, "loadManifest").mockImplementation((storeRoot) => {
+      if (failReads) return Promise.reject(new Error("manifest unreadable sk-supersecretvalue"));
+      return originalLoad(storeRoot);
+    });
+    const original = StateManager.prototype.acquireBookLock;
+    vi.spyOn(StateManager.prototype, "acquireBookLock").mockImplementation(function (this: StateManager, lockedBookId, holder, options) {
+      if (holder?.stage === "织卷候选") {
+        failReads = true;
+        return Promise.reject(new Error("pointer update failed"));
+      }
+      return original.call(this, lockedBookId, holder, options);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(generateWeaveStructure({
+      root,
+      project: weaveProject(),
+      llm: async () => JSON.stringify({
+        bookOutline: "覆盖结构",
+        volumes: [{ volumeNumber: 1, title: "全", startChapter: 1, endChapter: 12, body: "全书" }],
+      }),
+    })).rejects.toThrow("pointer update failed");
+    const names = await readdir(join(projectRoot, "books", bookId, "story", "workflow", "artifacts")).catch(() => [] as string[]);
+    const weaveNames = names.filter((name) => name.startsWith("weave-"));
+    expect(weaveNames.length).toBeGreaterThan(0);
+    const after = (await listArtifacts(root)).map((item) => item.artifactId);
+    expect(after.some((id) => id.startsWith("weave-") && !before.includes(id))).toBe(true);
+    failReads = false;
+    expect((await loadManifest(root)).candidates.weave).toBeUndefined();
+    const logged = warn.mock.calls.map((call) => call.map((part) => String(part)).join(" ")).join("\n");
+    expect(logged).toContain("kept weave draft");
+    expect(logged).not.toContain("sk-supersecretvalue");
+    expect(logged).toContain(redactSecrets("sk-supersecretvalue"));
+  });
+
   function openWeaveImpact(impactId: string) {
     return {
       impactId,
@@ -444,6 +527,28 @@ describe("background authoring writes share the book lock", () => {
     expect(error).toMatchObject({ code: "BOOK_BUSY" });
     expect((error as NodeJS.ErrnoException).code).not.toBe("EPERM");
     expect(create).toHaveBeenCalledTimes(4);
+    expect(new StateManager(projectRoot).inspectBookLock(bookId)).toBeNull();
+  });
+
+  it("logs EPERM after lock-create retries are exhausted without showing it to the author", async () => {
+    const { bookId } = await book();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(bookLockInternals(), "createLockFile").mockImplementation(async () => {
+      throw lockFsError("EPERM");
+    });
+    const error = await new StateManager(projectRoot).acquireBookLock(bookId, {
+      stage: "落笔",
+      taskId: "eperm-logged",
+    }, { waitMs: 0 }).then(() => {
+      throw new Error("expected the lock acquire to fail busy");
+    }, (caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(BookWriteLockError);
+    expect(error).toMatchObject({ code: "BOOK_BUSY", lastErrorCode: "EPERM" });
+    expect(error instanceof Error ? error.message : String(error)).not.toContain("EPERM");
+    const logged = warn.mock.calls.map((call) => call.map((part) => String(part)).join(" ")).join("\n");
+    expect(logged).toContain("EPERM");
+    expect(logged).toContain("after 4 attempts");
     expect(new StateManager(projectRoot).inspectBookLock(bookId)).toBeNull();
   });
 
