@@ -157,3 +157,39 @@
 `09517e8` 的 push 测试里，`authoring-background-lock.test.ts`「前台立即失败、后台重试」失败：`expected true to be false`。该用例给后台落盘 6 次、间隔 15 毫秒，重试窗口大约 75 毫秒，却固定等 80 毫秒再断言 `done()` 仍为 false。机器一快，次数在等待结束前用完，promise 已经 reject。这是用例自己的时间竞争，产品代码没有改。
 
 修法：后台在锁被占用期间的重试改为 200 次、间隔仍是 15 毫秒，窗口远长于观察时间；不再 `sleep` 固定毫秒，而是 `vi.waitFor` 等到 `acquireBookLock` 已被再次调用，再断言仍未结束、回调还没进去。取消用例同样先等到已经重试再 `abort`。问心落盘和采用交错的用例去掉 80 毫秒和 40 毫秒的固定等待，改为模型返回后、以及 `saveManifest` 之后，都等到下一次抢锁且 promise 仍未结束。放锁后仍要成功，且回调只进一次。`authoring-run-abort.test.ts` 本来就是 `vi.waitFor` 等到模型拿到信号再中止，没有这种窗口，未改。
+
+## 第二轮审查返工
+
+版本仍是 2.2.10。没有打 tag，没有改 master。三个低优先级问题都在 `integrate/2.2x-into-master` 上修完。
+
+### 1. 落笔持锁时，后台保存会等到锁放开
+
+`withBackgroundBookWrite` 不再对所有持锁者使用固定的 25 次 × 200 毫秒（大约 5 秒）。抢锁失败时看持锁信息里的 `stage`：落笔、审查本章、按意见修改、采用正文、整理状态、保存手改、选择稿件、恢复正文，以及带「落笔」或 `write` 前缀的阶段，改用大约两小时的上限（36000 次，默认间隔仍是 200 毫秒）。其它阶段仍是原来的短预算。锁陈旧或持锁进程已死，仍由 `StateManager` 在下一次抢锁时处理。这次 run 的 `AbortSignal` 在每次重试前和等待期间都会检查，中止时抛 `AuthoringRunCancelledError`。模型调用仍在锁外。
+
+`withBookWriteLock` 的 `waitMs` 仍是 0。落笔和手改遇到忙立刻失败，没有改成等待。同一把锁也不变成可重入：已经持锁时再调用 `withBookWriteLock` 仍然马上失败。
+
+到了上限并且持锁者仍是上述写作阶段时，抛 `BackgroundSaveDeferredError`，错误码 `BACKGROUND_SAVE_DEFERRED`。这个码不会被 `isBookWriteLockError` 或锁文案的模糊匹配认成普通写锁错误。`packages/studio/src/lib/error-copy.ts` 只按这个码替换成：「落笔还在进行，这次后台保存没写上，落笔写完后可以再试」。工作区、单条 run 和 `authoring:run` 事件在把失败原因交给界面前走这层映射。其它持锁者到了短预算，仍抛原来的 `BookWriteLockError`。
+
+织卷选了方案 (a)：草稿文件先落盘，改指针失败时删掉这份还没挂上清单的草稿，并从工作流索引里去掉它。指针更新本身已经在 `withBackgroundBookWrite` 里重试；只有这次更新抛错才清理。若清单已经指向这份稿，就不删。没有选 (b) 认领：放弃之后再去认领，要额外证明目录里的稿就是这一次生成的，还要处理中止和半截索引；删掉未挂上的稿更短，下一次生成会写一份新的。
+
+测试在 `packages/core/src/__tests__/authoring-background-lock.test.ts`：落笔持锁时，重试次数超过旧的 25 次（间隔 5 毫秒）后后台保存仍未结束，放锁后成功；这段等待里 abort 立刻以取消结束，回调不进入；不是写作阶段时默认仍在 25 次后抛 `BookWriteLockError`；落笔持锁且到了显式上限时抛 `BACKGROUND_SAVE_DEFERRED`，且不会被锁错误的模糊匹配认走。织卷改指针失败后，清单不指向新稿，工件目录里也不留 `weave-` 草稿。前台写立刻失败的原断言还在。文案映射在 `packages/studio/src/lib/error-copy.test.ts`。等待都用 `vi.waitFor` 盯着抢锁次数，不用固定 sleep 和重试窗口赛跑。
+
+### 2. 绑定已有书时，只在锁内补问心字段
+
+`createLightweightBook` 在「书已存在且草稿已经绑到这本书、并且带了 `fromArtifact`」这条路上，原先在锁外 `loadManifest` 再整份 `saveManifest`。现在这段包进 `withBookWriteLock`（阶段名「绑定已有书」）。这是用户前台动作：锁被占用就立刻失败，不改成后台那种长时间等待，避免建书把落笔堵住，也避免落笔把建书拖住却不给用户失败。
+
+进锁后重新 `loadManifest`，只改 `adopted.ask`、`candidates.ask`、随之算出的 `watches` / `impactBaseline`，以及 `bookId` / `draftId`。锁外读到的旧清单不会整份覆盖回去。正典文件仍先写好；工件和清单指针都在锁内，锁被别人占用时这两样都不写。
+
+测试在 `packages/core/src/__tests__/authoring-book-create.test.ts`：抢锁前把 weave / ground / 章数改成另一套值，绑定完成后这些字段仍是新值，问心指针换成带回的工件。另一例先占住书锁，绑定抛 `BookWriteLockError`，清单时间和 weave 指针不变，新的问心工件也不出现。
+
+### 3. `locked: true` 必须已经持有这本书的锁
+
+`book-lock.ts` 用 `AsyncLocalStorage` 记下 `withBookWriteLock` / `withBackgroundBookWrite` 回调里持有的 `projectRoot` + `bookId`。`bookWriteLockHeld` 只看当前异步调用栈，不把进程里别的任务持有的锁算成自己的。
+
+`saveImpactManifest(..., { locked: true })` 在有 `bookId` 但当前上下文没持有该书锁时抛 `BookWriteLockNotHeldError`，不再直接写。没有改成「没有锁就再抢一次」：再抢一次会走 `withBookWriteLock`，而它在已经持锁时会马上失败，采纳路径就会把自己判成忙。抛错把「以为持着锁」暴露出来；`closeImpactItemsAfterAdopt` 仍接住这个错误，采纳本身不因此失败。没有书 id 时跟以前一样没有锁可拿，允许直接写。
+
+`adoptWeave` 和 `adoptGroundEntries` 本来就是在 `withBookWriteLock` 的回调里调用 `closeImpactItemsAfterAdopt`（`weave.ts` 的 `adoptWeaveInner`、`ground.ts` 的 `adoptGroundEntriesInner`），不用改调用位置。
+
+`closeImpactItemsAfterAdopt` 的 `console.warn` 改为只打 `redactSecrets` 之后的失败原因，不再把原始错误对象打出去。
+
+测试仍在 `authoring-background-lock.test.ts`：持锁回调里 `locked: true` 能把影响项写成已再生，并且这次关闭不再抢锁；同一回调里再套一层 `withBookWriteLock` 仍然立刻失败。不在持锁上下文里 `locked: true` 抛 `BookWriteLockNotHeldError`，清单不被改写。采纳后的关闭失败时，警告里的 `sk-` 密钥会变成「已隐藏」。
