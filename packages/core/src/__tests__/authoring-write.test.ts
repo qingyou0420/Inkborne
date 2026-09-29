@@ -1332,15 +1332,20 @@ describe("write stage", () => {
     const runId = newRunId();
     let release!: (text: string) => void;
     const blocked = new Promise<string>((resolve) => { release = resolve; });
+    let entered = false;
     const pending = generateChapterDraft({
       ...ctx,
       chapterNumber: 1,
       title: "雨",
       runId,
-      llm: async () => blocked,
+      llm: async () => {
+        entered = true;
+        return blocked;
+      },
     });
     await vi.waitFor(async () => {
       expect((await loadRun(ctx.root, runId))?.status).toBe("running");
+      expect(entered).toBe(true);
     });
     await saveRunControl(ctx.root, runId, "cancel");
     release("# 第1章\n雨停了。");

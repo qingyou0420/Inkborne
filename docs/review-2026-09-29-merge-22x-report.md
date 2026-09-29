@@ -231,3 +231,5 @@
 `StateManager` 创建锁文件遇到 `EPERM` / `EACCES` / `EBUSY`，4 次仍失败时，`console.warn` 打出尝试次数和最后一次错误码，整句经过 `redactSecrets`，不把路径放进这句。抛出的仍是 `BookWriteLockError`（码 `BOOK_BUSY`），作者可见的 `message` 不含 `EPERM`。错误对象上另有非展示字段 `lastErrorCode`，给排查用。调用方仍只按占锁错误重试。
 
 测试：一直抛 `EPERM` 时得到 `BookWriteLockError`，`message` 不含 `EPERM`，`console.warn` 的参数里有 `EPERM` 和 `after 4 attempts`。原先「抖一下然后拿到锁」和「用尽之后不是 EPERM 而是占锁错误」的断言还在。
+
+`authoring-write.test.ts` 里「写到一半取消仍留下候选稿」改为等模型回调已经进入、运行记录已是 `running` 之后才写入取消标记。产品代码未改：没写出字就取消、不留稿，仍是原来的行为。
