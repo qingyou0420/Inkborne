@@ -138,6 +138,7 @@ describe("lightweight book create", () => {
     });
     const original = StateManager.prototype.acquireBookLock;
     const acquire = vi.spyOn(StateManager.prototype, "acquireBookLock");
+    const bookBefore = await readFile(join(first.bookDir, "book.json"), "utf-8");
     acquire.mockImplementation(async function (this: StateManager, bookId, holder, options) {
       const latest = await loadManifest(store);
       await saveManifest(store, {
@@ -152,7 +153,7 @@ describe("lightweight book create", () => {
       const bound = await createLightweightBook({
         projectRoot: root,
         existingBookId: first.bookId,
-        canon: { ...canon, oneLine: "账本自己回来了" },
+        canon: { ...canon, oneLine: "账本自己回来了", chapterWordCount: 2100 },
         fromArtifact: reboundArtifact(serializeCanon({ ...canon, oneLine: "账本自己回来了" })),
       });
       expect(bound.created).toBe(false);
@@ -165,6 +166,14 @@ describe("lightweight book create", () => {
       expect(manifest.adopted.ground).toEqual(["ground-kept"]);
       expect(manifest.candidates.ground).toEqual(["ground-kept"]);
       expect(manifest.coverage.chaptersGenerated).toBe(7);
+      const canonText = await readFile(join(first.bookDir, "story", "canon.md"), "utf-8");
+      expect(canonText).toContain("账本自己回来了");
+      const bookRaw = await readFile(join(first.bookDir, "book.json"), "utf-8");
+      const book = JSON.parse(bookRaw) as { title: string; targetChapters: number; chapterWordCount: number };
+      expect(book.title).toBe(canon.title);
+      expect(book.targetChapters).toBe(canon.targetChapters);
+      expect(book.chapterWordCount).toBe(2100);
+      expect(bookRaw).not.toBe(bookBefore);
     } finally {
       acquire.mockRestore();
       resetProcessBookLocksForTest();
@@ -181,6 +190,10 @@ describe("lightweight book create", () => {
       candidates: { ...seeded.candidates, weave: "weave-old" },
     });
     const before = await loadManifest(store);
+    const canonPath = join(first.bookDir, "story", "canon.md");
+    const bookPath = join(first.bookDir, "book.json");
+    const canonBefore = await readFile(canonPath);
+    const bookBefore = await readFile(bookPath);
     const release = await new StateManager(root).acquireBookLock(first.bookId, {
       stage: "落笔",
       taskId: "write-holds",
@@ -198,9 +211,65 @@ describe("lightweight book create", () => {
       expect(after.candidates.weave).toBe("weave-old");
       expect(after.updatedAt).toBe(before.updatedAt);
       expect(await loadArtifact(store, "ask-rebind-1")).toBeUndefined();
+      expect(await readFile(canonPath)).toEqual(canonBefore);
+      expect(await readFile(bookPath)).toEqual(bookBefore);
     } finally {
       await release();
       resetProcessBookLocksForTest();
     }
+  });
+
+  it("does not touch canon.md or book.json when rebinding without a source draft while the book is locked", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-book-rebind-nosource-busy-"));
+    const first = await createLightweightBook({ projectRoot: root, canon });
+    const store = { projectRoot: root, bookId: first.bookId };
+    const before = await loadManifest(store);
+    const canonPath = join(first.bookDir, "story", "canon.md");
+    const bookPath = join(first.bookDir, "book.json");
+    const canonBefore = await readFile(canonPath);
+    const bookBefore = await readFile(bookPath);
+    const release = await new StateManager(root).acquireBookLock(first.bookId, {
+      stage: "落笔",
+      taskId: "write-holds",
+    }, { waitMs: 0 });
+    try {
+      await expect(createLightweightBook({
+        projectRoot: root,
+        existingBookId: first.bookId,
+        canon: { ...canon, title: "不该写上", oneLine: "锁外不该落下的正文", targetChapters: 40, chapterWordCount: 3000 },
+      })).rejects.toBeInstanceOf(BookWriteLockError);
+      const after = await loadManifest(store);
+      expect(after.updatedAt).toBe(before.updatedAt);
+      expect(after.adopted.ask).toBe(before.adopted.ask);
+      expect(await readFile(canonPath)).toEqual(canonBefore);
+      expect(await readFile(bookPath)).toEqual(bookBefore);
+    } finally {
+      await release();
+      resetProcessBookLocksForTest();
+    }
+  });
+
+  it("writes canon.md and book.json when rebinding without a source draft and the lock is free", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-book-rebind-nosource-"));
+    const first = await createLightweightBook({ projectRoot: root, canon });
+    const next = { ...canon, title: "夜港新账", oneLine: "只改文件的正典", targetChapters: 18, chapterWordCount: 1800 };
+    const bound = await createLightweightBook({
+      projectRoot: root,
+      existingBookId: first.bookId,
+      canon: next,
+    });
+    expect(bound.created).toBe(false);
+    expect(bound.bookId).toBe(first.bookId);
+    const canonText = await readFile(join(first.bookDir, "story", "canon.md"), "utf-8");
+    expect(canonText).toContain("夜港新账");
+    expect(canonText).toContain("只改文件的正典");
+    const book = JSON.parse(await readFile(join(first.bookDir, "book.json"), "utf-8")) as {
+      title: string;
+      targetChapters: number;
+      chapterWordCount: number;
+    };
+    expect(book.title).toBe("夜港新账");
+    expect(book.targetChapters).toBe(18);
+    expect(book.chapterWordCount).toBe(1800);
   });
 });

@@ -93,31 +93,31 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
   const exists = await isBookPresent(bookDir);
   if (exists && boundId === bookId) {
     const canonBody = input.fromArtifact?.body ?? serializeCanon(input.canon);
-    await mkdir(join(bookDir, "story"), { recursive: true });
-    await writeFile(join(bookDir, "story", "canon.md"), canonBody.endsWith("\n") ? canonBody : `${canonBody}\n`, "utf-8");
-    await syncBookJsonTitle(bookDir, input.canon);
     const root: AuthoringStoreRoot = { projectRoot: input.projectRoot, bookId, draftId: input.draftId };
     let impactPending = false;
-    const source = input.fromArtifact;
-    if (source) {
-      await withBookWriteLock(root, "绑定已有书", async () => {
-        const manifest = await loadManifest(root);
-        const adopted = await saveArtifact(root, { ...source.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
-        const previous = manifest.adopted.ask;
-        const artifactId = source.meta.artifactId;
-        const impact = await nextCanonImpactState(root, manifest, previous, adopted);
-        impactPending = impact.impactPending;
-        await saveManifest(root, {
-          ...manifest,
-          bookId,
-          draftId: input.draftId ?? manifest.draftId,
-          adopted: { ...manifest.adopted, ask: artifactId },
-          candidates: { ...manifest.candidates, ask: artifactId },
-          watches: impact.watches,
-          impactBaseline: impact.impactBaseline,
-        });
+    await withBookWriteLock(root, "绑定已有书", async () => {
+      await mkdir(join(bookDir, "story"), { recursive: true });
+      const body = canonBody.endsWith("\n") ? canonBody : `${canonBody}\n`;
+      await writeFile(join(bookDir, "story", "canon.md"), body, "utf-8");
+      await syncBookJsonTitle(bookDir, input.canon);
+      const source = input.fromArtifact;
+      if (!source) return;
+      const manifest = await loadManifest(root);
+      const adopted = await saveArtifact(root, { ...source.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
+      const previous = manifest.adopted.ask;
+      const artifactId = source.meta.artifactId;
+      const impact = await nextCanonImpactState(root, manifest, previous, adopted);
+      impactPending = impact.impactPending;
+      await saveManifest(root, {
+        ...manifest,
+        bookId,
+        draftId: input.draftId ?? manifest.draftId,
+        adopted: { ...manifest.adopted, ask: artifactId },
+        candidates: { ...manifest.candidates, ask: artifactId },
+        watches: impact.watches,
+        impactBaseline: impact.impactBaseline,
       });
-    }
+    });
     if (input.draftId) await bindDraftToBook({ projectRoot: input.projectRoot, draftId: input.draftId, bookId, title: input.canon.title });
     return { bookId, bookDir, created: false, impactPending };
   }
