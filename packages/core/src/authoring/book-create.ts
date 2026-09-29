@@ -12,6 +12,7 @@ import { deriveBookIdFromTitle } from "../utils/book-id.js";
 import { serializeCanon } from "./canon.js";
 import { isBookPresent } from "./context.js";
 import { bindDraftToBook, loadDraft } from "./drafts.js";
+import { withBookWriteLock } from "./book-lock.js";
 import { nextCanonImpactState } from "./stages/impact.js";
 import { loadManifest, saveArtifact, saveManifest, type AuthoringStoreRoot } from "./store.js";
 import type { AuthoringArtifactMeta, CanonDocument } from "./types.js";
@@ -97,21 +98,24 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
     await syncBookJsonTitle(bookDir, input.canon);
     const root: AuthoringStoreRoot = { projectRoot: input.projectRoot, bookId, draftId: input.draftId };
     let impactPending = false;
-    if (input.fromArtifact) {
-      const adopted = await saveArtifact(root, { ...input.fromArtifact.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
-      const manifest = await loadManifest(root);
-      const previous = manifest.adopted.ask;
-      const artifactId = input.fromArtifact.meta.artifactId;
-      const impact = await nextCanonImpactState(root, manifest, previous, adopted);
-      impactPending = impact.impactPending;
-      await saveManifest(root, {
-        ...manifest,
-        bookId,
-        draftId: input.draftId ?? manifest.draftId,
-        adopted: { ...manifest.adopted, ask: artifactId },
-        candidates: { ...manifest.candidates, ask: artifactId },
-        watches: impact.watches,
-        impactBaseline: impact.impactBaseline,
+    const source = input.fromArtifact;
+    if (source) {
+      await withBookWriteLock(root, "绑定已有书", async () => {
+        const manifest = await loadManifest(root);
+        const adopted = await saveArtifact(root, { ...source.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
+        const previous = manifest.adopted.ask;
+        const artifactId = source.meta.artifactId;
+        const impact = await nextCanonImpactState(root, manifest, previous, adopted);
+        impactPending = impact.impactPending;
+        await saveManifest(root, {
+          ...manifest,
+          bookId,
+          draftId: input.draftId ?? manifest.draftId,
+          adopted: { ...manifest.adopted, ask: artifactId },
+          candidates: { ...manifest.candidates, ask: artifactId },
+          watches: impact.watches,
+          impactBaseline: impact.impactBaseline,
+        });
       });
     }
     if (input.draftId) await bindDraftToBook({ projectRoot: input.projectRoot, draftId: input.draftId, bookId, title: input.canon.title });

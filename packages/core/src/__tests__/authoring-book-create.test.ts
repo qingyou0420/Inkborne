@@ -1,12 +1,14 @@
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLightweightBook } from "../authoring/book-create.js";
 import { isBookFoundationComplete } from "../utils/outline-paths.js";
 import { isBookPresent, isLightweightAuthoringBook } from "../authoring/context.js";
 import { BookConfigSchema } from "../models/book.js";
-import { parseCanon } from "../authoring/canon.js";
+import { parseCanon, serializeCanon } from "../authoring/canon.js";
+import { loadArtifact, loadManifest, saveManifest } from "../authoring/store.js";
+import { BookWriteLockError, StateManager, resetProcessBookLocksForTest } from "../state/manager.js";
 
 describe("lightweight book create", () => {
   let root = "";
@@ -88,5 +90,117 @@ describe("lightweight book create", () => {
     });
     expect(second.created).toBe(false);
     expect(second.bookId).toBe(first.bookId);
+  });
+
+  const canon = {
+    title: "夜港账本",
+    genre: "现实",
+    oneLine: "一个会计要找回失踪的账本。",
+    proposition: "记忆有代价",
+    protagonist: "沈砚想赎回自己",
+    conflict: "救人还是自保",
+    voice: "限制视角",
+    boundaries: "开放结局",
+    direction: "从港口开始",
+    openQuestions: ["结局是否公开真相"],
+    targetChapters: 12,
+    chapterWordCount: 2000,
+  };
+
+  function reboundArtifact(body: string) {
+    return {
+      meta: {
+        artifactId: "ask-rebind-1",
+        stage: "ask" as const,
+        scope: "canon",
+        version: 2,
+        source: "generate" as const,
+        status: "candidate" as const,
+        bodyPath: "story/canon.md",
+        inputRefs: [],
+        createdAt: "2026-09-29T00:00:00.000Z",
+        label: "正典 v2",
+      },
+      body,
+    };
+  }
+
+  it("patches only ask fields inside the book lock when another writer changed the manifest", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-book-rebind-"));
+    const first = await createLightweightBook({ projectRoot: root, canon });
+    const store = { projectRoot: root, bookId: first.bookId };
+    const seeded = await loadManifest(store);
+    await saveManifest(store, {
+      ...seeded,
+      adopted: { ...seeded.adopted, weave: "weave-old", ground: ["ground-old"] },
+      candidates: { ...seeded.candidates, weave: "weave-old", ground: ["ground-old"] },
+      coverage: { ...seeded.coverage, chaptersGenerated: 1 },
+    });
+    const original = StateManager.prototype.acquireBookLock;
+    const acquire = vi.spyOn(StateManager.prototype, "acquireBookLock");
+    acquire.mockImplementation(async function (this: StateManager, bookId, holder, options) {
+      const latest = await loadManifest(store);
+      await saveManifest(store, {
+        ...latest,
+        adopted: { ...latest.adopted, weave: "weave-kept", ground: ["ground-kept"] },
+        candidates: { ...latest.candidates, weave: "weave-kept", ground: ["ground-kept"] },
+        coverage: { ...latest.coverage, chaptersGenerated: 7 },
+      });
+      return original.call(this, bookId, holder, options);
+    });
+    try {
+      const bound = await createLightweightBook({
+        projectRoot: root,
+        existingBookId: first.bookId,
+        canon: { ...canon, oneLine: "账本自己回来了" },
+        fromArtifact: reboundArtifact(serializeCanon({ ...canon, oneLine: "账本自己回来了" })),
+      });
+      expect(bound.created).toBe(false);
+      expect(acquire).toHaveBeenCalled();
+      const manifest = await loadManifest(store);
+      expect(manifest.adopted.ask).toBe("ask-rebind-1");
+      expect(manifest.candidates.ask).toBe("ask-rebind-1");
+      expect(manifest.adopted.weave).toBe("weave-kept");
+      expect(manifest.candidates.weave).toBe("weave-kept");
+      expect(manifest.adopted.ground).toEqual(["ground-kept"]);
+      expect(manifest.candidates.ground).toEqual(["ground-kept"]);
+      expect(manifest.coverage.chaptersGenerated).toBe(7);
+    } finally {
+      acquire.mockRestore();
+      resetProcessBookLocksForTest();
+    }
+  });
+
+  it("does not write the bound manifest when another task already holds the book lock", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-book-rebind-busy-"));
+    const first = await createLightweightBook({ projectRoot: root, canon });
+    const store = { projectRoot: root, bookId: first.bookId };
+    const seeded = await loadManifest(store);
+    await saveManifest(store, {
+      ...seeded,
+      candidates: { ...seeded.candidates, weave: "weave-old" },
+    });
+    const before = await loadManifest(store);
+    const release = await new StateManager(root).acquireBookLock(first.bookId, {
+      stage: "落笔",
+      taskId: "write-holds",
+    }, { waitMs: 0 });
+    try {
+      await expect(createLightweightBook({
+        projectRoot: root,
+        existingBookId: first.bookId,
+        canon,
+        fromArtifact: reboundArtifact(serializeCanon(canon)),
+      })).rejects.toBeInstanceOf(BookWriteLockError);
+      const after = await loadManifest(store);
+      expect(after.adopted.ask).toBe(before.adopted.ask);
+      expect(after.candidates.ask).toBe(before.candidates.ask);
+      expect(after.candidates.weave).toBe("weave-old");
+      expect(after.updatedAt).toBe(before.updatedAt);
+      expect(await loadArtifact(store, "ask-rebind-1")).toBeUndefined();
+    } finally {
+      await release();
+      resetProcessBookLocksForTest();
+    }
   });
 });
