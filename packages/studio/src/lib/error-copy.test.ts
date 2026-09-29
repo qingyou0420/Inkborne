@@ -30,6 +30,12 @@ describe("localizeKnownRuntimeMessage", () => {
     );
     expect(cliMessage).toContain("还没有设置模型密钥");
     expect(cliMessage).not.toMatch(/kkaiapi/i);
+
+    const missing = localizeKnownRuntimeMessage(
+      'API key not found for service "zenmux". Save it in model settings, or set the environment variable.',
+    );
+    expect(missing).toBe("还没有保存「zenmux」的密钥。请打开「模型配置」保存密钥。");
+    expect(missing).not.toContain("API key not found");
   });
 
   it("localizes P1 write-preflight and approve-blocked messages", () => {

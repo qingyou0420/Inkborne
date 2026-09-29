@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
-import { rememberLastChapter } from "./lib/last-chapter";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { BookWorkspaceNav, type BookWorkspaceTab } from "./components/BookWorkspaceNav";
 import { BrandMark } from "./components/BrandMark";
@@ -190,9 +189,6 @@ export function App() {
   }, [project]);
 
   useSessionEvents(sse, route, setRoute);
-  useEffect(() => {
-    if (route.page === "chapter") rememberLastChapter(route.bookId, route.chapterNumber);
-  }, [route]);
   const bumpBookDataVersion = useChatStore((state) => state.bumpBookDataVersion);
 
   const nav = {

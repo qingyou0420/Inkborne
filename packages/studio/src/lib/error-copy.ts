@@ -46,6 +46,10 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
     replacement: "还没有设置模型密钥。请在「模型配置」里保存密钥。",
   },
   {
+    pattern: /API key not found for service "([^"]+)"\. Save it in model settings, or set the environment variable\./g,
+    replacement: "还没有保存「$1」的密钥。请打开「模型配置」保存密钥。",
+  },
+  {
     pattern: /Book "([^"]+)" is locked by an active write(?: \([^)]+\))?\. .*/g,
     replacement: "写入被占用：书「$1」正在被写作任务写入。请等待当前任务结束，或确认没有进行中的任务后使用「强制释放」。",
   },
