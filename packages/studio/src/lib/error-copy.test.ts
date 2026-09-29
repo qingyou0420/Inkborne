@@ -30,6 +30,12 @@ describe("localizeKnownRuntimeMessage", () => {
     );
     expect(cliMessage).toContain("还没有设置模型密钥");
     expect(cliMessage).not.toMatch(/kkaiapi/i);
+
+    const missing = localizeKnownRuntimeMessage(
+      'API key not found for service "zenmux". Save it in model settings, or set the environment variable.',
+    );
+    expect(missing).toBe("还没有保存「zenmux」的密钥。请打开「模型配置」保存密钥。");
+    expect(missing).not.toContain("API key not found");
   });
 
   it("localizes P1 write-preflight and approve-blocked messages", () => {
@@ -50,6 +56,30 @@ describe("localizeKnownRuntimeMessage", () => {
     expect(message).toContain("没有新的有效内容");
     expect(message).toContain("流式兼容性");
     expect(message).not.toMatch(/produced no token/i);
+  });
+
+  it("maps browser network failures to a retry hint without implying engine death", () => {
+    const expected = "请求暂时失败，请重试；若正文已出现可先刷新";
+    expect(localizeKnownRuntimeMessage("Failed to fetch")).toBe(expected);
+    expect(localizeKnownRuntimeMessage("NetworkError when attempting to fetch resource.")).toBe(expected);
+    expect(localizeKnownRuntimeMessage("NetworkError")).toBe(expected);
+    expect(localizeKnownRuntimeMessage(expected)).toBe(expected);
+    expect(expected).not.toContain("重启应用");
+  });
+
+  it("maps a deferred background save to plain Chinese without rewriting other lock errors", () => {
+    expect(localizeKnownRuntimeMessage("BACKGROUND_SAVE_DEFERRED")).toBe(
+      "写作任务还在进行，这次后台保存没写上，等它完成后可以再试",
+    );
+    expect(localizeKnownRuntimeMessage("第 1-3 章修订失败：BACKGROUND_SAVE_DEFERRED。已保留原规划，请重试修订。")).toBe(
+      "第 1-3 章修订失败：写作任务还在进行，这次后台保存没写上，等它完成后可以再试。已保留原规划，请重试修订。",
+    );
+    const generic = localizeKnownRuntimeMessage(
+      'Book "醉词" is locked by an active write (pid:123 started:2026-09-06T00:00:00.000Z). This in-process lock is not recovered automatically while the holder is still alive. Abort the running task or POST /api/v1/books/:id/lock/force-release, then retry.',
+    );
+    expect(generic).toContain("写入被占用");
+    expect(generic).not.toContain("写作任务还在进行");
+    expect(generic).not.toContain("落笔还在进行");
   });
 
   it("localizes in-process write locks as 写入被占用, not a read failure", () => {

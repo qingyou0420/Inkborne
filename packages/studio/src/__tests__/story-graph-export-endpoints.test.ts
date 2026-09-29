@@ -62,10 +62,18 @@ describe("export endpoints", () => {
     }));
 
     const app = createStudioServer({} as never, root);
-    for (const fmt of ["json", "ink", "html"] as const) {
-      const res = await app.request(`/api/v1/projects/${encodeURIComponent(id)}/export/${fmt}`);
+    for (const path of [
+      `/api/v1/projects/${encodeURIComponent(id)}/export`,
+      `/api/v1/projects/${encodeURIComponent(id)}/export/json`,
+      `/api/v1/projects/${encodeURIComponent(id)}/export/ink`,
+      `/api/v1/projects/${encodeURIComponent(id)}/export/html`,
+    ]) {
+      const res = await app.request(path);
       expect(res.status).toBe(200);
-      expect(res.headers.get("content-disposition")).toContain("attachment");
+      const disposition = res.headers.get("content-disposition");
+      expect(disposition).toContain("attachment");
+      expect(disposition).toContain("filename*=UTF-8''");
+      expect(disposition).not.toMatch(/[\u0080-\uFFFF]/);
     }
   });
   it("404 no graph, 400 unsafe id", async () => {

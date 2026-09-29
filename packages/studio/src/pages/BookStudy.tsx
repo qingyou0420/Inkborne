@@ -1,18 +1,20 @@
 /**
- * 连载书房: today's stroke, volume arrive, attention list, four-step overview.
+ * 本书: attention list, volume arrive, four-step overview.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { fetchJson, useApi } from "../hooks/use-api";
+import { fetchJson, postApi, useApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
 import { CorruptBookCard } from "../components/CorruptBookCard";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
-import { readLastChapter } from "../lib/last-chapter";
+import { findImpactTriageRun, isCanonImpactWatch, studyImpactAttention } from "../lib/impact-view";
+import { showToast } from "../lib/toast";
 import { useEffect, useMemo, useState } from "react";
+import { BookCoverEditor } from "../components/BookCoverEditor";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
-import { StageDot } from "../components/StageDot";
+import { stageStateLabel } from "../components/StageDot";
 import type { WritePreflightEvaluation } from "../components/SerialCockpitStrip";
 import { TruthProposalCard, type PendingTruthProposal } from "../components/TruthProposalCard";
 import { assembleCockpitSnapshot, type CockpitDueHook, type CockpitReviewItem } from "../lib/serial-cockpit";
@@ -25,16 +27,12 @@ import type { BookStepState } from "../lib/book-stage";
 import {
   formatVolumeArriveCopy,
   hasPreviousChapterUnapprovedReason,
-  shortChapterTitle,
   stripEngineTokens,
 } from "../lib/copy-map";
-import { formatStartedOn, fourStepCopy, studyGuideCopy } from "../lib/stage-copy";
+import { formatStartedOn, fourStepCopy } from "../lib/stage-copy";
 import { estimateRunsCost, formatTokenCount, sumTokenUsage } from "../lib/token-usage";
 import { filledChapterNumbers, lockedNamedVolumeCount, resolveOutlineWeaveStep } from "../lib/volume-map-tree";
-import {
-  CheckCircle2,
-  Feather,
-} from "lucide-react";
+import { useChatStore } from "../store/chat";
 
 function formatStudyWords(total: number, isZh: boolean): string {
   if (!isZh) return `${total.toLocaleString()} words`;
@@ -61,7 +59,9 @@ interface BookData {
     readonly status: string;
     readonly language?: string;
     readonly createdAt?: string;
+    readonly updatedAt?: string;
     readonly targetChapters?: number;
+    readonly coverImagePath?: string;
   };
   readonly chapters: ReadonlyArray<ChapterMeta>;
   readonly nextChapter: number;
@@ -112,15 +112,14 @@ export function BookStudy({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
-  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
+  const { data: authoring, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
   const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
-  const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
+  const bumpBookDataVersion = useChatStore((s) => s.bumpBookDataVersion);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
   const [hooks, setHooks] = useState<ReadonlyArray<CockpitDueHook>>([]);
   const [reviewQueue, setReviewQueue] = useState<ReadonlyArray<CockpitReviewItem>>([]);
   const [proposals, setProposals] = useState<ReadonlyArray<PendingTruthProposal>>([]);
   const [volumeMap, setVolumeMap] = useState("");
-  const [openHooks, setOpenHooks] = useState<ReadonlyArray<{ hookId: string; label?: string; startChapter?: number }>>([]);
   const stage = useBookStage(bookId);
   const [volumeExpanded, setVolumeExpanded] = useState(false);
   const [canonOpen, setCanonOpen] = useState(false);
@@ -128,21 +127,15 @@ export function BookStudy({
 
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const isZh = data?.book.language !== "en";
+  const showSkip = hasPreviousChapterUnapprovedReason(preflight?.reasons ?? []);
 
   const refreshAux = () => {
-    const query = skipPreviousApproval ? "?skipPreviousApproval=1" : "";
-    void fetchJson<WritePreflightEvaluation>(`/books/${bookId}/write-preflight${query}`)
+    void fetchJson<WritePreflightEvaluation>(`/books/${bookId}/write-preflight`)
       .then(setPreflight)
       .catch(() => setPreflight(null));
-    void fetchJson<{ hooks?: CockpitDueHook[]; openHooks?: Array<{ hookId: string; label?: string; startChapter?: number }> }>(`/books/${bookId}/hooks/due`)
-      .then((body) => {
-        setHooks(body.hooks ?? []);
-        setOpenHooks(body.openHooks ?? []);
-      })
-      .catch(() => {
-        setHooks([]);
-        setOpenHooks([]);
-      });
+    void fetchJson<{ hooks?: CockpitDueHook[] }>(`/books/${bookId}/hooks/due`)
+      .then((body) => setHooks(body.hooks ?? []))
+      .catch(() => setHooks([]));
     void fetchJson<{ items?: CockpitReviewItem[] }>(`/books/${bookId}/review-queue`)
       .then((body) => setReviewQueue(body.items ?? []))
       .catch(() => setReviewQueue([]));
@@ -163,7 +156,7 @@ export function BookStudy({
   useEffect(() => {
     refreshAux();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, skipPreviousApproval, data?.nextChapter]);
+  }, [bookId, data?.nextChapter]);
 
   useEffect(() => {
     const recent = sse.messages.at(-1);
@@ -185,15 +178,13 @@ export function BookStudy({
       dueHooks: hooks,
       reviewQueue,
       pendingProposals: proposals,
-      skipPreviousApproval,
       isZh,
     });
-  }, [data, preflight, volumeMap, hooks, reviewQueue, proposals, skipPreviousApproval, isZh]);
+  }, [data, preflight, volumeMap, hooks, reviewQueue, proposals, isZh]);
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-32 space-y-4">
-        <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
         <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
       </div>
     );
@@ -209,14 +200,17 @@ export function BookStudy({
   const tokenTotal = sumTokenUsage(authoring?.runs);
   const tokenCost = estimateRunsCost(authoring?.runs, serviceConfig?.services);
   const target = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 0;
-  const currentStage = stage?.stage ?? "write";
-  const guide = studyGuideCopy(currentStage, isZh);
-  const canWrite = currentStage === "write";
-  const showSkip = hasPreviousChapterUnapprovedReason(snapshot?.writeNext.reasons ?? preflight?.reasons ?? []);
   const volumeCopy = snapshot?.volume?.okr
     ? formatVolumeArriveCopy(snapshot.volume.okr, isZh)
     : { arrive: "", mustLand: "" };
   const attentionItems: Array<{ key: string; label: string; onClick?: () => void }> = [];
+  if (snapshot?.volumeClose) {
+    attentionItems.push({
+      key: "volume-close",
+      label: isZh ? "本卷已收" : "Volume closed",
+      onClick: () => goStage(nav, bookId, "weave"),
+    });
+  }
   if (snapshot?.lastChapter?.blocked) {
     attentionItems.push({
       key: `review-${snapshot.lastChapter.number}`,
@@ -235,21 +229,28 @@ export function BookStudy({
       onClick: () => setCanonOpen((open) => !open),
     });
   }
+  const triage = findImpactTriageRun(authoring?.runs);
+  const impactLine = studyImpactAttention({
+    impact: authoring?.impact,
+    watches: authoring?.manifest?.watches,
+    triageRunning: triage?.status === "running" || triage?.status === "pausing",
+    authoringBook: authoring?.authoringBook,
+    isZh,
+  });
+  if (impactLine) {
+    attentionItems.push({
+      key: impactLine.key,
+      label: impactLine.label,
+      onClick: () => goStage(nav, bookId, impactLine.groundOpen >= impactLine.weaveOpen ? "ground" : "weave"),
+    });
+  }
   for (const watch of authoring?.manifest?.watches ?? []) {
     if (watch.acknowledged) continue;
+    if (isCanonImpactWatch(watch)) continue;
     attentionItems.push({
       key: `watch-${watch.id}`,
       label: watch.label,
       onClick: () => goStage(nav, bookId, watch.stage === "ground" || watch.stage === "weave" || watch.stage === "write" || watch.stage === "ask" ? watch.stage : "ground"),
-    });
-  }
-  for (const hook of openHooks) {
-    attentionItems.push({
-      key: `open-hook-${hook.hookId}`,
-      label: isZh
-        ? `待收伏笔「${stripEngineTokens(hook.label || hook.hookId)}」${hook.startChapter ? `，第 ${hook.startChapter} 章埋下` : ""}`
-        : `Open thread ${stripEngineTokens(hook.label || hook.hookId)}`,
-      onClick: () => goStage(nav, bookId, "write"),
     });
   }
   for (const hook of snapshot?.overdueHooks ?? []) {
@@ -261,10 +262,6 @@ export function BookStudy({
       onClick: () => goStage(nav, bookId, "weave"),
     });
   }
-  const lastOpened = readLastChapter(bookId);
-  const nextTitle = snapshot?.nextChapter.title
-    ? shortChapterTitle(snapshot.nextChapter.title)
-    : "";
   const lockedVolumes = snapshot ? lockedNamedVolumeCount(snapshot.tree) : 0;
   const targetForWeave = book.targetChapters && book.targetChapters > 0 ? book.targetChapters : 200;
   const planned = snapshot ? filledChapterNumbers(snapshot.tree).length : 0;
@@ -285,139 +282,39 @@ export function BookStudy({
 
   return (
     <div className="space-y-8 fade-in" data-testid="serial-cockpit-home">
-      <header className="space-y-2">
-        <h1 className="font-serif text-[32px] font-medium leading-10">{book.title}</h1>
-        <p className="text-sm text-muted-foreground">
-          {[
-            book.genre,
-            formatStartedOn(book.createdAt, isZh),
-            formatStudyWords(totalWords, isZh),
-          ].filter(Boolean).join(" · ")}
-        </p>
-        {tokenTotal > 0 ? (
-          <p className="text-sm text-muted-foreground" data-testid="study-token-usage">
-            {isZh
-              ? `这本书累计用了 ${formatTokenCount(tokenTotal, true)}${tokenCost ? `（${tokenCost}）` : ""}`
-              : `This book has used ${formatTokenCount(tokenTotal, false)}${tokenCost ? ` (${tokenCost})` : ""}`}
+      <header className="flex flex-wrap items-start gap-6">
+        <BookCoverEditor
+          bookId={bookId}
+          title={book.title}
+          coverSrc={book.coverImagePath}
+          isZh={isZh}
+          onChanged={() => {
+            bumpBookDataVersion();
+            void refetch();
+          }}
+        />
+        <div className="min-w-0 flex-1 space-y-2">
+          <p className="text-[13px] text-muted-foreground">{stage?.steps.write === "todo" ? (isZh ? "本书" : "This book") : t("study.today")}</p>
+          <h1 className="font-serif text-[32px] font-medium leading-10">{book.title}</h1>
+          <p className="text-sm text-muted-foreground">
+            {[
+              book.genre,
+              formatStartedOn(book.createdAt, isZh),
+              formatStudyWords(totalWords, isZh),
+            ].filter(Boolean).join(" · ")}
           </p>
-        ) : null}
+          {showSkip ? (
+            <p className="text-sm text-muted-foreground">{isZh ? "上一章还没过目，写下一章前先去看一看。" : "The previous chapter is still waiting for you."}</p>
+          ) : null}
+          {tokenTotal > 0 ? (
+            <p className="text-sm text-muted-foreground" data-testid="study-token-usage">
+              {isZh
+                ? `这本书累计用了 ${formatTokenCount(tokenTotal, true)}${tokenCost ? `（${tokenCost}）` : ""}`
+                : `This book has used ${formatTokenCount(tokenTotal, false)}${tokenCost ? ` (${tokenCost})` : ""}`}
+            </p>
+          ) : null}
+        </div>
       </header>
-
-      {snapshot?.volumeClose ? (
-        <section className="rounded-2xl border border-primary/30 bg-primary/[0.05] px-5 py-5 space-y-3" data-testid="cockpit-volume-close">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <CheckCircle2 size={16} className="text-primary" />
-            {isZh ? "本卷已收" : "Volume closed"}
-          </div>
-          <p className="text-sm text-muted-foreground">{stripEngineTokens(snapshot.volumeClose.reason)}</p>
-          <button
-            type="button"
-            onClick={() => goStage(nav, bookId, "weave")}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-          >
-            <Feather size={14} />
-            {isZh ? "去织卷起草下一卷" : "Weave the next volume"}
-          </button>
-        </section>
-      ) : (
-        <section className="rounded-2xl border border-border border-l-2 border-l-seal bg-card px-5 py-5 space-y-3" data-testid="cockpit-next-chapter">
-          <div className="text-[13px] text-muted-foreground">{canWrite ? t("study.today") : guide.title}</div>
-          {canWrite && snapshot ? (
-            <>
-              <div className="flex flex-wrap items-end justify-between gap-2">
-                <div className="font-serif text-3xl">
-                  {isZh ? `第 ${snapshot.nextChapter.number} 章` : `Chapter ${snapshot.nextChapter.number}`}
-                  {nextTitle ? ` · ${nextTitle}` : ""}
-                </div>
-                {snapshot.nextChapter.volumePosition && (
-                  <div className="text-sm text-muted-foreground">{snapshot.nextChapter.volumePosition}</div>
-                )}
-              </div>
-              {snapshot.nextChapter.oneLine && (
-                <p className="text-sm leading-6 text-foreground/80">{snapshot.nextChapter.oneLine}</p>
-              )}
-              {lastOpened && lastOpened !== snapshot.nextChapter.number ? (
-                <button
-                  type="button"
-                  className="text-sm underline text-muted-foreground"
-                  data-testid="study-last-chapter"
-                  onClick={() => nav.toChapter(bookId, lastOpened)}
-                >
-                  {isZh ? `回到上次的第 ${lastOpened} 章` : `Back to chapter ${lastOpened}`}
-                </button>
-              ) : null}
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">{guide.subtitle}</p>
-          )}
-
-          {canWrite && snapshot && !snapshot.writeNext.reasons.some((reason) => reason.code !== "previous_chapter_not_approved") ? (
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => goStage(nav, bookId, "write")}
-                className="btn-primary"
-                data-testid="cockpit-write-next-button"
-              >
-                <Feather size={16} />
-                {isZh ? "落笔 · 写下一章" : "落笔 · Write next"}
-              </button>
-              {showSkip ? (
-                <p className="text-xs text-muted-foreground">
-                  {isZh ? "上一章还在等你过目，仍可以先写下一章。" : "The previous chapter is still waiting, and you can still write the next one."}
-                </p>
-              ) : null}
-            </div>
-          ) : canWrite && snapshot && !snapshot.writeNext.enabled ? (
-            <div className="space-y-2" data-testid="cockpit-write-next">
-              <ul className="space-y-1 text-sm text-muted-foreground" data-testid="cockpit-g1-reasons">
-                {snapshot.writeNext.reasons.map((reason) => (
-                  <li key={reason.code} className="flex gap-2">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-seal" aria-hidden="true" />
-                    <span>
-                    {isZh ? reason.messageZh : reason.message}
-                    {reason.jumpTo === "outline" && (
-                      <button type="button" className="ml-2 underline" onClick={() => goStage(nav, bookId, "weave")}>
-                        {isZh ? "去织卷" : "Open weave"}
-                      </button>
-                    )}
-                    {reason.jumpTo === "review" && reason.chapterNumber && (
-                      <button type="button" className="ml-2 underline" onClick={() => nav.toChapter(bookId, reason.chapterNumber!)}>
-                        {isZh ? "去审稿" : "Open review"}
-                      </button>
-                    )}
-                    {reason.jumpTo === "intent" && (
-                      <button type="button" className="ml-2 underline" onClick={() => goStage(nav, bookId, "ground")}>
-                        {isZh ? "去研墨" : "Open ground"}
-                      </button>
-                    )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {showSkip && (
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={skipPreviousApproval}
-                    onChange={(event) => setSkipPreviousApproval(event.target.checked)}
-                  />
-                  {t("book.skipUnapproved")}
-                </label>
-              )}
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => goStage(nav, bookId, guide.target === "create" ? "ask" : guide.target)}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"
-              data-testid="study-stage-guide"
-            >
-              {guide.action}
-            </button>
-          )}
-        </section>
-      )}
 
       {snapshot?.volume && (
         <section className="space-y-2" data-testid="cockpit-volume-okr">
@@ -454,15 +351,64 @@ export function BookStudy({
 
       {attentionItems.length > 0 && (
         <section className="space-y-2" data-testid="cockpit-attention">
-          <div className="text-sm font-medium">{isZh ? "等你过目" : "Waiting for you"}</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium">{isZh ? "等你过目" : "Waiting for you"}</div>
+            {authoring?.authoringBook ? (
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                data-testid="impact-recompute"
+                onClick={() => {
+                  void postApi("/authoring/impact/recompute", { bookId }).then(() => {
+                    showToast(isZh ? "正在相对正典重算影响…" : "Recomputing canon impact…");
+                    void refetch();
+                    void refetchAuthoring();
+                  }).catch((error: unknown) => {
+                    showToast(error instanceof Error ? error.message : String(error), "error");
+                  });
+                }}
+              >
+                {isZh ? "相对正典重算影响" : "Recompute canon impact"}
+              </button>
+            ) : null}
+          </div>
           <ul className="space-y-1 text-sm">
             {attentionItems.map((item) => (
-              <li key={item.key}>
+              <li key={item.key} data-testid={item.key.startsWith("impact") ? "study-impact-attention" : undefined}>
                 {item.onClick ? (
-                  <button type="button" className="underline-offset-2 hover:underline" onClick={item.onClick}>
-                    {item.label}
-                    {isZh ? " → 去看" : " → Open"}
-                  </button>
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <button type="button" className="underline-offset-2 hover:underline" onClick={item.onClick}>
+                      {item.label}
+                      {isZh ? " → 去看" : " → Open"}
+                    </button>
+                    {item.key.startsWith("impact") && impactLine && impactLine.groundOpen > 0 ? (
+                      <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" onClick={() => goStage(nav, bookId, "ground")}>
+                        {isZh ? "去研墨" : "Go to Ground"}
+                      </button>
+                    ) : null}
+                    {item.key.startsWith("impact") && impactLine && impactLine.weaveOpen > 0 ? (
+                      <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" onClick={() => goStage(nav, bookId, "weave")}>
+                        {isZh ? "去织卷" : "Go to Weave"}
+                      </button>
+                    ) : null}
+                    {item.key.startsWith("impact") && impactLine && (impactLine.degraded || impactLine.legacy || impactLine.globals) ? (
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline-offset-2 hover:underline"
+                        data-testid="study-impact-ack"
+                        onClick={() => {
+                          void postApi("/authoring/impact/resolve", { bookId, as: "reviewed" }).then(() => {
+                            showToast(isZh ? "已标为已核对" : "Marked reviewed");
+                            void refetchAuthoring();
+                          }).catch((error: unknown) => {
+                            showToast(error instanceof Error ? error.message : String(error), "error");
+                          });
+                        }}
+                      >
+                        {isZh ? "标为已核对" : "Mark reviewed"}
+                      </button>
+                    ) : null}
+                  </span>
                 ) : item.label}
               </li>
             ))}
@@ -484,15 +430,16 @@ export function BookStudy({
         </section>
       )}
 
-      <section className="space-y-3 border-t border-border/40 pt-6" data-testid="study-four-steps">
+      <section className="space-y-4 border-t border-border pt-6" data-testid="study-four-steps">
         <div className="text-sm font-medium">{isZh ? "四步一览" : "Four steps"}</div>
-        <ul className="grid gap-y-2 text-sm sm:grid-cols-2 sm:gap-x-8" data-testid="study-four-steps-grid">
+        <ul className="grid gap-y-3 text-sm sm:grid-cols-2 sm:gap-x-8" data-testid="study-four-steps-grid">
           <StepLine
             state={stage?.steps.ask}
             label={isZh ? "问心" : "Ask"}
             status={stepCopy.ask}
             onClick={() => goStage(nav, bookId, "ask")}
             testId="study-step-ask"
+            isZh={isZh}
           />
           <StepLine
             state={stage?.steps.ground}
@@ -504,6 +451,7 @@ export function BookStudy({
             }
             onClick={() => goStage(nav, bookId, "ground")}
             testId="study-step-ground"
+            isZh={isZh}
           />
           <StepLine
             state={stage?.steps.weave}
@@ -515,6 +463,7 @@ export function BookStudy({
             }
             onClick={() => goStage(nav, bookId, "weave")}
             testId="study-step-weave"
+            isZh={isZh}
           />
           <StepLine
             state={stage?.steps.write}
@@ -522,12 +471,13 @@ export function BookStudy({
             status={stepCopy.write}
             onClick={() => goStage(nav, bookId, "write")}
             testId="study-step-write"
+            isZh={isZh}
           />
         </ul>
       </section>
 
       {activity.lastError && (
-        <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+        <div className="ink-notice text-sm" data-tone="danger">
           {`${t("book.pipelineFailed")}: ${activity.lastError}`}
         </div>
       )}
@@ -541,23 +491,26 @@ function StepLine({
   status,
   onClick,
   testId,
+  isZh,
 }: {
   readonly state: BookStepState | undefined;
   readonly label: string;
   readonly status: string;
   readonly onClick: () => void;
   readonly testId: string;
+  readonly isZh: boolean;
 }) {
+  const stateText = stageStateLabel(state ?? "todo", isZh, label === "落笔" || label === "Write");
   return (
     <li className="min-w-0">
       <button
         type="button"
         onClick={onClick}
         data-testid={testId}
-        className="grid w-full grid-cols-[8px_3.5rem_minmax(0,1fr)] items-center gap-x-3 text-left leading-6 hover:text-foreground"
+        className="grid w-full grid-cols-[3.5rem_4rem_minmax(0,1fr)] items-center gap-x-3 text-left leading-6 hover:text-foreground"
       >
-        {state ? <StageDot state={state} /> : <span className="h-2 w-2" aria-hidden="true" />}
-        <span className="whitespace-nowrap">{label}</span>
+        <span className="whitespace-nowrap text-[18px] font-medium">{label}</span>
+        <span className="whitespace-nowrap text-muted-foreground">{stateText}</span>
         <span className="truncate text-muted-foreground" title={status}>{status}</span>
       </button>
     </li>

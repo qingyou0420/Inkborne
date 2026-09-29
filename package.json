@@ -1,6 +1,6 @@
 {
   "name": "fantawriter",
-  "version": "2.1.10",
+  "version": "2.2.10",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Inkborne / 墨生万象（原名幻想作家）— InkOS-kernel Windows desktop writing studio",
@@ -19,7 +19,7 @@
     "test:core:full": "pnpm --filter @actalk/inkos-core test:full",
     "test:core": "pnpm --filter @actalk/inkos-core test",
     "test:desktop": "pnpm --filter @fantawriter/desktop test",
-    "typecheck": "pnpm --filter @actalk/inkos-core build && pnpm --filter @actalk/inkos-studio exec tsc --noEmit && pnpm --filter @actalk/inkos-studio exec tsc -p tsconfig.server.json --noEmit",
+    "typecheck": "pnpm --filter @actalk/inkos-core build && pnpm --filter @actalk/inkos-studio typecheck",
     "lint": "eslint .",
     "engine:smoke": "node scripts/engine-smoke.mjs",
     "engine:pack-smoke": "node scripts/engine-pack-smoke.mjs",
@@ -27,7 +27,12 @@
     "dist:win": "node scripts/dist-win.mjs",
     "dist:win:ci": "node scripts/dist-win.mjs --publish-never",
     "dist:dir": "node scripts/dist-win.mjs --dir --publish-never",
-    "publish:update": "node scripts/publish-update.mjs"
+    "publish:update": "node scripts/publish-update.mjs",
+    "typecheck:tests": "pnpm --filter @actalk/inkos-core build && pnpm --filter @actalk/inkos-core typecheck:tests && pnpm --filter @actalk/inkos-studio typecheck:tests",
+    "test:build": "pnpm --filter @actalk/inkos-studio test:build && pnpm --filter @actalk/inkos-studio exec vitest run src/api/static-assets.test.ts",
+    "test:authoring-ui": "pnpm --filter @actalk/inkos-studio exec vitest run src/__tests__/weave-write-handoff.test.ts src/lib/write-directory.test.ts src/lib/toast.test.ts src/lib/authoring-nav.test.ts src/components/ask-session-actions.test.ts src/components/ask-canon-state.test.ts src/lib/weave-editor-state.test.ts src/lib/ground-drafts.test.ts src/store/chat/slices/message/action.test.ts src/store/chat/slices/message/runtime.test.ts src/store/chat/slices/message/stream-events.test.ts",
+    "test:llm-compat": "pnpm --filter @actalk/inkos-core exec vitest run src/__tests__/claude-sampling.test.ts src/__tests__/foundation-reviewer-claude-sampling.test.ts src/__tests__/provider.test.ts src/__tests__/temperature-constraints.test.ts",
+    "test:ask-canon-ui": "node packages/studio/e2e/ask-canon-recovery.mjs"
   },
   "pnpm": {
     "overrides": {

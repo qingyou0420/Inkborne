@@ -69,7 +69,7 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(propose.status).toBe(200);
+    expect(propose.status, await propose.clone().text()).toBe(200);
 
     // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
     // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"
@@ -86,7 +86,7 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(confirm.status).toBe(200);
+    expect(confirm.status, await confirm.clone().text()).toBe(200);
 
     // Assert the story graph was created with at least 4 nodes
     const graph = await loadStoryGraph(root, bookId);

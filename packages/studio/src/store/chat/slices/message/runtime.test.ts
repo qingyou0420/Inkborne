@@ -139,6 +139,43 @@ describe("deriveResolvedProposals", () => {
     expect(deriveResolvedProposals(messages)).toEqual({ "proposal-1": "confirmed" });
   });
 
+  it("marks a proposed book creation as confirmed when 问心 ask_create completed on restore", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        toolExecutions: [
+          exec({
+            id: "proposal-1",
+            tool: "propose_action",
+            details: {
+              kind: "proposed_action",
+              action: "create_book",
+              targetSessionKind: "book-create",
+              instruction: "建一本渡河记",
+            },
+          }),
+        ],
+      },
+      {
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        toolExecutions: [
+          exec({
+            id: "ask-create-1",
+            tool: "ask_create",
+            agent: "ask",
+            details: { kind: "book_created", bookId: "du-he-ji", adopted: false },
+          }),
+        ],
+      },
+    ];
+
+    expect(deriveResolvedProposals(messages)).toEqual({ "proposal-1": "confirmed" });
+  });
+
   it("confirms only one matching proposal per completed production action", () => {
     const messages: Message[] = [
       {

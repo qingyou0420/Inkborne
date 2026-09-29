@@ -36,6 +36,11 @@ describe("P1-1 sidebar + author", () => {
     expect(home).toMatch(/nav\.signYourName/);
     expect(home).toMatch(/isInProgressBookStatus/);
     expect(home).toMatch(/home-edit-author/);
+    const intro = read("src/components/NewBookIntro.tsx");
+    expect(intro).toMatch(/署上你的名字/);
+    expect(intro).toMatch(/\/author\/avatar/);
+    expect(home).toMatch(/ink-shelf-author/);
+    expect(read("src/components/AppMoreMenu.tsx")).toMatch(/onClick=\{nav.toAuthor\}/);
     const author = read("src/pages/AuthorPage.tsx");
     expect(author).not.toMatch(/useApi.*\/books/);
     expect(author).not.toMatch(/author\.myBooks/);
@@ -133,11 +138,31 @@ describe("P1-4 书房", () => {
     expect(study).toMatch(/等你过目/);
     expect(study).toMatch(/四步一览/);
     expect(study).toMatch(/study-step-ask/);
-    expect(study).toMatch(/grid-cols-\[8px_/);
+    expect(study).toMatch(/grid-cols-\[3\.5rem_/);
     expect(study).not.toMatch(/待定 \$\{openCount\}/);
     expect(study).not.toMatch(/「\{oneLine\}」/);
     expect(study).toMatch(/fourStepCopy/);
     expect(study).toMatch(/hasPreviousChapterUnapprovedReason/);
+    expect(study).not.toMatch(/打开大纲/);
+    expect(study).not.toMatch(/带病续写/);
+    expect(study).not.toMatch(/toOutline\(bookId\).*织卷/);
+  });
+
+  it("uses 本卷要抵达 / 等你过目 / 四步一览 and drops the old write-next branch", () => {
+    const study = read("src/pages/BookStudy.tsx") + read("src/components/BookCoverEditor.tsx");
+    expect(study).toMatch(/serial-cockpit-home/);
+    expect(study).toMatch(/本卷要抵达/);
+    expect(study).toMatch(/等你过目/);
+    expect(study).toMatch(/四步一览/);
+    expect(study).toMatch(/study-step-ask/);
+    expect(study).toMatch(/grid-cols-\[3\.5rem_/);
+    expect(study).not.toMatch(/待定 \$\{openCount\}/);
+    expect(study).not.toMatch(/「\{oneLine\}」/);
+    expect(study).toMatch(/fourStepCopy/);
+    expect(study).toMatch(/BookCoverEditor/);
+    expect(study).toMatch(/上传封面/);
+    expect(study).not.toMatch(/skipPreviousApproval/);
+    expect(study).not.toMatch(/cockpit-write-next-button/);
     expect(study).not.toMatch(/打开大纲/);
     expect(study).not.toMatch(/带病续写/);
     expect(study).not.toMatch(/toOutline\(bookId\).*织卷/);

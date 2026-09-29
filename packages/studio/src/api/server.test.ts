@@ -3,9 +3,11 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadStudioTaskSnapshot, saveStudioTaskSnapshot, studioTaskSnapshotPath } from "./task-store.js";
+import type { AskBookCreateInput, AskBookCreateResult } from "@actalk/inkos-core";
 
 const schedulerStartMock = vi.fn<() => Promise<void>>();
 const initBookMock = vi.fn();
+const createAskBookCandidateMock = vi.fn<(input: AskBookCreateInput) => Promise<AskBookCreateResult>>();
 const runRadarMock = vi.fn();
 const planChapterMock = vi.fn();
 const composeChapterMock = vi.fn();
@@ -350,9 +352,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     BOOK_LOCK_INTERACTIVE_WAIT_MS: actual.BOOK_LOCK_INTERACTIVE_WAIT_MS,
     formatBookWriteLockCopy: actual.formatBookWriteLockCopy,
     isBookWriteLockMessage: actual.isBookWriteLockMessage,
+    isBookWriteLockError: actual.isBookWriteLockError,
+    isBackgroundSaveDeferredError: actual.isBackgroundSaveDeferredError,
     setBookLockLivenessCheck: actual.setBookLockLivenessCheck,
     evaluateWritePreflight: vi.fn(async () => ({ ok: true, reasons: [] })),
     PipelineRunner: MockPipelineRunner,
+    createAskBookCandidate: createAskBookCandidateMock,
     Scheduler: MockScheduler,
     createLLMClient: createLLMClientMock,
     createLogger: vi.fn(() => logger),
@@ -538,6 +543,34 @@ async function writeCompleteBookFixture(root: string, bookId: string, title = "N
   await writeFile(join(bookDir, "story", "story_bible.md"), "# Story Bible\n\nReady.\n", "utf-8");
 }
 
+async function writeAskCandidateFixture(input: AskBookCreateInput): Promise<AskBookCreateResult> {
+  const bookId = input.book.title;
+  const bookDir = join(input.projectRoot, "books", bookId);
+  const artifactId = `canon-${bookId}`;
+  const runId = `ask-${bookId}`;
+  await mkdir(join(bookDir, "story", "workflow"), { recursive: true });
+  await writeFile(join(bookDir, "book.json"), JSON.stringify({
+    id: bookId, status: "incubating", platform: "qidian", genre: "urban",
+    targetChapters: 100, chapterWordCount: 3000, ...input.book,
+    createdAt: "2026-04-12T00:00:00.000Z", updatedAt: "2026-04-12T00:00:00.000Z",
+  }), "utf-8");
+  await writeFile(join(bookDir, "story", "workflow", "manifest.json"), JSON.stringify({
+    schemaVersion: 1, stages: { ask: { candidateArtifactId: artifactId } },
+    candidates: { ask: artifactId },
+  }), "utf-8");
+  await writeFile(join(bookDir, "story", "canon.md"), `# ${input.book.title}\n`, "utf-8");
+  return { bookId, bookDir, artifactId, runId };
+}
+
+function deferAskCandidateCreation(): () => void {
+  let release!: () => void;
+  createAskBookCandidateMock.mockImplementationOnce(async (input) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    return writeAskCandidateFixture(input);
+  });
+  return () => release();
+}
+
 describe("createStudioServer daemon lifecycle", () => {
   let root: string;
 
@@ -549,6 +582,8 @@ describe("createStudioServer daemon lifecycle", () => {
     initBookMock.mockImplementation(async (book: { id: string; title: string }) => {
       await writeCompleteBookFixture(root, book.id, book.title);
     });
+    createAskBookCandidateMock.mockReset();
+    createAskBookCandidateMock.mockImplementation(writeAskCandidateFixture);
     runRadarMock.mockReset();
     planChapterMock.mockReset();
     composeChapterMock.mockReset();
@@ -2598,6 +2633,89 @@ describe("createStudioServer daemon lifecycle", () => {
     expect([400, 404]).toContain(traversal.status);
   });
 
+  it("uploads, serves, replaces, and clears a local book cover without opening project/files", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    loadBookConfigMock.mockImplementation(async (bookId?: string) => {
+      const raw = await readFile(join(root, "books", String(bookId), "book.json"), "utf-8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    });
+
+    const missing = await app.request("http://localhost/api/v1/books/demo-book/cover");
+    expect(missing.status).toBe(404);
+
+    const png = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "封面.png", { type: "image/png" });
+    const uploadBody = new FormData();
+    uploadBody.append("file", png);
+    const uploaded = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: uploadBody,
+    });
+    expect(uploaded.status).toBe(200);
+    await expect(uploaded.json()).resolves.toMatchObject({
+      ok: true,
+      book: { coverImagePath: expect.stringMatching(/^\/api\/v1\/books\/demo-book\/cover\?v=/) },
+    });
+    const disk = JSON.parse(await readFile(join(root, "books", "demo-book", "book.json"), "utf-8")) as {
+      coverImagePath?: string;
+    };
+    expect(disk.coverImagePath).toBe("cover.png");
+    await expect(readFile(join(root, "books", "demo-book", "cover.png"))).resolves.toHaveLength(8);
+
+    const served = await app.request("http://localhost/api/v1/books/demo-book/cover");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toContain("image/png");
+    expect(Buffer.from(await served.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+    const listed = await app.request("http://localhost/api/v1/books/demo-book");
+    const listedBody = await listed.json() as { book: { coverImagePath?: string } };
+    expect(listedBody.book.coverImagePath).toMatch(/^\/api\/v1\/books\/demo-book\/cover\?v=/);
+
+    const jpg = new File([new Uint8Array([255, 216, 255, 224])], "next.jpg", { type: "image/jpeg" });
+    const replaceBody = new FormData();
+    replaceBody.append("file", jpg);
+    const replaced = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: replaceBody,
+    });
+    expect(replaced.status).toBe(200);
+    await expect(readFile(join(root, "books", "demo-book", "cover.jpg"))).resolves.toHaveLength(4);
+    await expect(readFile(join(root, "books", "demo-book", "cover.png"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const oversized = new File([new Uint8Array(6 * 1024 * 1024 + 1)], "huge.png", { type: "image/png" });
+    const hugeBody = new FormData();
+    hugeBody.append("file", oversized);
+    const rejectedSize = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: hugeBody,
+    });
+    expect(rejectedSize.status).toBe(400);
+    await expect(rejectedSize.json()).resolves.toMatchObject({ error: expect.stringContaining("6 MB") });
+
+    const text = new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" });
+    const textBody = new FormData();
+    textBody.append("file", text);
+    const rejectedType = await app.request("http://localhost/api/v1/books/demo-book/cover", {
+      method: "POST",
+      body: textBody,
+    });
+    expect(rejectedType.status).toBe(400);
+
+    const stillBlocked = await app.request("http://localhost/api/v1/project/files/books/demo-book/cover.jpg");
+    expect(stillBlocked.status).toBe(400);
+
+    const cleared = await app.request("http://localhost/api/v1/books/demo-book/cover", { method: "DELETE" });
+    expect(cleared.status).toBe(200);
+    const clearedBody = await cleared.json() as { book: { coverImagePath?: string } };
+    expect(clearedBody.book.coverImagePath).toBeUndefined();
+    await expect(readFile(join(root, "books", "demo-book", "cover.jpg"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await app.request("http://localhost/api/v1/books/demo-book/cover")).status).toBe(404);
+
+    const unsafeId = await app.request("http://localhost/api/v1/books/../secret/cover");
+    expect([400, 404]).toContain(unsafeId.status);
+  });
+
   it("lists shorts from shorts/ and opens the finished manuscript", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -3259,6 +3377,49 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(resyncChapterArtifactsMock).toHaveBeenCalledWith("demo-book", 3);
   });
 
+  it("returns 400 on legacy write routes for four-stage authoring books", async () => {
+    const bookId = "四阶段书";
+    const bookDir = join(root, "books", bookId);
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: bookId,
+      title: bookId,
+      platform: "qidian",
+      genre: "urban",
+      status: "writing",
+      targetChapters: 36,
+      chapterWordCount: 3000,
+    }), "utf-8");
+    await writeFile(join(bookDir, "story", "canon.md"), "# 正典\n", "utf-8");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const paths = [
+      `/api/v1/books/${encodeURIComponent(bookId)}/rewrite/1`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/revise/1`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/resync/1`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/write-next`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/draft`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/chapters/1/approve`,
+      `/api/v1/books/${encodeURIComponent(bookId)}/chapters/1/reject`,
+    ];
+    for (const path of paths) {
+      const response = await app.request(`http://localhost${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(response.status, path).toBe(400);
+      const json = await response.json() as { error?: { message?: string; code?: string } };
+      expect(json.error?.message, path).toBe("四阶段书请在落笔中生成候选并采用");
+      expect(json.error?.code, path).toBe("AUTHORING_WRITE_REQUIRED");
+    }
+    expect(reviseDraftMock).not.toHaveBeenCalled();
+    expect(resyncChapterArtifactsMock).not.toHaveBeenCalled();
+    expect(writeNextChapterMock).not.toHaveBeenCalled();
+    expect(rollbackToChapterMock).not.toHaveBeenCalled();
+  });
+
   it("routes export-save through the shared structured interaction runtime", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -3520,12 +3681,19 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("executes confirmed create-book action directly without asking the chat model to call tools", async () => {
+    const originalBrief = `原始约定：青禾与陆川身处霜国和南川，结局停战但不团圆。${"完整作者原文，不能被摘要截断。".repeat(1000)}原文末尾：七卷分别保留。`;
+    const assistantSuggestion = "助手建议改为团圆结局，尚待作者决定。";
+    const latestCorrection = "不采纳团圆建议；仍是停战不团圆。篇幅改为 100 章，每章 2600 字。";
     loadBookSessionMock.mockResolvedValueOnce({
       sessionId: "agent-session-1",
       bookId: null,
       sessionKind: "book-create",
       title: null,
-      messages: [],
+      messages: [
+        { role: "user", content: originalBrief, timestamp: 1 },
+        { role: "assistant", content: assistantSuggestion, timestamp: 2 },
+        { role: "user", content: latestCorrection, timestamp: 3 },
+      ],
       events: [],
       draftRounds: [],
       createdAt: 1,
@@ -3546,6 +3714,9 @@ describe("createStudioServer daemon lifecycle", () => {
         actionPayload: {
           createBook: {
             title: "夜间派送",
+            oneLine: "两位故人在乱世追查旧案。",
+            synopsis: "这只是确认卡摘要，完整人物和七卷约定见问心原文。",
+            tone: "古风克制，避免英文术语",
             genre: "urban",
             platform: "tomato",
             targetChapters: 100,
@@ -3558,21 +3729,82 @@ describe("createStudioServer daemon lifecycle", () => {
 
     expect(response.status).toBe(200);
     expect(runAgentSessionMock).not.toHaveBeenCalled();
-    expect(initBookMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "夜间派送",
+    expect(initBookMock).not.toHaveBeenCalled();
+    expect(createAskBookCandidateMock).toHaveBeenCalledOnce();
+    expect(createAskBookCandidateMock).toHaveBeenCalledWith(expect.objectContaining({
+      projectRoot: root,
+      project: expect.objectContaining({ name: projectConfig.name }),
+      signal: expect.any(AbortSignal),
+      book: {
         title: "夜间派送",
+        oneLine: "两位故人在乱世追查旧案。",
+        synopsis: "这只是确认卡摘要，完整人物和七卷约定见问心原文。",
+        tone: "古风克制，避免英文术语",
         genre: "urban",
         platform: "tomato",
         targetChapters: 100,
         chapterWordCount: 2600,
         language: "zh",
-      }),
-      { externalContext: "创建《夜间派送》，番茄，100章以内。" },
-    );
+      },
+    }));
+    const input = createAskBookCandidateMock.mock.calls[0]![0];
+    expect(input.conversation).toBe([
+      `用户消息（含原始讨论和确认指令，摘要省略不代表删除原约定）：\n${originalBrief}`,
+      `助手建议（未经作者确认不算事实）：\n${assistantSuggestion}`,
+      `用户消息（含原始讨论和确认指令，摘要省略不代表删除原约定）：\n${latestCorrection}`,
+    ].join("\n\n"));
+    expect(input.requirements).toContain("创建《夜间派送》，番茄，100章以内。");
+    expect(input.requirements).toContain(JSON.stringify(input.book));
+    expect(input.requirements).toContain("仅作者明确的改动可以覆盖此前约定");
     await expect(response.json()).resolves.toMatchObject({
       session: { activeBookId: "夜间派送" },
+      details: { toolExecutions: [{
+        tool: "ask_create", agent: "ask", status: "completed",
+        details: { kind: "book_created", artifactId: "canon-夜间派送", adopted: false },
+      }] },
     });
+    expect(migrateBookSessionMock).toHaveBeenCalledWith(root, "agent-session-1", "夜间派送");
+    await expect(access(join(root, "books", "夜间派送", "story", "story_bible.md"))).rejects.toThrow();
+    await expect(access(join(root, "books", "夜间派送", "story", "canon.md"))).resolves.toBeUndefined();
+  });
+
+  it("passes cancellation to Ask creation while chat-only abort leaves the candidate task running", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    createAskBookCandidateMock.mockImplementationOnce(async (input) => {
+      capturedSignal = input.signal;
+      await new Promise<never>((_resolve, reject) => {
+        input.signal?.addEventListener("abort", () => reject(new DOMException("已取消整理正典", "AbortError")), { once: true });
+      });
+      return writeAskCandidateFixture(input);
+    });
+    loadBookSessionMock.mockResolvedValue({
+      sessionId: "cancel-ask-session", bookId: null, sessionKind: "book-create",
+      title: null, messages: [], events: [], draftRounds: [], createdAt: 1, updatedAt: 1,
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const pendingTask = app.request("http://localhost/api/v1/agent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "创建《取消样本》。", sessionId: "cancel-ask-session", sessionKind: "book-create",
+        actionSource: "button", requestedIntent: "create_book",
+        actionPayload: { createBook: { title: "取消样本", language: "zh" } },
+      }),
+    });
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    const chatAbort = await app.request("http://localhost/api/v1/sessions/cancel-ask-session/abort?scope=chat", { method: "POST" });
+    expect(chatAbort.status).toBe(200);
+    expect(capturedSignal?.aborted).toBe(false);
+    const taskAbort = await app.request("http://localhost/api/v1/sessions/cancel-ask-session/abort", { method: "POST" });
+    expect(taskAbort.status).toBe(200);
+    expect(capturedSignal?.aborted).toBe(true);
+    expect((await pendingTask).status).toBeGreaterThanOrEqual(400);
+    await expect(loadStudioTaskSnapshot(root, "cancel-ask-session")).resolves.toMatchObject({
+      execution: { tool: "ask_create", agent: "ask", status: "error", completedAt: expect.any(Number) },
+    });
+    expect(initBookMock).not.toHaveBeenCalled();
+    expect(migrateBookSessionMock).not.toHaveBeenCalled();
+    await expect(access(join(root, "books", "取消样本"))).rejects.toThrow();
   });
 
   it("executes confirmed derivative works as typed tools and binds their real book artifacts", async () => {
@@ -3809,10 +4041,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("persists confirmed production progress before the long-running request completes", async () => {
-    let resolveInitBook!: () => void;
-    initBookMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveInitBook = resolve;
-    }));
+    const resolveAskCandidate = deferAskCandidateCreation();
     loadBookSessionMock.mockResolvedValue({
       sessionId: "long-task-session",
       bookId: null,
@@ -3843,20 +4072,19 @@ describe("createStudioServer daemon lifecycle", () => {
     await vi.waitFor(async () => {
       const task = await loadStudioTaskSnapshot(root, "long-task-session");
       expect(task?.execution).toMatchObject({
-        tool: "sub_agent",
-        agent: "architect",
+        tool: "ask_create",
+        agent: "ask",
         status: "running",
       });
     });
 
-    await writeCompleteBookFixture(root, "雨夜旧账", "雨夜旧账");
-    resolveInitBook();
+    resolveAskCandidate();
     const response = await pendingResponse;
     expect(response.status).toBe(200);
     await expect(loadStudioTaskSnapshot(root, "long-task-session")).resolves.toMatchObject({
       execution: {
-        tool: "sub_agent",
-        agent: "architect",
+        tool: "ask_create",
+        agent: "ask",
         status: "completed",
         completedAt: expect.any(Number),
       },
@@ -3864,7 +4092,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("persists a terminal error when a confirmed production task fails", async () => {
-    initBookMock.mockRejectedValueOnce(new Error("architect upstream failed"));
+    createAskBookCandidateMock.mockRejectedValueOnce(new Error("ask upstream failed"));
     loadBookSessionMock.mockResolvedValue({
       sessionId: "failed-task-session",
       bookId: null,
@@ -3895,20 +4123,17 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
     await expect(loadStudioTaskSnapshot(root, "failed-task-session")).resolves.toMatchObject({
       execution: {
-        tool: "sub_agent",
-        agent: "architect",
+        tool: "ask_create",
+        agent: "ask",
         status: "error",
-        error: "architect upstream failed",
+        error: "ask upstream failed",
         completedAt: expect.any(Number),
       },
     });
   });
 
   it("returns the persisted task snapshot with session detail while the task is still running", async () => {
-    let resolveInitBook!: () => void;
-    initBookMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveInitBook = resolve;
-    }));
+    const resolveAskCandidate = deferAskCandidateCreation();
     loadBookSessionMock.mockResolvedValue({
       sessionId: "refresh-task-session",
       bookId: null,
@@ -3948,15 +4173,14 @@ describe("createStudioServer daemon lifecycle", () => {
       task: {
         sessionId: "refresh-task-session",
         execution: {
-          tool: "sub_agent",
-          agent: "architect",
+          tool: "ask_create",
+          agent: "ask",
           status: "running",
         },
       },
     });
 
-    await writeCompleteBookFixture(root, "雨夜账本", "雨夜账本");
-    resolveInitBook();
+    resolveAskCandidate();
     await pendingResponse;
   });
 
@@ -4188,10 +4412,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("rejects a second confirmed production task with 409 while one is still running", async () => {
-    let resolveInitBook!: () => void;
-    initBookMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveInitBook = resolve;
-    }));
+    const resolveAskCandidate = deferAskCandidateCreation();
     loadBookSessionMock.mockResolvedValue({
       sessionId: "busy-task-session",
       bookId: null,
@@ -4244,10 +4465,9 @@ describe("createStudioServer daemon lifecycle", () => {
       },
     });
     // 第二个任务没有真正启动
-    expect(initBookMock).toHaveBeenCalledTimes(1);
+    expect(createAskBookCandidateMock).toHaveBeenCalledTimes(1);
 
-    await writeCompleteBookFixture(root, "第一本书", "第一本书");
-    resolveInitBook();
+    resolveAskCandidate();
     await pendingTask;
     // 第一个任务不受影响，正常完成
     await expect(loadStudioTaskSnapshot(root, "busy-task-session")).resolves.toMatchObject({
@@ -4282,9 +4502,9 @@ describe("createStudioServer daemon lifecycle", () => {
       return sessionRecord;
     });
     // 任务本体拖一拍，保证第二个请求做检查时第一个任务还在运行中
-    initBookMock.mockImplementation(async (book: { id: string; title: string }) => {
+    createAskBookCandidateMock.mockImplementation(async (input) => {
       await new Promise((resolve) => setTimeout(resolve, 25));
-      await writeCompleteBookFixture(root, book.id, book.title);
+      return writeAskCandidateFixture(input);
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -4311,7 +4531,7 @@ describe("createStudioServer daemon lifecycle", () => {
       error: { code: "PRODUCTION_TASK_ALREADY_RUNNING" },
     });
     // 败者的任务没有真正启动
-    expect(initBookMock).toHaveBeenCalledTimes(1);
+    expect(createAskBookCandidateMock).toHaveBeenCalledTimes(1);
     // 胜者的任务不受影响，快照收敛为 completed
     await expect(loadStudioTaskSnapshot(root, "race-task-session")).resolves.toMatchObject({
       execution: { status: "completed" },
@@ -4319,10 +4539,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("tells the chat agent about the running production task without touching the user instruction", async () => {
-    let resolveInitBook!: () => void;
-    initBookMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveInitBook = resolve;
-    }));
+    const resolveAskCandidate = deferAskCandidateCreation();
     loadBookSessionMock.mockResolvedValue({
       sessionId: "parallel-chat-session",
       bookId: null,
@@ -4369,15 +4586,14 @@ describe("createStudioServer daemon lifecycle", () => {
     const agentCall = runAgentSessionMock.mock.calls.at(-1);
     const config = agentCall?.[0] as { backgroundTaskContext?: string; suppressProductionTools?: boolean };
     // 任务状态块注入到了 agent 上下文（含任务名和运行状态），用户指令原样传递
-    expect(config.backgroundTaskContext).toContain("建书");
+    expect(config.backgroundTaskContext).toContain("问心 · 整理正典");
     expect(config.backgroundTaskContext).toContain("运行中");
     // 任务运行期间聊天 agent 的生产工具被 host 侧禁用，提示词同步说明
     expect(config.backgroundTaskContext).toContain("生产类工具已临时不可用");
     expect(config.suppressProductionTools).toBe(true);
     expect(agentCall?.[1]).toBe("现在在写吗？");
 
-    await writeCompleteBookFixture(root, "并行验证", "并行验证");
-    resolveInitBook();
+    resolveAskCandidate();
     await pendingTask;
 
     // 任务结束后：新一轮聊天不再禁用生产工具，也不再注入任务状态块
@@ -4401,10 +4617,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("tags task pipeline log broadcasts with the execution id while chat round logs stay untagged", async () => {
-    let resolveInitBook!: () => void;
-    initBookMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveInitBook = resolve;
-    }));
+    const resolveAskCandidate = deferAskCandidateCreation();
     loadBookSessionMock.mockResolvedValue({
       sessionId: "tagged-log-session",
       bookId: null,
@@ -4521,8 +4734,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(parallelChatLog.sessionId).toBe("tagged-log-session");
     expect(parallelChatLog.executionId).toBeUndefined();
 
-    await writeCompleteBookFixture(root, "日志打标验证", "日志打标验证");
-    resolveInitBook();
+    resolveAskCandidate();
     const taskResponse = await pendingTask;
     expect(taskResponse.status).toBe(200);
 
@@ -6105,6 +6317,46 @@ describe("createStudioServer daemon lifecycle", () => {
     const agentConfig = runAgentSessionMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(agentConfig.model).toBe(lmStudioModel);
     expect(agentConfig.apiKey).toBe("");
+  });
+
+  it.each([true, false])("isolates Ask chat with an explicit surface=%s, including old clients", async (explicitSurface) => {
+    if (!explicitSurface) {
+      await writeCompleteBookFixture(root, "demo-book");
+      await mkdir(join(root, "books", "demo-book", "story", "workflow"), { recursive: true });
+      await writeFile(join(root, "books", "demo-book", "story", "canon.md"), "# 正典\n", "utf-8");
+      await writeFile(join(root, "books", "demo-book", "story", "workflow", "manifest.json"), JSON.stringify({
+        version: 1,
+        adopted: { ask: "canon-1" },
+      }), "utf-8");
+    }
+    runAgentSessionMock.mockResolvedValueOnce({ responseText: "这次调整将作为正典来源。", messages: [] });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "升级大纲与角色卡，保留流渊动机", activeBookId: "demo-book", sessionId: "agent-session-1", sessionKind: "book", ...(explicitSurface ? { authoringStage: "ask" } : {}) }),
+    });
+    expect(response.status).toBe(200);
+    expect(runAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({ authoringStage: "ask", bookId: "demo-book", sessionKind: "book" });
+    expect(reviseFoundationMock).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("blocks legacy confirmed production inside Ask before execution, explicit=%s", async (explicitSurface) => {
+    if (!explicitSurface) {
+      await writeCompleteBookFixture(root, "demo-book");
+      await writeFile(join(root, "books", "demo-book", "story", "canon.md"), "# 正典", "utf-8");
+    }
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "写下一章", activeBookId: "demo-book", sessionId: "agent-session-1", sessionKind: "book", actionSource: "button", requestedIntent: "write_next", ...(explicitSurface ? { authoringStage: "ask" } : {}) }),
+    });
+    expect(response.status).toBe(409);
+    expect(JSON.stringify(await response.json())).toContain("ASK_STAGE_ACTION_REQUIRED");
+    expect(writeNextChapterMock).not.toHaveBeenCalled();
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+    expect(appendManualSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   it("rejects explicit non-text models before running the agent", async () => {

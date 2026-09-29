@@ -9,10 +9,51 @@ import { completeRole, shouldAttemptJsonResponseFormat } from "../authoring/llm.
 import { fillMissingAuthoringRoles, resolveAuthoringRole } from "../authoring/model-config.js";
 import { normalizeReviewDimension } from "../authoring/review-checks.js";
 import { parseReviewPayload, requestReviewModelText, reviewPrompt } from "../authoring/review.js";
-import { generateChapterDraft, reviewChapterDraft } from "../authoring/stages/write.js";
-import { loadReport } from "../authoring/store.js";
+import { generateChapterDraft as generateChapterDraftCore, reviewChapterDraft } from "../authoring/stages/write.js";
+import { adoptWeave, generateWeaveRange, generateWeaveStructure, resolveWeaveTargetChapters } from "../authoring/stages/weave.js";
+import { loadManifest, loadReport } from "../authoring/store.js";
+import { loadOutlineText } from "../authoring/context.js";
+import { findChapterNode, parseVolumeMapTree } from "../utils/volume-map-tree.js";
 import { payloadWithJsonObjectFormat } from "../llm/provider.js";
 import type { AuthoringLlmFn, ResolvedAuthoringRole } from "../authoring/types.js";
+
+async function ensureAdoptedChapterPlan(
+  root: { projectRoot: string; bookId?: string },
+  project: ReturnType<typeof project>,
+  chapterNumber: number,
+) {
+  if (!root.bookId) return;
+  const manifest = await loadManifest(root);
+  if (!manifest.adopted.weave) {
+    const structured = await generateWeaveStructure({
+      root,
+      project,
+      llm: async () => JSON.stringify({
+        bookOutline: "测试结构",
+        volumes: [{ volumeNumber: 1, title: "测试卷", startChapter: 1, endChapter: await resolveWeaveTargetChapters(root), body: "测试卷目标" }],
+      }),
+    });
+    await adoptWeave({ root, project, artifactId: structured.artifactId });
+  }
+  const outline = await loadOutlineText(root);
+  const node = findChapterNode(parseVolumeMapTree(outline), chapterNumber);
+  if (node?.summary?.trim() && node.summary.trim() !== "（待补概要）") return;
+  const planned = await generateWeaveRange({
+    root,
+    project,
+    startChapter: chapterNumber,
+    endChapter: chapterNumber,
+    llm: async () => JSON.stringify({
+      chapters: [{ chapterNumber, title: `第${chapterNumber}章`, summary: "测试章概要，含视角地点冲突转折。" }],
+    }),
+  });
+  await adoptWeave({ root, project, artifactId: planned.artifactId });
+}
+
+async function generateChapterDraft(input: Parameters<typeof generateChapterDraftCore>[0]) {
+  await ensureAdoptedChapterPlan(input.root, input.project, input.chapterNumber);
+  return generateChapterDraftCore(input);
+}
 
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 
@@ -126,6 +167,8 @@ describe("review upgrade", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
+        chapterWordCount: 3000,
       },
     });
     await mkdir(join(created.bookDir, "story"), { recursive: true });
@@ -213,6 +256,8 @@ describe("review upgrade", () => {
         boundaries: "",
         direction: "",
         openQuestions: [],
+        targetChapters: 12,
+        chapterWordCount: 3000,
       },
     });
     let calls = 0;

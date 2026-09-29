@@ -71,7 +71,8 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:full": "node ./scripts/run-vitest-with-fts.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "node ../../scripts/typecheck-test-files.mjs"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.67.1",

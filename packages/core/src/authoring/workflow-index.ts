@@ -121,6 +121,12 @@ function pointerFromReport(report: AuthoringReviewReport): WorkflowReportPointer
   };
 }
 
+export async function loadWorkflowIndex(rootDir: string): Promise<WorkflowIndex> {
+  const existing = await readIndex(rootDir);
+  if (existing) return existing;
+  return scanWorkflowIndex(rootDir);
+}
+
 export async function ensureWorkflowIndex(rootDir: string): Promise<WorkflowIndex> {
   const existing = await readIndex(rootDir);
   if (existing) return existing;
@@ -148,6 +154,12 @@ export async function noteWorkflowArtifact(rootDir: string, meta: AuthoringArtif
     const at = index.artifacts.findIndex((item) => item.artifactId === parsed.artifactId);
     if (at >= 0) index.artifacts[at] = parsed;
     else index.artifacts.push(parsed);
+  });
+}
+
+export async function forgetWorkflowArtifact(rootDir: string, artifactId: string): Promise<void> {
+  await mutateIndex(rootDir, (index) => {
+    index.artifacts = index.artifacts.filter((item) => item.artifactId !== artifactId);
   });
 }
 

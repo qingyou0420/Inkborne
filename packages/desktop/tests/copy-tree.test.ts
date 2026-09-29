@@ -27,7 +27,7 @@ describe("copyTree dereference", () => {
     const src = join(root, "src");
     mkdirSync(join(src, "node_modules"), { recursive: true });
     try {
-      symlinkSync(store, join(src, "node_modules", "pkg"));
+      symlinkSync(store, join(src, "node_modules", "pkg"), process.platform === "win32" ? "junction" : "dir");
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EPERM" || code === "ENOTSUP") ctx.skip();

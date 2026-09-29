@@ -190,10 +190,16 @@ export function extractStoryCardDraft(input: {
 }
 
 export function createBookInstruction(card: StoryCardDraft, isZh: boolean): string {
-  const next = trimStoryCard(card);
+  // Presentation cards may be capped, but execution requirements must not be.
+  const next = {
+    ...card,
+    workingTitle: card.workingTitle.trim(),
+    oneLine: card.oneLine.trim(),
+    synopsis: card.synopsis.trim(),
+  };
   if (isZh) {
     return [
-      `就此建书。`,
+      `就此建书并整理正典。正典先保存为候选，等待我核对采用。`,
       `书名：${next.workingTitle}`,
       `一句话：${next.oneLine}`,
       `梗概：${next.synopsis}`,
@@ -202,7 +208,7 @@ export function createBookInstruction(card: StoryCardDraft, isZh: boolean): stri
     ].filter(Boolean).join("\n");
   }
   return [
-    `Create this book.`,
+    `Create this book and prepare a canon candidate for my review and adoption.`,
     `Title: ${next.workingTitle}`,
     `One-liner: ${next.oneLine}`,
     `Synopsis: ${next.synopsis}`,

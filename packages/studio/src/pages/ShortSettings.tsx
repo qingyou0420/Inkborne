@@ -80,7 +80,7 @@ export function ShortSettings({ storyId, nav, t }: {
             data-testid="short-settings-title"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            className="h-10 rounded-[10px] border border-border-strong bg-card px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+            className="h-10 rounded-lg border border-border-strong bg-card px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
         <div className="flex flex-col gap-1">
@@ -91,7 +91,7 @@ export function ShortSettings({ storyId, nav, t }: {
             min={1}
             value={chapterCount}
             onChange={(event) => setChapterCount(Number(event.target.value))}
-            className="h-10 w-32 rounded-[10px] border border-border-strong bg-card px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+            className="h-10 w-32 rounded-lg border border-border-strong bg-card px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
         <div className="flex flex-col gap-1">
@@ -102,7 +102,7 @@ export function ShortSettings({ storyId, nav, t }: {
             onChange={(event) => setDirection(event.target.value)}
             placeholder={t("short.directionPlaceholder")}
             rows={4}
-            className="rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+            className="rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
         <div className="flex flex-wrap items-center gap-3">

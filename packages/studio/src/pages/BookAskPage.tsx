@@ -6,7 +6,7 @@
 
 import { useApi } from "../hooks/use-api";
 import { pageErrorText } from "../lib/error-copy";
-import type { TFunction } from "../hooks/use-i18n";
+import { useI18n, type TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import { AskCanonPanel } from "../components/AskCanonPanel";
@@ -22,32 +22,38 @@ interface Nav {
 
 export function BookAskPage({
   bookId,
+  resumeSessionId,
   nav,
   theme,
   t,
   sse,
 }: {
   readonly bookId: string;
+  readonly resumeSessionId?: string;
   readonly nav: Nav;
   readonly theme: Theme;
   readonly t: TFunction;
   readonly sse: { messages: ReadonlyArray<SSEMessage>; connected: boolean };
 }) {
-  const { error } = useApi<{ book?: { title?: string } }>(`/books/${bookId}`);
+  const { error, refetch } = useApi<{ book?: { title?: string } }>(`/books/${bookId}`);
+  const { lang } = useI18n();
+  const isZh = lang !== "en";
 
-  if (error) return <div className="text-destructive p-8">{pageErrorText(error)}</div>;
+  if (error) return <div role="alert" className="text-destructive p-8"><p>{pageErrorText(error)}</p><button className="btn-ghost" type="button" onClick={() => void refetch()}>{isZh ? "重新加载问心" : "Reload Ask"}</button></div>;
 
   return (
-    <div className="flex h-full min-h-0 flex-1">
+    <div className="ask-workspace h-full min-h-0 flex-1">
       <ChatPage
         activeBookId={bookId}
+        resumeSessionId={resumeSessionId}
         mode="book"
+        authoringStage="ask"
         nav={nav}
         theme={theme}
         t={t}
         sse={sse}
       />
-      <AskCanonPanel bookId={bookId} isZh={t("settings.title") === "项目设置"} />
+      <AskCanonPanel bookId={bookId} resumeSessionId={resumeSessionId} isZh={isZh} />
     </div>
   );
 }

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { collapseDuplicateChapterHeadings, parseChapterHeadingLine } from "@actalk/inkos-core/chapter-heading";
 import { showToast } from "../lib/toast";
-import { trackChapterEdit } from "../lib/pending-chapter-edit";
 import { registerUnsavedCheck, registerUnsavedFlush } from "../lib/unsaved-edits";
-import { fetchJson, putApi, putChapterAutosave, useApi, postApi } from "../hooks/use-api";
-import { pageErrorText } from "../lib/error-copy";
+import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
 import { StudioApiError } from "../hooks/use-api";
 import { shouldRefetchChapterBody } from "../hooks/use-book-activity";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -12,6 +12,7 @@ import type { Theme } from "../hooks/use-theme";
 import { useI18n, type TFunction } from "../hooks/use-i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ChapterWorkspacePanel } from "../components/ChapterWorkspacePanel";
+import { ReadingAppearanceDrawer } from "../components/ReadingAppearanceDrawer";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,7 +20,6 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import {
-  BookOpen,
   Type,
   Clock,
   Pencil,
@@ -27,7 +27,17 @@ import {
   MoreHorizontal,
   Copy,
 } from "lucide-react";
-import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
+
+const pendingReaderEdits = new Map<string, { content: string; baseline: string }>();
+let readerUnloadGuardInstalled = false;
+function installReaderUnloadGuard() {
+  if (readerUnloadGuardInstalled || typeof window === "undefined") return;
+  readerUnloadGuardInstalled = true;
+  window.addEventListener("beforeunload", (event) => {
+    if (!pendingReaderEdits.size) return;
+    event.preventDefault(); event.returnValue = "";
+  });
+}
 
 interface ChapterData {
   readonly chapterNumber: number;
@@ -38,24 +48,6 @@ interface ChapterData {
 interface Nav {
   toBook: (id: string) => void;
   toDashboard: () => void;
-}
-
-function readingManuscript(content: string, chapterNumber: number): {
-  manuscript: string;
-  title: string;
-  body: string;
-} {
-  const manuscript = collapseDuplicateChapterHeadings(content, { chapterNumber });
-  const lines = manuscript.replace(/\r\n/g, "\n").split("\n");
-  let index = 0;
-  while (index < lines.length && lines[index]!.trim() === "") index += 1;
-  const parsed = index < lines.length ? parseChapterHeadingLine(lines[index]!) : null;
-  if (!parsed || parsed.chapterNumber !== chapterNumber) {
-    return { manuscript, title: "", body: manuscript.trim() };
-  }
-  const title = lines[index]!.trim().replace(/^#{1,6}\s*/, "");
-  const body = lines.slice(index + 1).join("\n").trim();
-  return { manuscript, title, body };
 }
 
 function chapterKicker(n: number, isZh: boolean): string {
@@ -71,7 +63,11 @@ function chapterKicker(n: number, isZh: boolean): string {
   return `第${n}章`;
 }
 
-export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, sse }: {
+export function ChapterReader(props: Parameters<typeof ChapterReaderWorkspace>[0]) {
+  return <ChapterReaderWorkspace key={`${props.bookId}:${props.chapterNumber}`} {...props} />;
+}
+
+function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, sse }: {
   bookId: string;
   chapterNumber: number;
   nav: Nav;
@@ -82,84 +78,36 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
   const { data, loading, error, refetch } = useApi<ChapterData>(
     `/books/${bookId}/chapters/${chapterNumber}`,
   );
-  const [editing, setEditing] = useState(false);
-  const [editContent, setEditContent] = useState("");
+  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const readOnly = authoring?.authoringBook === true;
+  const bufferKey = `${bookId}:${chapterNumber}`;
+  const restoredEdit = useRef(pendingReaderEdits.get(bufferKey));
+  const [editing, setEditing] = useState(Boolean(restoredEdit.current));
+  const [editContent, setEditContent] = useState(restoredEdit.current?.content ?? "");
+  const baseline = useRef(restoredEdit.current?.baseline ?? "");
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [externalChange, setExternalChange] = useState(false);
+  const dirty = editing && editContent !== baseline.current;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   const [saving, setSaving] = useState(false);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [packetOpen, setPacketOpen] = useState(false);
   const [packetText, setPacketText] = useState("");
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [overrideWhy, setOverrideWhy] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
-  const pendingSave = useRef<{ bookId: string; chapterNumber: number; content: string } | null>(null);
-  const editGeneration = useRef(0);
-  const flushedGeneration = useRef(0);
   const { lang } = useI18n();
   const isZh = lang !== "en";
 
-  useEffect(() => registerUnsavedCheck(() => pendingSave.current !== null), []);
-
-  const flushPendingChapter = useCallback(async () => {
-    const pending = pendingSave.current;
-    if (!pending) return;
-    pendingSave.current = null;
-    const generation = editGeneration.current;
-    const fresh = flushedGeneration.current !== generation;
-    try {
-      await putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh });
-      if (editGeneration.current === generation) flushedGeneration.current = generation;
-    } catch (error) {
-      if (!pendingSave.current) pendingSave.current = pending;
-      throw error;
-    }
-  }, []);
-  const flushPendingRef = useRef(flushPendingChapter);
-  flushPendingRef.current = flushPendingChapter;
-  useEffect(() => registerUnsavedFlush(() => flushPendingRef.current()), []);
-
-  useEffect(() => {
-    if (!editing || !pendingSave.current) return;
-    const timer = window.setTimeout(() => {
-      void flushPendingChapter().then(() => {
-        void refetch();
-      }).catch((error) => {
-        showToast(error instanceof Error ? error.message : "Save failed", "error");
-      });
-    }, 1500);
-    return () => window.clearTimeout(timer);
-  }, [editContent, editing, flushPendingChapter, refetch]);
-
-  useEffect(() => {
-    return () => {
-      const pending = pendingSave.current;
-      if (!pending) return;
-      pendingSave.current = null;
-      const generation = editGeneration.current;
-      const fresh = flushedGeneration.current !== generation;
-      void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh }).then(() => {
-        if (editGeneration.current === generation) flushedGeneration.current = generation;
-      });
-    };
-  }, [bookId, chapterNumber]);
-
   const handleChapterChanged = useCallback(() => {
-    const pending = pendingSave.current;
-    pendingSave.current = null;
-    setEditing(false);
-    setEditContent("");
+    if (dirtyRef.current) setExternalChange(true);
+    else { setEditing(false); setEditContent(""); }
     setWorkspaceRevision((revision) => revision + 1);
-    if (!pending) {
-      void refetch();
-      return;
-    }
-    const generation = editGeneration.current;
-    const fresh = flushedGeneration.current !== generation;
-    void putChapterAutosave(pending.bookId, pending.chapterNumber, pending.content, { fresh }).then(() => {
-      if (editGeneration.current === generation) flushedGeneration.current = generation;
-    }).finally(() => {
-      void refetch();
-    });
+    void refetch();
   }, [refetch]);
 
   useEffect(() => {
@@ -172,35 +120,64 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
 
   const handleStartEdit = () => {
     if (!data) return;
-    pendingSave.current = null;
-    editGeneration.current += 1;
-    setEditContent(readingManuscript(data.content, chapterNumber).manuscript);
+    setEditContent(data.content);
+    baseline.current = data.content;
+    setSaveError(null);
     setEditing(true);
   };
 
-  const handleCancelEdit = () => {
-    if (pendingSave.current) {
-      setDiscardOpen(true);
-      return;
-    }
+  const discardEdit = () => {
+    pendingReaderEdits.delete(bufferKey);
     setEditing(false);
     setEditContent("");
+    setDiscardOpen(false);
+    setExternalChange(false);
+    setSaveError(null);
+  };
+  const handleCancelEdit = () => {
+    if (dirty) setDiscardOpen(true);
+    else discardEdit();
   };
 
   const handleSave = async () => {
+    if (saving || !editing || !dirty) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      pendingSave.current = null;
-      await putApi(`/books/${bookId}/chapters/${chapterNumber}`, { content: editContent });
+      await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editContent }),
+      });
+      pendingReaderEdits.delete(bufferKey);
+      baseline.current = editContent;
       setEditing(false);
+      setExternalChange(false);
       refetch();
       setWorkspaceRevision((revision) => revision + 1);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Save failed", "error");
+      const message = e instanceof Error ? e.message : "Save failed";
+      setSaveError(message);
+      showToast(message, "error");
     } finally {
       setSaving(false);
     }
   };
+
+  const saveAction = useRef(handleSave);
+  saveAction.current = handleSave;
+  useEffect(() => registerUnsavedCheck(() => dirtyRef.current), []);
+  useEffect(() => registerUnsavedFlush(async () => { await saveAction.current(); }), []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || event.altKey) return;
+      event.preventDefault();
+      void saveAction.current();
+    };
+    installReaderUnloadGuard();
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); };
+  }, []);
 
   if (loading && !data) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
@@ -209,12 +186,16 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
     </div>
   );
 
-  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{pageErrorText(error)}</div>;
+  if (error) return <div className="text-destructive p-8 bg-destructive/5 rounded-xl border border-destructive/20">{error}</div>;
   if (!data) return null;
 
-  const presented = readingManuscript(data.content, chapterNumber);
-  const title = presented.title || (isZh ? chapterKicker(chapterNumber, true) : `Chapter ${chapterNumber}`);
-  const body = presented.body;
+  const lines = data.content.split("\n");
+  const titleLine = lines.find((l) => l.startsWith("# "));
+  const title = titleLine?.replace(/^#\s*/, "") ?? `Chapter ${chapterNumber}`;
+  const body = lines
+    .filter((l) => l !== titleLine)
+    .join("\n")
+    .trim();
 
   const handleApprove = async (why?: string) => {
     try {
@@ -274,26 +255,49 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
       });
       await copyToClipboard(text);
       showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success");
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "复制失败", "error");
+    } catch (copyError) {
+      showToast(copyError instanceof Error ? copyError.message : "复制失败", "error");
     }
   };
 
   return (
-    <div className="w-full space-y-10 fade-in">
-      <div className="flex justify-end gap-2">
+    <div className="w-full space-y-8 fade-in">
+      <div className="reader-toolbar">
+        <button
+          type="button"
+          className="btn-secondary"
+          data-testid="chapter-copy-plain"
+          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
+          onClick={() => void copyChapter()}
+        >
+          {isZh ? "复制本章" : "Copy chapter"}
+        </button>
+        {readOnly ? (
+          <span className="reader-save-state" role="status" data-testid="chapter-reader-readonly">{isZh ? "只读预览" : "Read-only preview"}</span>
+        ) : (
+        <span className="reader-save-state" role="status">{saving ? (isZh ? "正在保存…" : "Saving…") : dirty ? (isZh ? "有未保存修改" : "Unsaved changes") : (isZh ? "正文" : "Manuscript")}</span>
+        )}
+        {readOnly ? null : <>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => setAssistantOpen((open) => !open)}
+        >
+          {assistantOpen ? t("reader.closeAssistant") : t("reader.openAssistant")}
+        </button>
         {editing ? (
           <>
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || !dirty}
+              aria-keyshortcuts="Control+s Meta+s"
               className="btn-primary disabled:opacity-50"
             >
               {saving ? <div className="w-3.5 h-3.5 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Save size={14} />}
               {saving ? t("book.saving") : t("book.save")}
             </button>
-            <button type="button" onClick={handleCancelEdit} className="btn-ghost">
+            <button type="button" onClick={handleCancelEdit} disabled={saving} className="btn-ghost">
               {t("reader.cancel")}
             </button>
           </>
@@ -305,18 +309,9 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
         )}
         <button
           type="button"
-          onClick={() => void copyChapter()}
-          className="btn-secondary"
-          data-testid="chapter-copy-plain"
-          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
-        >
-          <Copy size={14} />
-          {isZh ? "复制本章" : "Copy chapter"}
-        </button>
-        <button
-          type="button"
           onClick={() => void handleApprove()}
-          className="btn-primary"
+          disabled={saving || dirty}
+          className="btn-secondary"
           data-testid="chapter-approve"
         >
           {t("reader.approve")}
@@ -332,64 +327,67 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
             <DropdownMenuItem onClick={() => void handleOpenPacket()}>
               {t("reader.packet")}
             </DropdownMenuItem>
+            <DropdownMenuItem data-testid="chapter-copy-fanqie" onClick={() => void copyChapter()}>
+              <Copy size={14} />
+              {isZh ? "番茄纯文本" : "Tomato plain text"}
+            </DropdownMenuItem>
             <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
               {t("reader.deleteChapter")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </>}
       </div>
 
+      {saveError ? <p className="manuscript-error" role="alert">{saveError}</p> : null}
+      {externalChange ? <p className="manuscript-notice">{isZh ? "正文在别处有更新。你的手改仍保留，请核对后保存。" : "The manuscript changed elsewhere. Your edits are retained; check them before saving."}</p> : null}
       {packetOpen && (
         <pre className="max-h-80 overflow-auto rounded-xl border border-border/50 bg-secondary/20 p-4 text-xs" data-testid="packet-viewer">
           {packetText}
         </pre>
       )}
 
-      <ChapterWorkspacePanel
-        key={`${chapterNumber}-${workspaceRevision}`}
-        bookId={bookId}
-        chapterNumber={chapterNumber}
-        t={t}
-        onChapterChanged={handleChapterChanged}
-        onChapterDeleted={() => nav.toBook(bookId)}
-      />
+      {assistantOpen ? (
+        <ChapterWorkspacePanel
+          key={`${chapterNumber}-${workspaceRevision}`}
+          bookId={bookId}
+          chapterNumber={chapterNumber}
+          t={t}
+          onChapterChanged={handleChapterChanged}
+          onChapterDeleted={() => nav.toBook(bookId)}
+        />
+      ) : null}
 
-      <div className="paper-sheet rounded-2xl p-8 md:p-16 lg:p-24 min-h-[80vh] relative overflow-hidden border border-border">
-        <div className="absolute top-0 left-8 w-px h-full bg-border/40 hidden md:block" />
-        <div className="absolute top-0 right-8 w-px h-full bg-border/40 hidden md:block" />
-
-        <header className="mb-16 text-center">
-          <div className="flex items-center justify-center gap-2 text-muted-foreground/30 mb-8 select-none">
-            <div className="h-px w-12 bg-border/40" />
-            <BookOpen size={20} />
-            <div className="h-px w-12 bg-border/40" />
-          </div>
-          <p className="literary-kicker mb-4">{chapterKicker(chapterNumber, isZh)}</p>
-          <h1 className="font-serif text-[32px] font-medium leading-10 text-foreground">
-            {title}
+      <div className="one-document mx-auto min-h-[70vh] max-w-[740px] px-2">
+        <header className="manuscript-heading">
+          <h1 className="text-[30px] font-medium leading-10 text-foreground">
+            {title || chapterKicker(chapterNumber, isZh)}
           </h1>
+          <div className="manuscript-meta">
+            <span>{body.length.toLocaleString()} {t("reader.characters")}</span>
+            <button type="button" onClick={() => setAppearanceOpen(true)} data-testid="reader-appearance"><Type size={15} />{isZh ? "排版" : "Appearance"}</button>
+          </div>
         </header>
 
         {editing ? (
           <textarea
             value={editContent}
             onChange={(e) => {
-              const next = e.target.value;
-              setEditContent(next);
-              pendingSave.current = trackChapterEdit(
-                bookId,
-                chapterNumber,
-                next,
-                readingManuscript(data.content, chapterNumber).manuscript,
-              );
+              const content = e.target.value;
+              setEditContent(content);
+              setSaveError(null);
+              if (content === baseline.current) pendingReaderEdits.delete(bufferKey);
+              else pendingReaderEdits.set(bufferKey, { content, baseline: baseline.current });
             }}
-            className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[32px] text-foreground/90 focus:outline-none resize-none border border-border-strong rounded-[10px] p-6 focus:ring-1 focus:ring-ring"
+            readOnly={saving}
+            aria-label={isZh ? "编辑正式正文" : "Edit manuscript"}
+            className="prose-body w-full min-h-[60vh] bg-transparent focus:outline-none resize-none border border-input rounded-[5px] p-4"
             autoFocus
           />
         ) : (
-          <article className="prose prose-zinc dark:prose-invert max-w-none">
+          <article className="prose-body max-w-none">
             {paragraphs.map((para, i) => (
-              <p key={i} className="font-serif text-lg md:text-xl leading-[32px] text-foreground/90 mb-8">
+              <p key={i} className="mb-8">
                 {para}
               </p>
             ))}
@@ -407,9 +405,12 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
                <span>{Math.ceil(body.length / 500)} {t("reader.minRead")}</span>
              </div>
           </div>
-          <p className="literary-kicker text-muted-foreground/70">{t("reader.endOfChapter")}</p>
+          <p className="text-sm text-muted-foreground">{t("reader.endOfChapter")}</p>
         </footer>
       </div>
+
+      <ReadingAppearanceDrawer open={appearanceOpen} onClose={() => setAppearanceOpen(false)} isZh={isZh} />
+      <ConfirmDialog open={discardOpen} title={isZh ? "放弃本次修改？" : "Discard these edits?"} message={isZh ? "正式正文不受影响。" : "The saved manuscript will remain unchanged."} confirmLabel={isZh ? "放弃修改" : "Discard edits"} cancelLabel={isZh ? "继续编辑" : "Keep editing"} onConfirm={discardEdit} onCancel={() => setDiscardOpen(false)} />
 
       <ConfirmDialog
         open={overrideOpen}
@@ -430,25 +431,9 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme: _theme, t, ss
           value={overrideWhy}
           onChange={(event) => setOverrideWhy(event.target.value)}
           placeholder={t("reader.overrideWhy")}
-          className="w-full rounded-[10px] border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="w-full rounded-lg border border-border-strong bg-card px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
         />
       </ConfirmDialog>
-
-      <ConfirmDialog
-        open={discardOpen}
-        title={isZh ? "这段修改还没保存" : "Edits are not saved"}
-        message={isZh ? "取消后，刚才改的字会丢掉。" : "Canceling drops the words you just changed."}
-        confirmLabel={isZh ? "丢掉修改" : "Discard"}
-        cancelLabel={t("common.cancel")}
-        variant="danger"
-        onCancel={() => setDiscardOpen(false)}
-        onConfirm={() => {
-          pendingSave.current = null;
-          setDiscardOpen(false);
-          setEditing(false);
-          setEditContent("");
-        }}
-      />
 
       <ConfirmDialog
         open={deleteOpen}

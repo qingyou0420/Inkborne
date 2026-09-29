@@ -2,6 +2,31 @@ import { describe, expect, it } from "vitest";
 import { parseHash, routeToHash } from "./use-hash-route";
 
 describe("hash route", () => {
+  it("keeps the new-book introduction distinct from the actual Ask session", () => {
+    expect(parseHash(routeToHash({ page: "book-intro" }))).toEqual({ page: "book-intro" });
+    expect(routeToHash({ page: "book-intro" })).not.toBe(routeToHash({ page: "book-create" }));
+  });
+  it("preserves tools and individual chapters through navigation and refresh", () => {
+    const routes = [
+      { page: "analytics" as const, bookId: "潮声未寄" },
+      { page: "truth" as const, bookId: "潮声未寄" },
+      { page: "chapter" as const, bookId: "潮声未寄", chapterNumber: 3 },
+      { page: "genres" as const }, { page: "style" as const }, { page: "radar" as const }, { page: "doctor" as const },
+    ];
+    for (const route of routes) expect(parseHash(routeToHash(route))).toEqual(route);
+    expect(() => parseHash("#/book/%bad/ask")).not.toThrow();
+  });
+  it("restores a specific ask session after a refresh without losing its book scope", () => {
+    const bookRoute = { page: "book-ask" as const, bookId: "一本书", sessionId: "draft/a?b=1" };
+    expect(parseHash(routeToHash(bookRoute))).toEqual(bookRoute);
+    const draftRoute = { page: "book-create" as const, sessionId: "draft/a?b=1" };
+    expect(parseHash(routeToHash(draftRoute))).toEqual(draftRoute);
+    expect(parseHash("#/book/new?session=")).toEqual({ page: "book-create" });
+  });
+  it("gives advanced settings a distinct reloadable location", () => {
+    expect(parseHash(routeToHash({ page: "project-settings", section: "advanced" })))
+      .toEqual({ page: "project-settings", section: "advanced" });
+  });
   describe("parseHash", () => {
     it("parses empty hash as dashboard", () => {
       expect(parseHash("")).toEqual({ page: "dashboard" });

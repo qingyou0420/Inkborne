@@ -1,4 +1,6 @@
 import { fetchJson, useApi } from "../hooks/use-api";
+import type { AuthoringWorkspace } from "../lib/authoring-workspace";
+import { workspaceQuery } from "../lib/authoring-workspace";
 import { useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -64,6 +66,8 @@ interface Nav {
 export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const { data } = useApi<{ files: ReadonlyArray<TruthFile> }>(`/books/${bookId}/truth`);
+  const { data: authoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId)}`);
+  const pageReadOnly = authoring?.authoringBook === true;
   const [selected, setSelected] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
@@ -73,6 +77,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
   );
 
   const presentation = deriveFilePresentation(selected, fileData);
+  const canEdit = presentation.canEdit && !pageReadOnly;
   const isLegacyShim = presentation.legacy;
   const isRuntimeDiagnostic = presentation.readonlyReason === "runtime-diagnostic";
 
@@ -105,7 +110,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
 
   return (
     <div className="space-y-6">
-      <h1 className="font-serif text-[32px] font-medium leading-10">{t("truth.title")}</h1>
+      <h1 className="font-serif text-[32px] font-medium leading-10">{pageReadOnly ? (t("truth.title") === "原始资料" ? "原始资料（只读）" : "Source files (read-only)") : t("truth.title")}</h1>
 
       <div className="grid grid-cols-[240px_1fr] gap-6">
         {/* File list */}
@@ -183,7 +188,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                     </button>
                   </>
                 ) : (
-                  presentation.canEdit && (
+                  canEdit && (
                     <button
                       onClick={startEdit}
                       className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-md ${c.btnSecondary}`}

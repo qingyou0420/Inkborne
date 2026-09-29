@@ -7,11 +7,15 @@ import { useServiceStore } from "../store/service";
 import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { ServiceConfigSourceCard } from "../components/ServiceConfigSourceCard";
+import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
 import { SimpleModelSettings } from "../components/SimpleModelSettings";
+import { SettingsTabs } from "../components/SettingsTabs";
+import { useI18n } from "../hooks/use-i18n";
 
 interface Nav {
   toDashboard: () => void;
   toServiceDetail: (id: string) => void;
+  toProjectSettings?: (section?: "advanced") => void;
 }
 
 function SkeletonCard() {
@@ -280,6 +284,8 @@ function CoverConfigCard() {
 }
 
 export function ServiceListPage({ nav }: { nav: Nav }) {
+  const { lang, t } = useI18n();
+  const isZh = lang !== "en";
   const services = useServiceStore((s) => s.services);
   const loading = useServiceStore((s) => s.servicesLoading);
   const fetchServices = useServiceStore((s) => s.fetchServices);
@@ -355,16 +361,21 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
   const showCustomSection = !loading && selectedGroups.size === 0 && (filteredCustom.length > 0 || canCreateCustom);
 
   return (
-    <div className="space-y-6">
-      <h1 className="font-serif text-[32px] font-medium leading-10">{tr("模型配置", "Model Config")}</h1>
-
+    <div className="settings-layout">
+      <SettingsTabs
+        active="models"
+        t={t}
+        onModels={() => undefined}
+        onAppearance={() => nav.toProjectSettings?.()}
+        onAdvanced={() => nav.toProjectSettings?.("advanced")}
+      />
+      <div className="space-y-8 min-w-0">
+      <h1 className="text-[32px] font-medium leading-10">{t("settings.title")}</h1>
       <SimpleModelSettings />
-
-      <details className="space-y-6">
-        <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
-          {tr("高级：其它服务商和封面", "Advanced: other providers and covers")}
-        </summary>
-        <div className="space-y-6 pt-4">
+      <AuthoringRolesPanel isZh={isZh} />
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[20px] font-medium">{t("settings.servicesHeading")}</h2>
+      </div>
 
       <ServiceConfigSourceCard onChange={() => { void refreshServices(); }} />
 
@@ -506,8 +517,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           {tr("没有匹配的服务商", "No matching providers")}
         </div>
       )}
-        </div>
-      </details>
+      </div>
     </div>
   );
 }

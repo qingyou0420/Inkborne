@@ -34,8 +34,8 @@ describe("deriveBookChromeTab", () => {
     expect(deriveBookChromeTab({ page: "book-ground", bookId: "zui" })).toBe("ground");
     expect(deriveBookChromeTab({ page: "book-weave", bookId: "zui" })).toBe("weave");
     expect(deriveBookChromeTab({ page: "book-write", bookId: "zui" })).toBe("write");
-    expect(deriveBookChromeTab({ page: "chapter", bookId: "zui", chapterNumber: 3 })).toBe("write");
-    expect(deriveBookChromeTab({ page: "truth", bookId: "zui" })).toBe("ground");
+    expect(deriveBookChromeTab({ page: "chapter", bookId: "zui", chapterNumber: 3 })).toBe("study");
+    expect(deriveBookChromeTab({ page: "truth", bookId: "zui" })).toBe("study");
     expect(deriveBookChromeTab({ page: "analytics", bookId: "zui" })).toBe("study");
     expect(deriveBookChromeTab({ page: "dashboard" })).toBeNull();
     expect(deriveBookChromeTab({ page: "author" })).toBeNull();

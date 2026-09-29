@@ -12,8 +12,12 @@ import { deriveBookIdFromTitle } from "../utils/book-id.js";
 import { serializeCanon } from "./canon.js";
 import { isBookPresent } from "./context.js";
 import { bindDraftToBook, loadDraft } from "./drafts.js";
+import { withBookWriteLock } from "./book-lock.js";
+import { nextCanonImpactState } from "./stages/impact.js";
 import { loadManifest, saveArtifact, saveManifest, type AuthoringStoreRoot } from "./store.js";
 import type { AuthoringArtifactMeta, CanonDocument } from "./types.js";
+
+export const CANON_LENGTH_REQUIRED = "CANON_LENGTH_REQUIRED";
 
 export interface LightweightBookCreateInput {
   readonly projectRoot: string;
@@ -23,6 +27,19 @@ export interface LightweightBookCreateInput {
   readonly platform?: BookConfig["platform"];
   readonly existingBookId?: string;
   readonly fromArtifact?: { readonly meta: AuthoringArtifactMeta; readonly body: string };
+}
+
+export function hasConfirmedCanonLength(canon: Pick<CanonDocument, "targetChapters" | "chapterWordCount">): boolean {
+  return Boolean(
+    canon.targetChapters && canon.targetChapters > 0
+    && canon.chapterWordCount && canon.chapterWordCount >= 100,
+  );
+}
+
+export function canonLengthRequiredError(): Error {
+  const error = new Error("请先确认全书篇幅（目标章数与每章字数），未填写不能建书。");
+  (error as Error & { code: string }).code = CANON_LENGTH_REQUIRED;
+  return error;
 }
 
 export async function syncBookJsonTitle(bookDir: string, canon: CanonDocument): Promise<void> {
@@ -56,6 +73,7 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
   readonly bookId: string;
   readonly bookDir: string;
   readonly created: boolean;
+  readonly impactPending?: boolean;
 }> {
   const draft = input.draftId ? await loadDraft(input.projectRoot, input.draftId) : undefined;
   const boundId = input.existingBookId || draft?.bookId;
@@ -75,49 +93,39 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
   const exists = await isBookPresent(bookDir);
   if (exists && boundId === bookId) {
     const canonBody = input.fromArtifact?.body ?? serializeCanon(input.canon);
-    await mkdir(join(bookDir, "story"), { recursive: true });
-    await writeFile(join(bookDir, "story", "canon.md"), canonBody.endsWith("\n") ? canonBody : `${canonBody}\n`, "utf-8");
-    await syncBookJsonTitle(bookDir, input.canon);
     const root: AuthoringStoreRoot = { projectRoot: input.projectRoot, bookId, draftId: input.draftId };
-    if (input.fromArtifact) {
-      await saveArtifact(root, { ...input.fromArtifact.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
+    let impactPending = false;
+    await withBookWriteLock(root, "绑定已有书", async () => {
+      await mkdir(join(bookDir, "story"), { recursive: true });
+      const body = canonBody.endsWith("\n") ? canonBody : `${canonBody}\n`;
+      await writeFile(join(bookDir, "story", "canon.md"), body, "utf-8");
+      await syncBookJsonTitle(bookDir, input.canon);
+      const source = input.fromArtifact;
+      if (!source) return;
       const manifest = await loadManifest(root);
+      const adopted = await saveArtifact(root, { ...source.meta, status: "adopted", bodyPath: "story/canon.md" }, canonBody);
       const previous = manifest.adopted.ask;
-      const artifactId = input.fromArtifact.meta.artifactId;
+      const artifactId = source.meta.artifactId;
+      const impact = await nextCanonImpactState(root, manifest, previous, adopted);
+      impactPending = impact.impactPending;
       await saveManifest(root, {
         ...manifest,
         bookId,
         draftId: input.draftId ?? manifest.draftId,
         adopted: { ...manifest.adopted, ask: artifactId },
         candidates: { ...manifest.candidates, ask: artifactId },
-        watches: previous && previous !== artifactId
-          ? [
-              ...manifest.watches,
-              {
-                id: `ask-${Date.now()}`,
-                stage: "ground",
-                sourceKind: "canon",
-                sourceId: artifactId,
-                label: "正典已采用新版本，设定可能需要核对",
-                acknowledged: false,
-              },
-              {
-                id: `ask-weave-${Date.now()}`,
-                stage: "weave",
-                sourceKind: "canon",
-                sourceId: artifactId,
-                label: "正典已采用新版本，大纲可能需要核对",
-                acknowledged: false,
-              },
-            ]
-          : manifest.watches,
+        watches: impact.watches,
+        impactBaseline: impact.impactBaseline,
       });
-    }
+    });
     if (input.draftId) await bindDraftToBook({ projectRoot: input.projectRoot, draftId: input.draftId, bookId, title: input.canon.title });
-    return { bookId, bookDir, created: false };
+    return { bookId, bookDir, created: false, impactPending };
   }
   if (exists) {
     return { bookId, bookDir, created: false };
+  }
+  if (!input.canon.targetChapters || input.canon.targetChapters < 1) {
+    throw canonLengthRequiredError();
   }
   const now = new Date().toISOString();
   const book = BookConfigSchema.parse({
@@ -126,8 +134,8 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
     platform: input.platform ?? "other",
     genre: input.canon.genre?.trim() || "未分类",
     status: "incubating",
-    targetChapters: input.canon.targetChapters ?? 36,
-    chapterWordCount: input.canon.chapterWordCount ?? 3000,
+    targetChapters: input.canon.targetChapters,
+    chapterWordCount: input.canon.chapterWordCount,
     language: input.language ?? "zh",
     createdAt: now,
     updatedAt: now,
@@ -171,6 +179,7 @@ export async function createLightweightBook(input: LightweightBookCreateInput): 
     candidates: { ask: artifact.artifactId, ground: [], write: {} },
     coverage: {},
     watches: [],
+    impactBaseline: { ask: artifact.artifactId },
     updatedAt: now,
   });
   if (input.draftId) {

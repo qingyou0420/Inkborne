@@ -25,7 +25,9 @@ function run(command, args, cwd, extraEnv = {}) {
     const child = spawn(command, args, {
       cwd,
       stdio: "inherit",
-      shell: process.platform === "win32",
+      // Node is an executable, not a command shim. A shell splits paths such as
+      // C:\Program Files\nodejs\node.exe and a workspace containing spaces.
+      shell: process.platform === "win32" && command !== process.execPath,
       env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false", ...extraEnv },
     });
     child.on("exit", (code) => {

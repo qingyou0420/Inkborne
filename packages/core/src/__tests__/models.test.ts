@@ -101,10 +101,14 @@ describe("BookConfigSchema", () => {
     ).toThrow();
   });
 
-  it("rejects chapterWordCount below 1000", () => {
+  it("rejects chapterWordCount below 100", () => {
     expect(() =>
-      BookConfigSchema.parse({ ...validBook, chapterWordCount: 500 }),
+      BookConfigSchema.parse({ ...validBook, chapterWordCount: 50 }),
     ).toThrow();
+  });
+
+  it("accepts a short-chapter word count of 300", () => {
+    expect(BookConfigSchema.parse({ ...validBook, chapterWordCount: 300 }).chapterWordCount).toBe(300);
   });
 
   it("rejects targetChapters below 1", () => {

@@ -18,17 +18,17 @@ const { CURRENT_SETUP_PREFIX, setupNamesForVersion } = require("../../../scripts
   setupNamesForVersion: (version: string) => { primary: string; aliases: string[]; legacy: string };
 };
 
-describe("2.1.10 Windows installer contract", () => {
-  it("keeps root and desktop on the same stable 2.1.10", () => {
-    expect(rootPkg.version).toBe("2.1.10");
-    expect(desktopPkg.version).toBe("2.1.10");
+describe("2.2.10 Windows installer contract", () => {
+  it("keeps root and desktop on the same stable 2.2.10", () => {
+    expect(rootPkg.version).toBe("2.2.10");
+    expect(desktopPkg.version).toBe("2.2.10");
     expect(desktopPkg.license).toBe("AGPL-3.0-only");
     expect(rootPkg.scripts["dist:win"]).toBe("node scripts/dist-win.mjs");
     expect(rootPkg.scripts["dist:win"]).not.toMatch(/exit 1/);
   });
 
-  it("names the NSIS artifact Inkborne-Setup-2.1.10.exe and keeps appId", () => {
-    expect(setupFileNameForVersion(rootPkg.version)).toBe("Inkborne-Setup-2.1.10.exe");
+  it("names the NSIS artifact Inkborne-Setup-2.2.10.exe and keeps appId", () => {
+    expect(setupFileNameForVersion(rootPkg.version)).toBe("Inkborne-Setup-2.2.10.exe");
     const yml = readFileSync(join(desktopDir, "electron-builder.yml"), "utf8");
     expect(yml).toMatch(/appId:\s*com\.fantawriter\.app/);
     expect(yml).toMatch(/productName:\s*Inkborne/);
@@ -46,9 +46,9 @@ describe("2.1.10 Windows installer contract", () => {
     expect(distWin).not.toMatch(/FantaWriter-Setup-\$\{rootPkg\.version\}/);
 
     expect(CURRENT_SETUP_PREFIX).toBe("Inkborne-Setup");
-    const names = setupNamesForVersion("2.1.10");
-    expect(names.primary).toBe("Inkborne-Setup-2.1.10.exe");
-    expect(names.aliases).toEqual(["FantaWriter-Setup-2.1.10.exe", "Fantasy-Writer-Setup-2.1.10.exe"]);
+    const names = setupNamesForVersion("2.2.10");
+    expect(names.primary).toBe("Inkborne-Setup-2.2.10.exe");
+    expect(names.aliases).toEqual(["FantaWriter-Setup-2.2.10.exe", "Fantasy-Writer-Setup-2.2.10.exe"]);
 
     const workflow = readFileSync(join(repoRoot, ".github", "workflows", "release-win.yml"), "utf8");
     expect(workflow).toMatch(/asset=Inkborne-Setup-\$\{PKG\}\.exe/);

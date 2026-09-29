@@ -1,4 +1,21 @@
-import { getAppLanguage } from "./app-language";
+import { getAppLanguage, tr } from "./app-language.js";
+
+const TRANSIENT_NETWORK_MESSAGE_RE =
+  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|NetworkError)$/i;
+
+export function transientNetworkUserMessage(): string {
+  return tr(
+    "请求暂时失败，请重试；若正文已出现可先刷新",
+    "Request failed temporarily. Retry, or refresh if the text already appeared.",
+  );
+}
+
+export function isTransientNetworkFetchError(cause: unknown): boolean {
+  if (cause instanceof DOMException && cause.name === "AbortError") return false;
+  const message = (cause instanceof Error ? cause.message : String(cause)).trim();
+  if (TRANSIENT_NETWORK_MESSAGE_RE.test(message)) return true;
+  return message === transientNetworkUserMessage();
+}
 
 const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   readonly pattern: RegExp;
@@ -29,8 +46,16 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
     replacement: "还没有设置模型密钥。请在「模型配置」里保存密钥。",
   },
   {
+    pattern: /API key not found for service "([^"]+)"\. Save it in model settings, or set the environment variable\./g,
+    replacement: "还没有保存「$1」的密钥。请打开「模型配置」保存密钥。",
+  },
+  {
     pattern: /Book "([^"]+)" is locked by an active write(?: \([^)]+\))?\. .*/g,
     replacement: "写入被占用：书「$1」正在被写作任务写入。请等待当前任务结束，或确认没有进行中的任务后使用「强制释放」。",
+  },
+  {
+    pattern: /BACKGROUND_SAVE_DEFERRED/g,
+    replacement: "写作任务还在进行，这次后台保存没写上，等它完成后可以再试",
   },
   {
     pattern: /This in-process lock is not recovered automatically while the holder is still alive\. Abort the running task or POST \/api\/v1\/books\/:id\/lock\/force-release, then retry\./g,
@@ -81,6 +106,9 @@ function stripTechnicalTokens(message: string): string {
 
 export function localizeKnownRuntimeMessage(message: string): string {
   const stripped = stripTechnicalTokens(message);
+  if (TRANSIENT_NETWORK_MESSAGE_RE.test(stripped) || TRANSIENT_NETWORK_MESSAGE_RE.test(message.trim())) {
+    return transientNetworkUserMessage();
+  }
   // Runtime messages arrive in English; in English mode show them as-is.
   if (getAppLanguage() === "en") return stripped;
   let localized = stripped;
