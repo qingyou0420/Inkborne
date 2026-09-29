@@ -46,6 +46,21 @@ function settledFlag(promise: Promise<unknown>): () => boolean {
   return () => done;
 }
 
+/**
+ * Retry budget for cases that must still be in-flight when the assertion runs.
+ * 200 × 15ms stays far longer than the wait below, so a fast CI cannot exhaust it first.
+ */
+const RETRY_WHILE_HELD = { maxAttempts: 200, delayMs: 15 } as const;
+
+async function waitForMoreLockAttempts(
+  acquire: { mock: { calls: readonly unknown[] } },
+  baseline: number,
+): Promise<void> {
+  await vi.waitFor(() => {
+    expect(acquire.mock.calls.length).toBeGreaterThan(baseline);
+  }, { timeout: 2_000, interval: 10 });
+}
+
 describe("background authoring writes share the book lock", () => {
   let projectRoot = "";
   const releases: Array<() => Promise<void>> = [];
@@ -104,9 +119,9 @@ describe("background authoring writes share the book lock", () => {
     const pending = withBackgroundBookWrite(root, "问心候选", async () => {
       entered += 1;
       return "saved";
-    }, { maxAttempts: 6, delayMs: 15 });
+    }, RETRY_WHILE_HELD);
     const done = settledFlag(pending);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await waitForMoreLockAttempts(acquire, foregroundAttempts + 1);
     expect(done()).toBe(false);
     expect(entered).toBe(0);
     expect(acquire.mock.calls.length).toBeGreaterThan(foregroundAttempts + 1);
@@ -118,14 +133,18 @@ describe("background authoring writes share the book lock", () => {
 
   it("stops retrying when the run is cancelled and does not write", async () => {
     const { root, bookId } = await book();
+    const acquire = vi.spyOn(StateManager.prototype, "acquireBookLock");
     await hold(bookId);
+    const heldAttempts = acquire.mock.calls.length;
     const controller = new AbortController();
     let entered = 0;
     const pending = withBackgroundBookWrite(root, "研墨候选", async () => {
       entered += 1;
       return "saved";
-    }, { signal: controller.signal, maxAttempts: 20, delayMs: 30 });
-    setTimeout(() => controller.abort(), 20);
+    }, { ...RETRY_WHILE_HELD, signal: controller.signal });
+    await waitForMoreLockAttempts(acquire, heldAttempts);
+    expect(entered).toBe(0);
+    controller.abort();
     await expect(pending).rejects.toBeInstanceOf(AuthoringRunCancelledError);
     expect(entered).toBe(0);
   });
@@ -142,7 +161,9 @@ describe("background authoring writes share the book lock", () => {
   it("keeps an adopted chapter when a background ask persist lands afterwards", async () => {
     const { root, bookId } = await book();
     const before = await loadManifest(root);
+    const acquire = vi.spyOn(StateManager.prototype, "acquireBookLock");
     await hold(bookId);
+    const heldAttempts = acquire.mock.calls.length;
     let modelReturned = false;
     const llm: AuthoringLlmFn = async () => {
       modelReturned = true;
@@ -156,7 +177,7 @@ describe("background authoring writes share the book lock", () => {
     });
     const done = settledFlag(pending);
     await vi.waitFor(() => expect(modelReturned).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await waitForMoreLockAttempts(acquire, heldAttempts);
     expect(done()).toBe(false);
 
     await saveManifest(root, {
@@ -164,7 +185,7 @@ describe("background authoring writes share the book lock", () => {
       adopted: { ...before.adopted, write: { ...before.adopted.write, "1": "write-adopted-1" } },
       coverage: { ...before.coverage, chaptersWrittenAdopted: 1 },
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitForMoreLockAttempts(acquire, acquire.mock.calls.length);
     expect(done()).toBe(false);
 
     await releases.shift()!();

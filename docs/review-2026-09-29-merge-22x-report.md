@@ -151,3 +151,9 @@
 ### 5. 删掉没人读的上次章节
 
 去掉 `App.tsx` 里对 `rememberLastChapter` 的写入，并删除已无调用方的 `packages/studio/src/lib/last-chapter.ts`。刷新后停在哪一章，仍只由偏好里的 `lastChapters` 决定（`BookDetail.tsx`）。`serial-cockpit` 里「上一章状态」的用例与这个文件无关，保留。
+
+### CI 上的锁重试时间竞争
+
+`09517e8` 的 push 测试里，`authoring-background-lock.test.ts`「前台立即失败、后台重试」失败：`expected true to be false`。该用例给后台落盘 6 次、间隔 15 毫秒，重试窗口大约 75 毫秒，却固定等 80 毫秒再断言 `done()` 仍为 false。机器一快，次数在等待结束前用完，promise 已经 reject。这是用例自己的时间竞争，产品代码没有改。
+
+修法：后台在锁被占用期间的重试改为 200 次、间隔仍是 15 毫秒，窗口远长于观察时间；不再 `sleep` 固定毫秒，而是 `vi.waitFor` 等到 `acquireBookLock` 已被再次调用，再断言仍未结束、回调还没进去。取消用例同样先等到已经重试再 `abort`。问心落盘和采用交错的用例去掉 80 毫秒和 40 毫秒的固定等待，改为模型返回后、以及 `saveManifest` 之后，都等到下一次抢锁且 promise 仍未结束。放锁后仍要成功，且回调只进一次。`authoring-run-abort.test.ts` 本来就是 `vi.waitFor` 等到模型拿到信号再中止，没有这种窗口，未改。
