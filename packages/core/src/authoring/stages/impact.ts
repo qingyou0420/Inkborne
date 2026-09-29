@@ -8,6 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseVolumeMapTree } from "../../utils/volume-map-tree.js";
+import { withBackgroundBookWrite } from "../book-lock.js";
 import { CANON_IMPACT_FIELDS, canonFieldDiff, parseCanon, type CanonFieldChange } from "../canon.js";
 import {
   isConstraintSetting,
@@ -286,41 +287,60 @@ function reminderUnresolved(report: ImpactReport | undefined): boolean {
   return degradedUnresolved(report) || globalsUnresolved(report);
 }
 
+async function saveImpactManifest(
+  root: AuthoringStoreRoot,
+  patch: (manifest: WorkflowManifest) => WorkflowManifest | Promise<WorkflowManifest>,
+  options?: { readonly locked?: boolean },
+): Promise<void> {
+  const write = async () => {
+    const latest = await loadManifest(root);
+    const next = await patch(latest);
+    if (next === latest) return;
+    await saveManifest(root, next);
+  };
+  if (options?.locked) {
+    await write();
+    return;
+  }
+  await withBackgroundBookWrite(root, "影响审查", write);
+}
+
 async function syncImpactWatches(
   root: AuthoringStoreRoot,
   report: ImpactReport,
-  options?: { readonly acknowledgeDegraded?: boolean },
+  options?: { readonly acknowledgeDegraded?: boolean; readonly locked?: boolean },
 ): Promise<void> {
-  const manifest = await loadManifest(root);
-  const counts = openCounts(report.items);
-  const holdDegraded = (degradedUnresolved(report) || globalsUnresolved(report)) && !options?.acknowledgeDegraded;
-  const watches = upsertCanonWatches(manifest, {
-    fromArtifactId: report.from.artifactId,
-    toArtifactId: report.to.artifactId,
-    fromVersion: report.from.version,
-    toVersion: report.to.version,
-    impactReportId: report.impactId,
-  }).map((watch) => {
-    if (watch.sourceKind !== "canon") return watch;
-    const count = watch.stage === "ground" ? counts.ground : watch.stage === "weave" ? counts.weave : 0;
-    const acknowledged = count === 0 && !holdDegraded;
+  await saveImpactManifest(root, (manifest) => {
+    const counts = openCounts(report.items);
+    const holdDegraded = (degradedUnresolved(report) || globalsUnresolved(report)) && !options?.acknowledgeDegraded;
+    const watches = upsertCanonWatches(manifest, {
+      fromArtifactId: report.from.artifactId,
+      toArtifactId: report.to.artifactId,
+      fromVersion: report.from.version,
+      toVersion: report.to.version,
+      impactReportId: report.impactId,
+    }).map((watch) => {
+      if (watch.sourceKind !== "canon") return watch;
+      const count = watch.stage === "ground" ? counts.ground : watch.stage === "weave" ? counts.weave : 0;
+      const acknowledged = count === 0 && !holdDegraded;
+      return {
+        ...watch,
+        openCount: count,
+        acknowledged,
+        label: watch.stage === "ground" || watch.stage === "weave"
+          ? watchLabel(watch.stage, report, counts)
+          : watch.label,
+      };
+    });
+    const allClosed = counts.ground === 0 && counts.weave === 0 && !holdDegraded;
     return {
-      ...watch,
-      openCount: count,
-      acknowledged,
-      label: watch.stage === "ground" || watch.stage === "weave"
-        ? watchLabel(watch.stage, report, counts)
-        : watch.label,
+      ...manifest,
+      watches,
+      impactBaseline: allClosed
+        ? { ask: report.to.artifactId }
+        : (manifest.impactBaseline ?? { ask: report.from.artifactId }),
     };
-  });
-  const allClosed = counts.ground === 0 && counts.weave === 0 && !holdDegraded;
-  await saveManifest(root, {
-    ...manifest,
-    watches,
-    impactBaseline: allClosed
-      ? { ask: report.to.artifactId }
-      : (manifest.impactBaseline ?? { ask: report.from.artifactId }),
-  });
+  }, { locked: options?.locked });
 }
 
 async function persistImpactRun(
@@ -882,10 +902,10 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
     }, input.onProgress);
     const current = await loadCurrentImpact(input.root);
     if (!reminderUnresolved(current)) {
-      const latest = await loadManifest(input.root);
-      const pending = latest.watches.filter((watch) => watch.sourceKind === "canon" && !watch.acknowledged);
-      if (pending.length) {
-        await saveManifest(input.root, {
+      await saveImpactManifest(input.root, (latest) => {
+        const pending = latest.watches.filter((watch) => watch.sourceKind === "canon" && !watch.acknowledged);
+        if (!pending.length) return latest;
+        return {
           ...latest,
           watches: latest.watches.map((watch) => (
             watch.sourceKind === "canon" && !watch.acknowledged
@@ -893,8 +913,8 @@ export async function triageCanonImpact(input: ImpactRuntime): Promise<{
               : watch
           )),
           impactBaseline: { ask: toId },
-        });
-      }
+        };
+      });
     }
     return { unchanged: true };
   }
@@ -1143,7 +1163,7 @@ export async function closeImpactItemsAfterAdopt(
   input: { readonly ground?: readonly string[]; readonly weaveBody?: string; readonly weaveArtifactId?: string },
 ): Promise<ImpactReport | undefined> {
   try {
-    return await closeImpactItems(root, input);
+    return await closeImpactItems(root, input, { locked: true });
   } catch (error) {
     console.warn("[authoring] closeImpactItems after adopt failed", error instanceof Error ? error.message : error);
     return undefined;
@@ -1153,6 +1173,7 @@ export async function closeImpactItemsAfterAdopt(
 export async function closeImpactItems(
   root: AuthoringStoreRoot,
   input: { readonly ground?: readonly string[]; readonly weaveBody?: string; readonly weaveArtifactId?: string },
+  options?: { readonly locked?: boolean },
 ): Promise<ImpactReport | undefined> {
   const current = await loadCurrentImpact(root);
   if (!current) return undefined;
@@ -1215,7 +1236,7 @@ export async function closeImpactItems(
     if (same) return current;
   }
   const saved = await saveImpactReport(root, next);
-  await syncImpactWatches(root, saved);
+  await syncImpactWatches(root, saved, { locked: options?.locked });
   return saved;
 }
 
@@ -1226,17 +1247,15 @@ export async function resolveImpactItems(
   const current = await loadCurrentImpact(root);
   const now = nowIso();
   if (!current) {
-    const manifest = await loadManifest(root);
-    const watches = manifest.watches.map((watch) => (
-      watch.sourceKind === "canon" && !watch.acknowledged
-        ? { ...watch, acknowledged: true, openCount: 0 }
-        : watch
-    ));
-    await saveManifest(root, {
+    await saveImpactManifest(root, (manifest) => ({
       ...manifest,
-      watches,
+      watches: manifest.watches.map((watch) => (
+        watch.sourceKind === "canon" && !watch.acknowledged
+          ? { ...watch, acknowledged: true, openCount: 0 }
+          : watch
+      )),
       impactBaseline: { ask: manifest.adopted.ask ?? manifest.impactBaseline?.ask },
-    });
+    }));
     return undefined;
   }
   const keys = new Set(input.keys ?? current.items.filter((item) => item.status === "open").map((item) => item.key));

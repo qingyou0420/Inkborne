@@ -477,12 +477,12 @@ describe("ground stage", () => {
         });
       }
       names.push(text.includes("夜港") ? "夜港" : "沈砚");
-      await saveRunControl(ctx.root, runId, "cancel");
-      return "沈砚，港口会计。";
+      if (names.length > 1) await saveRunControl(ctx.root, runId, "cancel");
+      return names.length === 1 ? "沈砚，港口会计。" : "夜港不应留下候选。";
     };
     await proposeSettingsCatalog({ ...ctx, llm });
     const result = await generateGroundEntries({ ...ctx, llm, runId });
-    expect(names).toEqual(["沈砚"]);
+    expect(names).toEqual(["沈砚", "夜港"]);
     expect(result.generated).toEqual(["shen"]);
     expect(result.failed).toEqual([]);
     expect((await listRuns(ctx.root)).find((run) => run.runId === runId)?.status).toBe("cancelled");

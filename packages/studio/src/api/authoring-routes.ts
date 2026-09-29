@@ -61,6 +61,7 @@ import {
   reviewGroundEntries,
   reviewWeave,
   reviseAskCanon,
+  abortAuthoringRun,
   requestWriteRunCancel,
   reviseChapterDraft,
   reviseGroundEntry,
@@ -126,7 +127,7 @@ function emitAuthoringRun(deps: AuthoringRouteDeps, root: AuthoringStoreRoot, ru
     status: run.status,
     progressDone: run.progressDone,
     progressTotal: run.progressTotal,
-    error: run.error,
+    error: typeof run.error === "string" ? redactSecrets(run.error) : run.error,
   });
 }
 
@@ -214,11 +215,16 @@ async function readRunForQuery(root: AuthoringStoreRoot, runId: string): Promise
   }
 }
 
+function redactError(error: unknown): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error));
+}
+
 async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: unknown, deps?: AuthoringRouteDeps): Promise<void> {
-  const taskError = error instanceof Error ? error.message : String(error);
+  const taskError = redactError(error);
   const nestedPersist = persistErrorMessage(error);
   const remember = (failed: AuthoringRunRecord & { persistError?: string }, persistError?: unknown) => {
-    const persistText = persistError instanceof Error ? persistError.message : persistError != null ? String(persistError) : nestedPersist;
+    const persistRaw = persistError instanceof Error ? persistError.message : persistError != null ? String(persistError) : nestedPersist;
+    const persistText = persistRaw ? redactSecrets(persistRaw) : persistRaw;
     const overlay = {
       ...failed,
       persistError: persistText,
@@ -248,7 +254,7 @@ async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: 
         if (deps) emitAuthoringRun(deps, root, failed);
         return;
       } catch (persistError) {
-        console.error("authoring run persist failed", runId, taskError, persistError);
+        console.error("authoring run persist failed", runId, taskError, redactError(persistError));
         remember(failed, persistError);
         return;
       }
@@ -259,7 +265,7 @@ async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: 
     }
     if (deps) emitAuthoringRun(deps, root, current);
   } catch (persistError) {
-    console.error("authoring run failure status unavailable", runId, taskError, persistError);
+    console.error("authoring run failure status unavailable", runId, taskError, redactError(persistError));
     remember(abnormalRun(root, runId, taskError, nestedPersist ?? (persistError instanceof Error ? persistError.message : String(persistError))));
   }
 }
@@ -349,7 +355,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       .then(() => announce ? announceRun(deps, root, runId) : undefined)
       .catch((error: unknown) => recordRunFailure(root, runId, error, deps))
       .catch((error: unknown) => {
-        console.error("authoring background work unhandled", runId, error);
+        console.error("authoring background work unhandled", runId, redactError(error));
       })
       .finally(() => { activeRunIds.delete(runId); });
   };
@@ -590,7 +596,7 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const body = await c.req.json<{ bookId?: string; draftId?: string }>().catch(() => ({}));
     const root = storeRoot(deps.root, body);
     const runId = c.req.param("runId");
-    requestWriteRunCancel(runId);
+    if (!abortAuthoringRun(root.bookId, runId)) requestWriteRunCancel(runId);
     if (activeRunIds.has(runId)) {
       await saveRunControl(root, runId, "cancel");
       return c.json({ ok: true, action: "cancel" });

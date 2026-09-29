@@ -1,10 +1,10 @@
 /** SPDX-License-Identifier: AGPL-3.0-only */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadRun, ProjectConfigSchema, SessionAlreadyMigratedError } from "@actalk/inkos-core";
+import { beginAuthoringRun, endAuthoringRun, loadRun, ProjectConfigSchema, SessionAlreadyMigratedError } from "@actalk/inkos-core";
 import { AUTHORING_ORPHAN_RUN_ERROR, registerAuthoringRoutes } from "./authoring-routes.js";
 
 const mocks = vi.hoisted(() => ({
@@ -161,6 +161,87 @@ it("saves a running record before a wait=false core throw and then records failu
     expect(run).toMatchObject({ status: "failed", error: "模型在首个 await 前就失败了" });
   });
   expect(events.some((entry) => entry.event === "authoring:run" && (entry.data as { status?: string }).status === "failed")).toBe(true);
+  await rm(root, { recursive: true, force: true });
+});
+
+it("redacts a secret from the failed run file and the authoring:run event", async () => {
+  const secret = "sk-FAKEKEY1234567890";
+  mocks.askGenerate.mockImplementation(() => {
+    throw new Error(`provider rejected ${secret}`);
+  });
+  const { app, root, events } = await appWithRoot();
+  const response = await app.request("/api/v1/authoring/ask/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bookId: "b", conversation: "聊" }),
+  });
+  expect(response.status).toBe(200);
+  const started = await response.json() as { runId: string };
+  await vi.waitFor(async () => {
+    const run = await loadRun({ projectRoot: root, bookId: "b" }, started.runId);
+    expect(run?.status).toBe("failed");
+  });
+  const run = await loadRun({ projectRoot: root, bookId: "b" }, started.runId);
+  expect(run?.error).toContain("已隐藏");
+  expect(run?.error).not.toContain(secret);
+  const raw = await readFile(join(root, "books", "b", "story", "workflow", "runs", `${started.runId}.json`), "utf-8");
+  expect(raw).not.toContain(secret);
+  expect(raw).toContain("已隐藏");
+  const failed = events.filter((entry) => entry.event === "authoring:run" && (entry.data as { status?: string }).status === "failed");
+  expect(failed.length).toBeGreaterThan(0);
+  expect(JSON.stringify(failed)).not.toContain(secret);
+  expect(JSON.stringify(failed)).toContain("已隐藏");
+  await rm(root, { recursive: true, force: true });
+});
+
+it("redacts a secret from the failure log when the run file cannot be read", async () => {
+  const secret = "sk-FAKEKEY1234567890";
+  const logged: unknown[][] = [];
+  const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    logged.push(args);
+  });
+  try {
+    const { app, root } = await appWithRoot();
+    mocks.askGenerate.mockImplementation(async () => {
+      const dir = join(root, "books", "b", "story", "workflow", "runs");
+      const files = await readdir(dir);
+      const runFile = files.find((file) => file.endsWith(".json") && !file.endsWith(".control.json"));
+      if (runFile) {
+        const path = join(dir, runFile);
+        await rm(path);
+        await mkdir(path);
+      }
+      throw new Error(`provider rejected ${secret}`);
+    });
+    const response = await app.request("/api/v1/authoring/ask/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bookId: "b", conversation: "聊" }),
+    });
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(logged.some((args) => String(args[0]).includes("authoring run failure status unavailable"))).toBe(true);
+    });
+    const text = JSON.stringify(logged);
+    expect(text).not.toContain(secret);
+    expect(text).toContain("已隐藏");
+    await rm(root, { recursive: true, force: true });
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("aborts the registered run signal when the cancel route is called", async () => {
+  const { app, root } = await appWithRoot();
+  const signal = beginAuthoringRun("b", "run-live");
+  const response = await app.request("/api/v1/authoring/runs/run-live/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bookId: "b" }),
+  });
+  expect(response.status).toBe(200);
+  expect(signal.aborted).toBe(true);
+  endAuthoringRun("b", "run-live");
   await rm(root, { recursive: true, force: true });
 });
 

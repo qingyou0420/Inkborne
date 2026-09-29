@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { persistAdoptedChapter, chapterFileName, findChapterRelativePath, resolveChapterDisplayTitle, titleFromChapterFileName } from "../chapter-index.js";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { withBookWriteLock } from "../book-lock.js";
+import { abortAuthoringRun, beginAuthoringRun, endAuthoringRun } from "../run-abort.js";
 import {
   assembleAuthoringContext,
   invalidateChapterState,
@@ -99,14 +100,9 @@ export interface WriteDraftResult {
   readonly usage?: AuthoringTokenUsage;
 }
 
-const activeWriteRuns = new Map<string, AbortController>();
-
 /** Stop an in-flight 落笔 generate/revise. No-op if that run is not writing. */
 export function requestWriteRunCancel(runId: string): boolean {
-  const controller = activeWriteRuns.get(runId);
-  if (!controller) return false;
-  controller.abort();
-  return true;
+  return abortAuthoringRun(undefined, runId);
 }
 
 function mergeAbort(lockSignal: AbortSignal, local: AbortSignal): AbortSignal {
@@ -249,9 +245,8 @@ async function streamChapterText(input: {
   readonly meta: (runId: string) => Omit<AuthoringArtifactMeta, "artifactId">;
 }): Promise<WriteDraftResult> {
   const runId = input.runId ?? newRunId();
-  const local = new AbortController();
-  activeWriteRuns.set(runId, local);
-  const signal = mergeAbort(input.lockSignal, local.signal);
+  const runSignal = beginAuthoringRun(input.root.bookId, runId);
+  const signal = mergeAbort(input.lockSignal, runSignal);
   const createdAt = new Date().toISOString();
   const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
   const system = composeWriteSystemPrompt(input.resolved.instructions, voice);
@@ -413,7 +408,7 @@ async function streamChapterText(input: {
     }
     throw error;
   } finally {
-    activeWriteRuns.delete(runId);
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 
@@ -834,7 +829,7 @@ async function settleAdoptedChapterInner(input: WriteRuntime & {
   readonly settle?: AuthoringLlmFn;
   readonly runId?: string;
   readonly onProgress?: (run: AuthoringRunRecord) => void;
-}, signal: AbortSignal): Promise<{ settled: boolean; settleError?: string; runId: string }> {
+}, lockSignal: AbortSignal): Promise<{ settled: boolean; settleError?: string; runId: string }> {
   const loaded = await loadArtifact(input.root, input.artifactId);
   if (!loaded) throw new Error("找不到要整理状态的正文。");
   if (!input.root.bookId) throw new Error("整理状态需要已建的书。");
@@ -843,6 +838,9 @@ async function settleAdoptedChapterInner(input: WriteRuntime & {
   const bookDir = join(input.root.projectRoot, "books", input.root.bookId);
   const resolved = await resolve(input.project, "write.main", input.root.projectRoot);
   const runId = input.runId ?? newRunId();
+  const runSignal = beginAuthoringRun(input.root.bookId, runId);
+  const signal = mergeAbort(lockSignal, runSignal);
+  try {
   const startedAt = new Date().toISOString();
   const running = {
     runId,
@@ -907,6 +905,9 @@ async function settleAdoptedChapterInner(input: WriteRuntime & {
       progressLabel: "状态整理未完成",
     }, error, input.onProgress);
     return { settled: false, settleError, runId };
+  }
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 

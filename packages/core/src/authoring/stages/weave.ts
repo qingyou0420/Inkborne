@@ -7,7 +7,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
-import { withBookWriteLock } from "../book-lock.js";
+import { withBackgroundBookWrite, withBookWriteLock } from "../book-lock.js";
 import {
   applyVolumeMapNodeEdit,
   findExactChapterNode,
@@ -611,16 +611,18 @@ async function persistWeaveCandidate(input: {
     leadingNotes: input.leadingNotes ?? "",
   }, null, 2)}\n`);
   const generatedCount = input.beats.filter((beat) => beat.summary && beat.summary !== "（待补概要）").length;
-  const manifest = await loadManifest(input.root);
-  await saveManifest(input.root, {
-    ...manifest,
-    candidates: { ...manifest.candidates, weave: artifactId },
-    coverage: {
-      ...manifest.coverage,
-      chaptersGenerated: generatedCount,
-      chaptersTarget: Math.max(manifest.coverage.chaptersTarget ?? 0, input.targetChapters ?? 0, input.end),
-    },
-    lastRunId: input.runId,
+  await withBackgroundBookWrite(input.root, "织卷候选", async () => {
+    const manifest = await loadManifest(input.root);
+    await saveManifest(input.root, {
+      ...manifest,
+      candidates: { ...manifest.candidates, weave: artifactId },
+      coverage: {
+        ...manifest.coverage,
+        chaptersGenerated: generatedCount,
+        chaptersTarget: Math.max(manifest.coverage.chaptersTarget ?? 0, input.targetChapters ?? 0, input.end),
+      },
+      lastRunId: input.runId,
+    });
   });
   return artifactId;
 }
@@ -748,7 +750,7 @@ export async function generateWeaveStructure(input: WeaveRuntime & {
     });
     return { artifactId, runId, volumes, bookOutline };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactSecrets(error instanceof Error ? error.message : String(error));
     await saveRun(input.root, {
       runId,
       stage: "weave",
@@ -1039,7 +1041,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
     }
     const remaining = holesInRange(collected, requestedStart, requestedEnd);
     await saveRun(input.root, writeCheckpoint(remaining.length && rangeFilled(beats, requestedStart, requestedEnd).length ? "partial" : remaining.length ? "failed" : "completed", {
-      error: error instanceof Error ? error.message : String(error),
+      error: redactSecrets(error instanceof Error ? error.message : String(error)),
       remaining,
     }));
     await writeWeaveDiagnostics(input.root, runId, raw);
@@ -1123,7 +1125,7 @@ export async function reviewWeave(input: WeaveRuntime & {
       roleId: "weave.review",
       status: "failed",
       bookId: input.root.bookId,
-      error: error instanceof Error ? error.message : String(error),
+      error: redactSecrets(error instanceof Error ? error.message : String(error)),
       progressLabel: "审查失败",
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: [],
@@ -1283,8 +1285,10 @@ async function reviseWeaveChapters(
         createdAt: new Date().toISOString(), runId,
       };
       await saveArtifact(input.root, nextMeta, nextMarkdown);
-      const manifest = await loadManifest(input.root);
-      await saveManifest(input.root, { ...manifest, candidates: { ...manifest.candidates, weave: nextId } });
+      await withBackgroundBookWrite(input.root, "织卷候选", async () => {
+        const manifest = await loadManifest(input.root);
+        await saveManifest(input.root, { ...manifest, candidates: { ...manifest.candidates, weave: nextId } });
+      });
       latest = { meta: nextMeta, body: nextMarkdown };
       markdown = nextMarkdown;
       artifactId = nextId;
@@ -1294,7 +1298,7 @@ async function reviseWeaveChapters(
     await saveProgress("completed");
     return artifactId || original.meta.artifactId;
   } catch (error) {
-    const cause = error instanceof Error ? error.message : String(error);
+    const cause = redactSecrets(error instanceof Error ? error.message : String(error));
     const message = `第 ${batchLabel} 章修订失败：${cause}。已保留原规划${completed.size ? "和已完成的修订，可继续剩余修订" : "，请重试修订"}。`;
     await saveProgress(completed.size ? "partial" : "failed", message);
     await writeWeaveDiagnostics(input.root, runId, text);
@@ -1423,7 +1427,7 @@ export async function reviseWeave(input: WeaveRuntime & {
     });
     return artifactId;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactSecrets(error instanceof Error ? error.message : String(error));
     await saveRun(input.root, {
       runId,
       stage: "weave",

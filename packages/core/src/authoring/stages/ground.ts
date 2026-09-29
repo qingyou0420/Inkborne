@@ -6,7 +6,10 @@
 
 import { join } from "node:path";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
-import { withBookWriteLock } from "../book-lock.js";
+import { withBackgroundBookWrite, withBookWriteLock } from "../book-lock.js";
+import { beginAuthoringRun, endAuthoringRun, isAuthoringRunAbort } from "../run-abort.js";
+import { isBookWriteLockError } from "../../state/manager.js";
+import { redactSecrets } from "../../utils/redact-secrets.js";
 import {
   assertAdoptedCanonReady,
   assembleAuthoringContext,
@@ -21,6 +24,7 @@ import { combineAuthoringUsage } from "../token-usage.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
 import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
+  AuthoringRunCancelledError,
   loadArtifact,
   loadManifest,
   loadReport,
@@ -184,12 +188,15 @@ export async function proposeSettingsCatalog(input: GroundRuntime): Promise<Sett
       : `story/settings/${id}.md`;
     return { id, category, name, file, archived: false };
   });
-  const catalog = {
-    categories: categories.length ? categories : (existing.categories.length ? existing.categories : DEFAULT_CATEGORIES),
-    entries: mergeCatalogIdentities(proposed, existing),
-  };
-  await saveSettingsCatalog(input.root, catalog);
-  return catalog;
+  return withBackgroundBookWrite(input.root, "研墨目录", async () => {
+    const latest = await loadSettingsCatalog(input.root);
+    const catalog = {
+      categories: categories.length ? categories : (latest.categories.length ? latest.categories : DEFAULT_CATEGORIES),
+      entries: mergeCatalogIdentities(proposed, latest),
+    };
+    await saveSettingsCatalog(input.root, catalog);
+    return catalog;
+  });
 }
 
 export async function generateGroundEntries(input: GroundRuntime & {
@@ -215,8 +222,11 @@ export async function generateGroundEntries(input: GroundRuntime & {
   const failed: string[] = [];
   let usage: AuthoringTokenUsage | undefined;
   const failedReasons: string[] = [];
+  const produced = new Map<string, string>();
   const startedAt = new Date().toISOString();
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   const persistRun = async (status: AuthoringRunRecord["status"], extra?: { error?: string }) => {
+    const rawError = extra?.error ?? (failedReasons.length ? failedReasons.join("；") : undefined);
     const record = {
       runId,
       stage: "ground" as const,
@@ -231,7 +241,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
         : "没有需要生成的条目",
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: generated,
-      error: extra?.error ?? (failedReasons.length ? failedReasons.join("；") : undefined),
+      error: rawError ? redactSecrets(rawError) : undefined,
       ...(usage ? { usage } : {}),
       createdAt: startedAt,
       updatedAt: new Date().toISOString(),
@@ -239,11 +249,33 @@ export async function generateGroundEntries(input: GroundRuntime & {
     await saveRun(input.root, record);
     input.onProgress?.(record);
   };
+  const persistCandidates = async () => {
+    await withBackgroundBookWrite(input.root, "研墨候选", async () => {
+      const latest = await loadSettingsCatalog(input.root);
+      const entries = latest.entries.map((entry) => {
+        const candidate = produced.get(entry.id);
+        return candidate ? { ...entry, candidateArtifactId: candidate } : entry;
+      });
+      const next = { ...latest, entries };
+      await saveSettingsCatalog(input.root, next);
+      const manifest = await loadManifest(input.root);
+      await saveManifest(input.root, {
+        ...manifest,
+        coverage: {
+          ...manifest.coverage,
+          settingsGenerated: next.entries.filter((entry) => entry.candidateArtifactId || entry.adoptedArtifactId).length,
+          settingsAdopted: next.entries.filter((entry) => entry.adoptedArtifactId).length,
+          settingsTarget: next.entries.filter((entry) => !entry.archived).length,
+        },
+        lastRunId: runId,
+      });
+    }, { signal });
+  };
+  try {
   await persistRun("running");
   for (const entry of targets) {
-    if (await loadRunControl(input.root, runId) === "cancel") {
+    if (signal.aborted || await loadRunControl(input.root, runId) === "cancel") {
       await persistRun("cancelled");
-      await saveSettingsCatalog(input.root, catalog);
       return { generated, failed, runId };
     }
     try {
@@ -258,28 +290,59 @@ export async function generateGroundEntries(input: GroundRuntime & {
         "只写这一条，不要改其他条目。",
         input.requirements ? `作者本次要求：\n${input.requirements}` : "",
         prior ? `当前设定（按本次要求保留或调整）：\n${prior.body}` : "",
-      ].filter(Boolean).join("\n"), { llm: input.llm });
+      ].filter(Boolean).join("\n"), { llm: input.llm, signal });
       usage = combineAuthoringUsage(usage, observed.usage);
       const text = observed.content;
+      if (signal.aborted || await loadRunControl(input.root, runId) === "cancel") {
+        await persistRun("cancelled");
+        return { generated, failed, runId };
+      }
       const artifactId = newArtifactId("ground", entry.id);
-      await saveArtifact(input.root, {
-        artifactId,
-        stage: "ground",
-        scope: entry.id,
-        version: 1,
-        source: "generate",
-        status: "candidate",
-        bodyPath: entry.file,
-        inputRefs: [{ kind: "canon", id: "canon" }, ...ctx.refs],
-        createdAt: new Date().toISOString(),
-        runId,
-        label: entry.name,
-      }, text);
+      await withBackgroundBookWrite(input.root, "研墨候选", async () => {
+        if (signal.aborted || await loadRunControl(input.root, runId) === "cancel") {
+          throw new AuthoringRunCancelledError();
+        }
+        await saveArtifact(input.root, {
+          artifactId,
+          stage: "ground",
+          scope: entry.id,
+          version: 1,
+          source: "generate",
+          status: "candidate",
+          bodyPath: entry.file,
+          inputRefs: [{ kind: "canon", id: "canon" }, ...ctx.refs],
+          createdAt: new Date().toISOString(),
+          runId,
+          label: entry.name,
+        }, text);
+        const latest = await loadSettingsCatalog(input.root);
+        const entries = latest.entries.map((item) => (
+          item.id === entry.id ? { ...item, candidateArtifactId: artifactId } : item
+        ));
+        const next = { ...latest, entries };
+        await saveSettingsCatalog(input.root, next);
+        const manifest = await loadManifest(input.root);
+        await saveManifest(input.root, {
+          ...manifest,
+          coverage: {
+            ...manifest.coverage,
+            settingsGenerated: next.entries.filter((item) => item.candidateArtifactId || item.adoptedArtifactId).length,
+            settingsAdopted: next.entries.filter((item) => item.adoptedArtifactId).length,
+            settingsTarget: next.entries.filter((item) => !item.archived).length,
+          },
+          lastRunId: runId,
+        });
+        produced.set(entry.id, artifactId);
+      }, { signal });
       entry.candidateArtifactId = artifactId;
       generated.push(entry.id);
-      await saveSettingsCatalog(input.root, catalog);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      if (isAuthoringRunAbort(error, signal)) {
+        await persistRun("cancelled");
+        return { generated, failed, runId };
+      }
+      if (isBookWriteLockError(error)) throw error;
+      const message = redactSecrets(error instanceof Error ? error.message : String(error));
       failed.push(entry.id);
       failedReasons.push(`${entry.name}：${message}`);
     }
@@ -289,19 +352,11 @@ export async function generateGroundEntries(input: GroundRuntime & {
     );
   }
   if (targets.length === 0) await persistRun("completed");
-  await saveSettingsCatalog(input.root, catalog);
-  const manifest = await loadManifest(input.root);
-  await saveManifest(input.root, {
-    ...manifest,
-    coverage: {
-      ...manifest.coverage,
-      settingsGenerated: catalog.entries.filter((entry) => entry.candidateArtifactId || entry.adoptedArtifactId).length,
-      settingsAdopted: catalog.entries.filter((entry) => entry.adoptedArtifactId).length,
-      settingsTarget: catalog.entries.filter((entry) => !entry.archived).length,
-    },
-    lastRunId: runId,
-  });
+  if (produced.size === 0) await persistCandidates();
   return { generated, failed, runId };
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
+  }
 }
 
 export async function reviewGroundEntries(input: GroundRuntime & {
@@ -407,6 +462,7 @@ export async function reviseGroundEntry(input: GroundRuntime & {
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
   const artifactIds: string[] = [];
   const entryIds: string[] = [];
+  const revised = new Map<string, string>();
   for (const [entryId, issues] of groups) {
     const entry = catalog.entries.find((item) => item.id === entryId);
     const artifactId = entry?.candidateArtifactId ?? entry?.adoptedArtifactId;
@@ -435,11 +491,21 @@ export async function reviseGroundEntry(input: GroundRuntime & {
       createdAt: new Date().toISOString(),
       label: entry.name,
     }, text);
-    entry.candidateArtifactId = nextId;
     artifactIds.push(nextId);
     entryIds.push(entry.id);
+    revised.set(entry.id, nextId);
   }
-  await saveSettingsCatalog(input.root, catalog);
+  if (revised.size === 0) return { artifactIds, entryIds };
+  await withBackgroundBookWrite(input.root, "研墨候选", async () => {
+    const latest = await loadSettingsCatalog(input.root);
+    await saveSettingsCatalog(input.root, {
+      ...latest,
+      entries: latest.entries.map((item) => {
+        const candidate = revised.get(item.id);
+        return candidate ? { ...item, candidateArtifactId: candidate } : item;
+      }),
+    });
+  });
   return { artifactIds, entryIds };
 }
 

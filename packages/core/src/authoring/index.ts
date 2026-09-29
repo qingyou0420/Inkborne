@@ -9,6 +9,7 @@ export * from "./model-config.js";
 export * from "./canon.js";
 export * from "./store.js";
 export * from "./book-lock.js";
+export * from "./run-abort.js";
 export * from "./serial-ledger.js";
 export * from "./context.js";
 export * from "./review.js";

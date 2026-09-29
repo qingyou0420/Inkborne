@@ -7,7 +7,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { withBookWriteLock } from "../book-lock.js";
+import { withBackgroundBookWrite, withBookWriteLock } from "../book-lock.js";
+import { beginAuthoringRun, endAuthoringRun, isAuthoringRunAbort } from "../run-abort.js";
 import { parseCanon, serializeCanon } from "../canon.js";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { loadCanonDocument } from "../context.js";
@@ -23,6 +24,7 @@ import {
   loadManifest,
   loadReport,
   loadRun,
+  loadRunControl,
   newArtifactId,
   newRunId,
   saveArtifact,
@@ -323,8 +325,11 @@ async function prepareExistingAskCanon(root: AuthoringStoreRoot): Promise<Prepar
     createdAt: new Date().toISOString(),
     label: "正典 v1",
   }, body);
-  const manifest = await loadManifest(root);
-  await saveManifest(root, { ...manifest, candidates: { ...manifest.candidates, ask: artifactId } });
+  await withBackgroundBookWrite(root, "问心候选", async () => {
+    const manifest = await loadManifest(root);
+    if (manifest.candidates.ask || manifest.adopted.ask) return;
+    await saveManifest(root, { ...manifest, candidates: { ...manifest.candidates, ask: artifactId } });
+  });
   return { meta, body };
 }
 
@@ -395,37 +400,44 @@ export async function generateAskCanon(input: AskRuntime & {
     authorContext.prompt,
   ].filter(Boolean).join("\n");
   let usage: AuthoringTokenUsage | undefined;
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   try {
     await throwIfRunCancelled(input.root, runId);
-    const observed = await completeRoleObserved(resolved, prompt, { llm: input.llm });
+    const observed = await completeRoleObserved(resolved, prompt, { llm: input.llm, signal });
     usage = observed.usage;
     const text = observed.content;
     await throwIfRunCancelled(input.root, runId);
+    if (signal.aborted) throw new AuthoringRunCancelledError();
     const canon = canonFromJson(extractJsonObject(text), baseCanon);
     const body = serializeCanon(canon);
     const version = (parent?.meta.version ?? 0) + 1;
     const artifactId = newArtifactId("ask", "canon");
-    await saveArtifact(input.root, {
-      artifactId,
-      stage: "ask",
-      scope: "canon",
-      version,
-      parentVersion: parent?.meta.version,
-      parentArtifactId: parent?.meta.artifactId,
-      source: "generate",
-      status: "candidate",
-      bodyPath: `artifacts/${artifactId}/body.md`,
-      inputRefs: [],
-      createdAt: new Date().toISOString(),
-      runId,
-      label: `正典 v${version}`,
-    }, body);
-    const nextManifest = await loadManifest(input.root);
-    await saveManifest(input.root, {
-      ...nextManifest,
-      candidates: { ...nextManifest.candidates, ask: artifactId },
-      lastRunId: runId,
-    });
+    await withBackgroundBookWrite(input.root, "问心候选", async () => {
+      if (signal.aborted || await loadRunControl(input.root, runId) === "cancel") {
+        throw new AuthoringRunCancelledError();
+      }
+      await saveArtifact(input.root, {
+        artifactId,
+        stage: "ask",
+        scope: "canon",
+        version,
+        parentVersion: parent?.meta.version,
+        parentArtifactId: parent?.meta.artifactId,
+        source: "generate",
+        status: "candidate",
+        bodyPath: `artifacts/${artifactId}/body.md`,
+        inputRefs: [],
+        createdAt: new Date().toISOString(),
+        runId,
+        label: `正典 v${version}`,
+      }, body);
+      const nextManifest = await loadManifest(input.root);
+      await saveManifest(input.root, {
+        ...nextManifest,
+        candidates: { ...nextManifest.candidates, ask: artifactId },
+        lastRunId: runId,
+      });
+    }, { signal });
     const completed = {
       runId,
       stage: "ask" as const,
@@ -444,13 +456,13 @@ export async function generateAskCanon(input: AskRuntime & {
     await persistAskRun(input.root, completed, input.onProgress);
     return { artifactId, version, canon, runId };
   } catch (error) {
-    if (error instanceof AuthoringRunCancelledError) {
+    if (isAuthoringRunAbort(error, signal)) {
       await persistAskRun(input.root, {
         ...running,
         status: "cancelled",
         progressLabel: "已放弃这次整理",
       }, input.onProgress);
-      throw error;
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
     }
     const failed = {
       runId,
@@ -470,6 +482,8 @@ export async function generateAskCanon(input: AskRuntime & {
     };
     await persistFailedAskRun(input.root, failed, error, input.onProgress);
     throw error;
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 
@@ -599,33 +613,41 @@ export async function reviseAskCanon(input: AskRuntime & {
     "当前正典：",
     loaded.body,
   ].filter(Boolean).join("\n");
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   try {
     await throwIfRunCancelled(input.root, runId);
-    const observed = await completeRoleObserved(resolved, prompt, { llm: input.llm });
+    const observed = await completeRoleObserved(resolved, prompt, { llm: input.llm, signal });
     const text = observed.content;
     await throwIfRunCancelled(input.root, runId);
+    if (signal.aborted) throw new AuthoringRunCancelledError();
     const canon = canonFromJson(extractJsonObject(text), parseCanon(loaded.body));
     const version = loaded.meta.version + 1;
     const artifactId = newArtifactId("ask", "canon");
-    await saveArtifact(input.root, {
-      artifactId,
-      stage: "ask",
-      scope: "canon",
-      version,
-      parentVersion: loaded.meta.version,
-      parentArtifactId: loaded.meta.artifactId,
-      source: "revise",
-      status: "candidate",
-      bodyPath: `artifacts/${artifactId}/body.md`,
-      inputRefs: [{ kind: "report", id: report.reportId }],
-      createdAt: new Date().toISOString(),
-      label: `正典 v${version}`,
-    }, serializeCanon(canon));
-    const manifest = await loadManifest(input.root);
-    await saveManifest(input.root, {
-      ...manifest,
-      candidates: { ...manifest.candidates, ask: artifactId },
-    });
+    const body = serializeCanon(canon);
+    await withBackgroundBookWrite(input.root, "问心候选", async () => {
+      if (signal.aborted || await loadRunControl(input.root, runId) === "cancel") {
+        throw new AuthoringRunCancelledError();
+      }
+      await saveArtifact(input.root, {
+        artifactId,
+        stage: "ask",
+        scope: "canon",
+        version,
+        parentVersion: loaded.meta.version,
+        parentArtifactId: loaded.meta.artifactId,
+        source: "revise",
+        status: "candidate",
+        bodyPath: `artifacts/${artifactId}/body.md`,
+        inputRefs: [{ kind: "report", id: report.reportId }],
+        createdAt: new Date().toISOString(),
+        label: `正典 v${version}`,
+      }, body);
+      const manifest = await loadManifest(input.root);
+      await saveManifest(input.root, {
+        ...manifest,
+        candidates: { ...manifest.candidates, ask: artifactId },
+      });
+    }, { signal });
     const completed = {
       ...running,
       status: "completed" as const,
@@ -636,13 +658,13 @@ export async function reviseAskCanon(input: AskRuntime & {
     await persistAskRun(input.root, completed, input.onProgress);
     return { artifactId, version, canon, runId };
   } catch (error) {
-    if (error instanceof AuthoringRunCancelledError) {
+    if (isAuthoringRunAbort(error, signal)) {
       await persistAskRun(input.root, {
         ...running,
         status: "cancelled",
         progressLabel: "已放弃这次修订",
       }, input.onProgress);
-      throw error;
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
     }
     const failed = {
       ...running,
@@ -652,6 +674,8 @@ export async function reviseAskCanon(input: AskRuntime & {
     };
     await persistFailedAskRun(input.root, failed, error, input.onProgress);
     throw error;
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 
