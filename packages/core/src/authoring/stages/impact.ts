@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseVolumeMapTree } from "../../utils/volume-map-tree.js";
-import { withBackgroundBookWrite } from "../book-lock.js";
+import { bookWriteLockHeld, BookWriteLockNotHeldError, withBackgroundBookWrite } from "../book-lock.js";
 import { CANON_IMPACT_FIELDS, canonFieldDiff, parseCanon, type CanonFieldChange } from "../canon.js";
 import {
   isConstraintSetting,
@@ -18,6 +18,7 @@ import {
 } from "../context.js";
 import { asString, asStringArray, extractJsonObject } from "../json.js";
 import { completeRole } from "../llm.js";
+import { redactSecrets } from "../../utils/redact-secrets.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
 import {
   AuthoringRunCancelledError,
@@ -299,6 +300,10 @@ async function saveImpactManifest(
     await saveManifest(root, next);
   };
   if (options?.locked) {
+    // A second acquire on this book fails immediately, so do not take the lock again.
+    if (root.bookId && !bookWriteLockHeld(root.projectRoot, root.bookId)) {
+      throw new BookWriteLockNotHeldError(root.bookId);
+    }
     await write();
     return;
   }
@@ -1165,7 +1170,10 @@ export async function closeImpactItemsAfterAdopt(
   try {
     return await closeImpactItems(root, input, { locked: true });
   } catch (error) {
-    console.warn("[authoring] closeImpactItems after adopt failed", error instanceof Error ? error.message : error);
+    console.warn(
+      "[authoring] closeImpactItems after adopt failed",
+      redactSecrets(error instanceof Error ? error.message : String(error)),
+    );
     return undefined;
   }
 }

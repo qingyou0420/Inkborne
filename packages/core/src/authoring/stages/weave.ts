@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { withBackgroundBookWrite, withBookWriteLock } from "../book-lock.js";
@@ -45,6 +45,7 @@ import {
 } from "../store.js";
 import { WorkflowManifestSchema, type AuthoringArtifactMeta, type AuthoringLlmFn, type AuthoringReviewReport, type AuthoringRunRecord, type AuthoringTokenUsage, type InputRef } from "../types.js";
 import type { ProjectConfig } from "../../models/project.js";
+import { forgetWorkflowArtifact } from "../workflow-index.js";
 import { closeImpactItemsAfterAdopt } from "./impact.js";
 
 export interface WeaveRuntime {
@@ -549,6 +550,31 @@ function composeAuthoringPreamble(base: string | undefined, generated: string): 
   return [...new Set([author, generated].filter(Boolean))].join("\n\n");
 }
 
+/** Remove a draft whose pointer update threw, unless the manifest already names it. */
+async function discardUnreferencedWeaveDraft(root: AuthoringStoreRoot, artifactId: string): Promise<void> {
+  try {
+    const manifest = await loadManifest(root);
+    if (manifest.candidates.weave === artifactId || manifest.adopted.weave === artifactId) return;
+  } catch {
+    /* still remove the draft we just wrote; the pointer update did not finish */
+  }
+  await rm(join(authoringRootDir(root), "artifacts", artifactId), { recursive: true, force: true }).catch(() => undefined);
+  await forgetWorkflowArtifact(authoringRootDir(root), artifactId).catch(() => undefined);
+}
+
+async function commitWeaveCandidatePointer(
+  root: AuthoringStoreRoot,
+  artifactId: string,
+  write: () => Promise<void>,
+): Promise<void> {
+  try {
+    await write();
+  } catch (error) {
+    await discardUnreferencedWeaveDraft(root, artifactId);
+    throw error;
+  }
+}
+
 async function persistWeaveCandidate(input: {
   readonly root: AuthoringStoreRoot;
   readonly beats: readonly WeaveChapterBeat[];
@@ -611,7 +637,7 @@ async function persistWeaveCandidate(input: {
     leadingNotes: input.leadingNotes ?? "",
   }, null, 2)}\n`);
   const generatedCount = input.beats.filter((beat) => beat.summary && beat.summary !== "（待补概要）").length;
-  await withBackgroundBookWrite(input.root, "织卷候选", async () => {
+  await commitWeaveCandidatePointer(input.root, artifactId, () => withBackgroundBookWrite(input.root, "织卷候选", async () => {
     const manifest = await loadManifest(input.root);
     await saveManifest(input.root, {
       ...manifest,
@@ -623,7 +649,7 @@ async function persistWeaveCandidate(input: {
       },
       lastRunId: input.runId,
     });
-  });
+  }));
   return artifactId;
 }
 
@@ -1285,10 +1311,10 @@ async function reviseWeaveChapters(
         createdAt: new Date().toISOString(), runId,
       };
       await saveArtifact(input.root, nextMeta, nextMarkdown);
-      await withBackgroundBookWrite(input.root, "织卷候选", async () => {
+      await commitWeaveCandidatePointer(input.root, nextId, () => withBackgroundBookWrite(input.root, "织卷候选", async () => {
         const manifest = await loadManifest(input.root);
         await saveManifest(input.root, { ...manifest, candidates: { ...manifest.candidates, weave: nextId } });
-      });
+      }));
       latest = { meta: nextMeta, body: nextMarkdown };
       markdown = nextMarkdown;
       artifactId = nextId;

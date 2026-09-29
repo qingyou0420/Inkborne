@@ -7,6 +7,7 @@
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { localizeKnownRuntimeMessage } from "../lib/error-copy.js";
 import {
   AUTHORING_ROLE_IDS,
   AUTHORING_ROLE_META,
@@ -23,6 +24,7 @@ import {
   fillMissingAuthoringRoles,
   generateAskCanon,
   formatBookWriteLockCopy,
+  isBackgroundSaveDeferredError,
   generateChapterDraft,
   generateGroundEntries,
   isBookWriteLockError,
@@ -86,10 +88,22 @@ interface AuthoringRouteDeps {
   readonly broadcast?: (event: string, data: unknown) => void;
 }
 
+function presentAuthoringError(error: string): string {
+  if (!error.includes("BACKGROUND_SAVE_DEFERRED")) return error;
+  return localizeKnownRuntimeMessage(error);
+}
+
 function streamFailure(error: unknown): string {
   const record = error && typeof error === "object" ? error as { artifactId?: unknown; saved?: unknown } : {};
   const artifactId = typeof record.artifactId === "string" ? record.artifactId : "";
   const saved = artifactId ? true : record.saved === false ? false : undefined;
+  if (isBackgroundSaveDeferredError(error)) {
+    return JSON.stringify({
+      code: error.code,
+      message: presentAuthoringError(redactSecrets(error.message)),
+      saved: false,
+    });
+  }
   if (isBookWriteLockError(error)) {
     return JSON.stringify({
       code: "BOOK_BUSY",
@@ -127,7 +141,7 @@ function emitAuthoringRun(deps: AuthoringRouteDeps, root: AuthoringStoreRoot, ru
     status: run.status,
     progressDone: run.progressDone,
     progressTotal: run.progressTotal,
-    error: typeof run.error === "string" ? redactSecrets(run.error) : run.error,
+    error: typeof run.error === "string" ? presentAuthoringError(redactSecrets(run.error)) : run.error,
   });
 }
 
@@ -491,7 +505,9 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
       (await Promise.all([...byId.values()].map((run) => reclaimOrphanRun(root, run)))).filter(
         (run): run is AuthoringRunRecord => Boolean(run),
       ),
-    );
+    ).map((run) => (
+      typeof run.error === "string" ? { ...run, error: presentAuthoringError(run.error) } : run
+    ));
     const candidateAskId = manifest.candidates.ask;
     const candidateAsk = candidateAskId ? await loadArtifact(root, candidateAskId) : undefined;
     const candidateWeaveId = manifest.candidates.weave;
@@ -583,7 +599,10 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const root = storeRoot(deps.root, { bookId, draftId });
     const run = await reclaimOrphanRun(root, await readRunForQuery(root, c.req.param("runId")));
     if (!run) return c.json({ error: "找不到运行记录" }, 404);
-    return c.json(sanitizeAuthoringRun(run));
+    const sanitized = sanitizeAuthoringRun(run);
+    return c.json(typeof sanitized.error === "string"
+      ? { ...sanitized, error: presentAuthoringError(sanitized.error) }
+      : sanitized);
   });
 
   app.post("/api/v1/authoring/runs/:runId/pause", async (c) => {

@@ -6,7 +6,7 @@
 
 import { join } from "node:path";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
-import { withBackgroundBookWrite, withBookWriteLock } from "../book-lock.js";
+import { isBackgroundSaveDeferredError, withBackgroundBookWrite, withBookWriteLock } from "../book-lock.js";
 import { beginAuthoringRun, endAuthoringRun, isAuthoringRunAbort } from "../run-abort.js";
 import { isBookWriteLockError } from "../../state/manager.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
@@ -341,7 +341,7 @@ export async function generateGroundEntries(input: GroundRuntime & {
         await persistRun("cancelled");
         return { generated, failed, runId };
       }
-      if (isBookWriteLockError(error)) throw error;
+      if (isBookWriteLockError(error) || isBackgroundSaveDeferredError(error)) throw error;
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
       failed.push(entry.id);
       failedReasons.push(`${entry.name}：${message}`);

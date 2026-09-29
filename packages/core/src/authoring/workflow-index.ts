@@ -157,6 +157,12 @@ export async function noteWorkflowArtifact(rootDir: string, meta: AuthoringArtif
   });
 }
 
+export async function forgetWorkflowArtifact(rootDir: string, artifactId: string): Promise<void> {
+  await mutateIndex(rootDir, (index) => {
+    index.artifacts = index.artifacts.filter((item) => item.artifactId !== artifactId);
+  });
+}
+
 export async function noteWorkflowReport(rootDir: string, report: AuthoringReviewReport): Promise<void> {
   const pointer = pointerFromReport(report);
   await mutateIndex(rootDir, (index) => {

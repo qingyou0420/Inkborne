@@ -352,6 +352,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     BOOK_LOCK_INTERACTIVE_WAIT_MS: actual.BOOK_LOCK_INTERACTIVE_WAIT_MS,
     formatBookWriteLockCopy: actual.formatBookWriteLockCopy,
     isBookWriteLockMessage: actual.isBookWriteLockMessage,
+    isBookWriteLockError: actual.isBookWriteLockError,
+    isBackgroundSaveDeferredError: actual.isBackgroundSaveDeferredError,
     setBookLockLivenessCheck: actual.setBookLockLivenessCheck,
     evaluateWritePreflight: vi.fn(async () => ({ ok: true, reasons: [] })),
     PipelineRunner: MockPipelineRunner,

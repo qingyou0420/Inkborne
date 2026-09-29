@@ -1,4 +1,4 @@
-import { getAppLanguage, tr } from "./app-language";
+import { getAppLanguage, tr } from "./app-language.js";
 
 const TRANSIENT_NETWORK_MESSAGE_RE =
   /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|NetworkError)$/i;
@@ -52,6 +52,10 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   {
     pattern: /Book "([^"]+)" is locked by an active write(?: \([^)]+\))?\. .*/g,
     replacement: "写入被占用：书「$1」正在被写作任务写入。请等待当前任务结束，或确认没有进行中的任务后使用「强制释放」。",
+  },
+  {
+    pattern: /BACKGROUND_SAVE_DEFERRED/g,
+    replacement: "落笔还在进行，这次后台保存没写上，落笔写完后可以再试",
   },
   {
     pattern: /This in-process lock is not recovered automatically while the holder is still alive\. Abort the running task or POST \/api\/v1\/books\/:id\/lock\/force-release, then retry\./g,
