@@ -3971,6 +3971,48 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   const LEGACY_SHIM_FILES = new Set(["story_bible.md", "book_rules.md"]);
   const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.md|context\.json|rule-stack\.yaml|trace\.json)$/;
 
+  // Story-root files the pipeline writes and the raw-files panel should show,
+  // but never accept as PUT targets. Kept out of TRUTH_FLAT_FILES on purpose.
+  // detection_history.json and reference_bindings.json are operational manifests
+  // with their own screens; they stay out of this set so the list hides them.
+  const TRUTH_READONLY_FILES = [
+    "brief.md",
+    "canon.md",
+    "workflow.json",
+    "style_profile.json",
+    "volume_summaries.md",
+    "audit_drift.md",
+  ];
+
+  function truthReadonlyPutError(file: string): string {
+    switch (file) {
+      case "brief.md":
+        return "Read-only file: brief.md is the original author brief";
+      case "canon.md":
+        return "Read-only file: canon.md is the authoritative source for the authorization book";
+      case "workflow.json":
+        return "Read-only file: workflow.json is workflow state";
+      case "style_profile.json":
+        return "Read-only file: style_profile.json is a generated style fingerprint";
+      case "volume_summaries.md":
+        return "Read-only file: volume_summaries.md is generated volume memory";
+      case "audit_drift.md":
+        return "Read-only file: audit_drift.md is generated audit guidance";
+      default:
+        return `Read-only file: ${file}`;
+    }
+  }
+
+  function truthReadFlags(file: string): { readonly?: true; readonlyReason?: "protected" | "runtime-diagnostic" } {
+    if (TRUTH_READONLY_FILES.includes(file)) {
+      return { readonly: true, readonlyReason: "protected" };
+    }
+    if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
+      return { readonly: true, readonlyReason: "runtime-diagnostic" };
+    }
+    return {};
+  }
+
   /**
    * Validate a requested truth-file path:
    *   1. Must be one of the declared flat files, an outline/* allow-listed
@@ -4006,6 +4048,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return resolved;
   }
 
+  /**
+   * Readable truth path: the writable allow-list plus TRUTH_READONLY_FILES.
+   * Same traversal rejection as resolveTruthFilePath (`..`, absolute, NUL).
+   */
+  function resolveTruthReadPath(bookDir: string, file: string): string | null {
+    const writable = resolveTruthFilePath(bookDir, file);
+    if (writable) return writable;
+    if (!file || file.includes("\0") || isAbsolute(file) || file.includes("..")) {
+      return null;
+    }
+    if (!TRUTH_READONLY_FILES.includes(file)) return null;
+
+    const storyDir = resolve(bookDir, "story");
+    const resolved = resolve(storyDir, file);
+    const relativePath = relative(storyDir, resolved);
+    if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+      return null;
+    }
+    return resolved;
+  }
+
   async function fileExists(path: string): Promise<boolean> {
     try {
       await access(path);
@@ -4021,7 +4084,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
 
     const bookDir = state.bookDir(id);
-    const resolved = resolveTruthFilePath(bookDir, file);
+    const resolved = resolveTruthReadPath(bookDir, file);
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
     }
@@ -4034,6 +4097,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     // Pre-Phase-5 books use story_bible/book_rules as the authoritative source.
     const { isNewLayoutBook, tryParseBookRulesFrontmatter } = await import("@actalk/inkos-core");
     const legacy = LEGACY_SHIM_FILES.has(file) && await isNewLayoutBook(bookDir);
+    const readFlags = truthReadFlags(file);
 
     try {
       const content = await readFile(resolved, "utf-8");
@@ -4044,21 +4108,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       // unchanged; `body` is the prose with the frontmatter stripped.
       const parsed = tryParseBookRulesFrontmatter(content);
       const structured = parsed ? { frontmatter: parsed.rules, body: parsed.body } : {};
-      const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
       return c.json({
         file,
         content,
         ...structured,
         ...(legacy ? { legacy: true } : {}),
-        ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
+        ...readFlags,
       });
     } catch {
-      const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
       return c.json({
         file,
         content: null,
         ...(legacy ? { legacy: true } : {}),
-        ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
+        ...readFlags,
       });
     }
   });
@@ -5424,12 +5486,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         const content = await readFile(join(storyDir, relPath), "utf-8");
         const isShim = LEGACY_SHIM_FILES.has(relPath) && newLayout;
         const isRuntimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(relPath);
+        const isProtected = TRUTH_READONLY_FILES.includes(relPath);
         const entry: { readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } =
           isShim
             ? { name: relPath, size: content.length, preview: content.slice(0, 200), legacy: true }
             : isRuntimeDiagnostic
               ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "runtime-diagnostic" }
-              : { name: relPath, size: content.length, preview: content.slice(0, 200) };
+              : isProtected
+                ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "protected" }
+                : { name: relPath, size: content.length, preview: content.slice(0, 200) };
         return entry;
       } catch {
         return null;
@@ -5451,6 +5516,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         .map((f) => `runtime/${f}`)
         .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f));
 
+      // Drop anything GET would reject, so a listed name is always readable.
       const all = [
         ...flatFiles,
         ...outlineFiles,
@@ -5459,7 +5525,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         ...majorRolesEn,
         ...minorRolesEn,
         ...runtimeFiles,
-      ];
+      ].filter((relPath) => resolveTruthReadPath(bookDir, relPath) !== null);
       const described = await Promise.all(all.map(describe));
       const result = described.filter((x): x is NonNullable<typeof x> => x !== null);
       return c.json({ files: result });
@@ -7045,6 +7111,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const file = c.req.param("file");
     const bookDir = state.bookDir(id);
+    if (!file || file.includes("\0") || isAbsolute(file) || file.includes("..")) {
+      return c.json({ error: "Invalid truth file" }, 400);
+    }
+    if (TRUTH_READONLY_FILES.includes(file)) {
+      return c.json({ error: truthReadonlyPutError(file) }, 400);
+    }
     const resolved = resolveTruthFilePath(bookDir, file);
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);

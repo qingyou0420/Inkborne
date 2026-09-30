@@ -1,12 +1,13 @@
 import { fetchJson, useApi } from "../hooks/use-api";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
 import { workspaceQuery } from "../lib/authoring-workspace";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { Pencil, Save, X } from "lucide-react";
+import { pageErrorText } from "../lib/error-copy";
 import { showToast } from "../lib/toast";
 
 interface TruthFile {
@@ -58,6 +59,18 @@ export function deriveFilePresentation(
   };
 }
 
+/**
+ * useApi keeps the previous response when the next read fails. Only trust
+ * fileData when it is the file currently selected.
+ */
+export function resolveSelectedFileData<T extends { readonly file: string }>(
+  selected: string | null,
+  fileData: T | null | undefined,
+): T | null {
+  if (!selected || fileData == null || fileData.file !== selected) return null;
+  return fileData;
+}
+
 interface Nav {
   toBook: (id: string) => void;
   toDashboard: () => void;
@@ -72,17 +85,32 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
-  const { data: fileData, refetch: refetchFile } = useApi<{ file: string; content: string | null; legacy?: boolean; readonly?: boolean; readonlyReason?: string }>(
+  const { data: fileData, loading: fileLoading, error: fileError, refetch: refetchFile } = useApi<{ file: string; content: string | null; legacy?: boolean; readonly?: boolean; readonlyReason?: string }>(
     selected ? `/books/${bookId}/truth/${selected}` : "",
   );
+  // A failed read leaves `error` set until the next success. Ignore it until
+  // this selection has actually been in flight, so the previous file's error
+  // is not shown while the next file is still the stale payload.
+  const loadedSelectionRef = useRef<string | null>(null);
+  if (fileLoading && selected) loadedSelectionRef.current = selected;
 
-  const presentation = deriveFilePresentation(selected, fileData);
+  const currentFileData = resolveSelectedFileData(selected, fileData);
+  const presentation = deriveFilePresentation(selected, currentFileData);
   const canEdit = presentation.canEdit && !pageReadOnly;
   const isLegacyShim = presentation.legacy;
   const isRuntimeDiagnostic = presentation.readonlyReason === "runtime-diagnostic";
+  const isProtectedReadonly = presentation.readonlyReason === "protected";
+  const visibleContent = currentFileData?.content;
+  const failureIsCurrent = Boolean(
+    selected
+    && fileError
+    && !fileLoading
+    && !currentFileData
+    && loadedSelectionRef.current === selected
+  );
 
   const startEdit = () => {
-    setEditText(fileData?.content ?? "");
+    setEditText(visibleContent ?? "");
     setEditMode(true);
   };
 
@@ -141,7 +169,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
 
         {/* Content viewer */}
         <div className={`border ${c.cardStatic} rounded-lg p-5 min-h-[400px] flex flex-col`}>
-          {selected && fileData?.content != null ? (
+          {visibleContent != null ? (
             <>
               {isLegacyShim && (
                 <div
@@ -152,7 +180,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                   <div className="mt-1">
                     本文件已废弃，仅供外部读取。权威来源：
                     <code className="ml-1 px-1 py-0.5 rounded bg-background/40 font-mono">
-                      {SHIM_AUTHORITATIVE_PATH[selected] ?? "outline/"}
+                      {(selected && SHIM_AUTHORITATIVE_PATH[selected]) ?? "outline/"}
                     </code>
                   </div>
                 </div>
@@ -166,6 +194,15 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                   <div className="mt-1">
                     这里展示本章写作时的上下文选择、保护层、可压缩层和预算 trace。它只用于追溯系统看了什么，不作为可编辑设定。
                   </div>
+                </div>
+              )}
+              {isProtectedReadonly && (
+                <div
+                  data-testid="protected-readonly-warning"
+                  className="mb-3 px-3 py-2 rounded-md border border-border bg-muted text-muted-foreground dark:text-muted-foreground text-xs leading-relaxed"
+                >
+                  <div className="font-medium">{t("truth.protectedTitle")}</div>
+                  <div className="mt-1">{t("truth.protectedBody")}</div>
                 </div>
               )}
               <div className="flex items-center justify-end gap-2 mb-3">
@@ -206,11 +243,17 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                   className={`${c.input} flex-1 rounded-md p-3 text-sm font-mono leading-relaxed resize-none min-h-[360px]`}
                 />
               ) : (
-                <pre className="text-sm leading-relaxed whitespace-pre-wrap font-mono text-foreground/80">{fileData.content}</pre>
+                <pre className="text-sm leading-relaxed whitespace-pre-wrap font-mono text-foreground/80">{visibleContent}</pre>
               )}
             </>
-          ) : selected && fileData?.content === null ? (
+          ) : currentFileData?.content === null ? (
             <div className="text-muted-foreground text-sm">{t("truth.notFound")}</div>
+          ) : failureIsCurrent ? (
+            <div data-testid="truth-load-error" className="text-sm text-destructive">
+              {t("truth.loadFailed").replace("{file}", selected ?? "").replace("{error}", pageErrorText(fileError ?? ""))}
+            </div>
+          ) : selected ? (
+            <div className="text-muted-foreground text-sm">{t("common.loading")}</div>
           ) : (
             <div className="text-muted-foreground/50 text-sm italic">{t("truth.selectFile")}</div>
           )}

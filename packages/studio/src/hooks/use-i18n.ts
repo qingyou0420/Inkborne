@@ -481,6 +481,12 @@ const strings = {
   "truth.empty": { zh: "还没有原始资料", en: "No source files yet" },
   "truth.noFiles": { zh: "还没有原始资料", en: "No source files yet" },
   "truth.notFound": { zh: "文件未找到", en: "File not found" },
+  "truth.loadFailed": { zh: "无法读取 {file}：{error}", en: "Could not read {file}: {error}" },
+  "truth.protectedTitle": { zh: "系统维护，仅供查看", en: "Maintained by the system, view only" },
+  "truth.protectedBody": {
+    zh: "本文件由系统维护，仅供查看。canon.md 是授权书的权威来源，workflow.json 是流程状态，不可在这里编辑。",
+    en: "This file is maintained by the system and is view-only. canon.md is the authoritative authorization book, and workflow.json is workflow state. They cannot be edited here.",
+  },
   "truth.selectFile": { zh: "选择文件查看内容", en: "Select a file to view" },
   "truth.selectHint": { zh: "选择文件查看内容", en: "Select a file to view" },
 

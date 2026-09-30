@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveFilePresentation, SHIM_AUTHORITATIVE_PATH } from "./TruthFiles";
+import { deriveFilePresentation, resolveSelectedFileData, SHIM_AUTHORITATIVE_PATH } from "./TruthFiles";
 
 describe("deriveFilePresentation", () => {
   it("allows editing for non-legacy outline files", () => {
@@ -61,6 +61,39 @@ describe("deriveFilePresentation", () => {
     expect(result.canEdit).toBe(false);
     expect(result.readonly).toBe(true);
     expect(result.readonlyReason).toBe("runtime-diagnostic");
+  });
+
+  it("blocks editing for protected read-only files", () => {
+    const result = deriveFilePresentation("canon.md", {
+      content: "# canon",
+      readonly: true,
+      readonlyReason: "protected",
+    });
+    expect(result.canEdit).toBe(false);
+    expect(result.readonly).toBe(true);
+    expect(result.readonlyReason).toBe("protected");
+  });
+});
+
+describe("resolveSelectedFileData", () => {
+  const brief = { file: "brief.md", content: "brief body" };
+  const intent = { file: "author_intent.md", content: "intent body" };
+
+  it("returns null when the loaded file is not the selection", () => {
+    expect(resolveSelectedFileData("brief.md", intent)).toBeNull();
+  });
+
+  it("returns the payload when the loaded file matches the selection", () => {
+    expect(resolveSelectedFileData("brief.md", brief)).toBe(brief);
+  });
+
+  it("returns null when nothing is selected", () => {
+    expect(resolveSelectedFileData(null, brief)).toBeNull();
+  });
+
+  it("returns null when file data is missing", () => {
+    expect(resolveSelectedFileData("brief.md", null)).toBeNull();
+    expect(resolveSelectedFileData("brief.md", undefined)).toBeNull();
   });
 });
 

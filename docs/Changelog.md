@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 修复：设定档案 → 原始资料里点开 brief.md、canon.md、workflow.json 时打不开，还一直显示上一个文件的内容。现在这三个文件可以查看（只读，不能在此编辑），读取失败时会明确提示而不是显示旧内容。
+
 ## 2.6.0
 
 用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。Windows 安装包 `Inkborne-Setup-2.6.0.exe`（合并 2.2.x 与 2.1.10 两条线；版本号取 2.6.0）。
