@@ -1,5 +1,5 @@
 /**
- * Client-side entry for 番茄纯文本. Imports the core module directly so the
+ * Client-side entry for TXT cleaning. Imports the core module directly so the
  * browser bundle does not pull the InkOS barrel.
  *
  * SPDX-License-Identifier: AGPL-3.0-only

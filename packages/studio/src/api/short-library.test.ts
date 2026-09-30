@@ -132,12 +132,12 @@ describe("short library", () => {
       "",
       "回了。",
     ].join("\n"), "utf-8");
-    const fanqie = await exportStudioShortManuscript(root, "明日来信", "fanqie");
-    expect(String(fanqie?.payload)).toContain("第1章 信");
-    expect(String(fanqie?.payload).match(/第1章 信/g)).toHaveLength(1);
-    expect(String(fanqie?.payload)).not.toContain("作者有话说");
-    expect(String(fanqie?.payload)).toContain("第2章 回");
-    const one = await exportStudioShortManuscript(root, "明日来信", "fanqie", {
+    const plain = await exportStudioShortManuscript(root, "明日来信", "txt");
+    expect(String(plain?.payload)).toContain("第1章 信");
+    expect(String(plain?.payload).match(/第1章 信/g)).toHaveLength(1);
+    expect(String(plain?.payload)).not.toContain("作者有话说");
+    expect(String(plain?.payload)).toContain("第2章 回");
+    const one = await exportStudioShortManuscript(root, "明日来信", "txt", {
       fromChapter: 2,
       toChapter: 2,
       layout: "per-chapter",
@@ -145,6 +145,23 @@ describe("short library", () => {
     expect(one?.fileName).toBe("第0002章 回.txt");
     expect(String(one?.payload)).toContain("回了。");
     expect(String(one?.payload)).not.toContain("第1章");
+
+    await writeFile(join(root, "shorts", "明日来信", "final", "full.md"), [
+      "# 明日来信",
+      "",
+      "# 第1章 信",
+      "",
+      "信到了。",
+      "",
+      "---",
+      "",
+      "他还在。",
+    ].join("\n"), "utf-8");
+    const withBreak = await exportStudioShortManuscript(root, "明日来信", "txt");
+    expect(String(withBreak?.payload)).toContain("信到了。");
+    expect(String(withBreak?.payload)).toContain("* * *");
+    expect(String(withBreak?.payload)).toContain("他还在。");
+    expect(String(withBreak?.payload)).not.toContain("---");
 
     const analytics = await computeStudioShortAnalytics(root, "明日来信");
     expect(analytics).toMatchObject({

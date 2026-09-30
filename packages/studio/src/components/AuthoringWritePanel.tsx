@@ -41,6 +41,7 @@ import { ManuscriptHistoryDrawer } from "./ManuscriptHistoryDrawer";
 import { RegenerateDialog } from "./RegenerateDialog";
 import { useDraftDecision } from "../hooks/use-draft-decision";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { ExportMenu } from "./ExportMenu";
 import { registerNavigationGuard } from "../lib/edit-navigation";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
 import "./write-workspace.css";
@@ -675,7 +676,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       markdown: body,
     });
     void copyToClipboard(text)
-      .then(() => showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success"))
+      .then(() => showToast(isZh ? "本章已复制为纯文本。标题只留了一行。" : "Copied as plain text. The title is one line.", "success"))
       .catch((copyError) => showToast(copyError instanceof Error ? copyError.message : "复制失败", "error"));
   };
   const locked = Boolean(busy) || authoringRun.active || composingRef.current;
@@ -861,15 +862,23 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           {candidate ? <>
           <button type="button" disabled={locked || !ready || dirty} onClick={() => void reviewCurrent()}>{busy === "review" ? (isZh ? "审查中…" : "Reviewing…") : (isZh ? "审查" : "Review")}</button>
           <button type="button" disabled={locked || !ready || dirty || candidate.artifactId === adoptedId} onClick={() => void run("adopt", adopt, true)}><Check size={14} />{busy === "adopt" ? (isZh ? "采用中…" : "Adopting…") : candidate.artifactId === adoptedId ? (isZh ? "已采用" : "Adopted") : (isZh ? "采用" : "Adopt")}</button>
-          <DropdownMenu><DropdownMenuTrigger className="quiet" disabled={locked || dirty} aria-label={isZh ? "更多操作" : "More actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">
+          </> : null}
+          <ExportMenu
+            bookId={bookId}
+            isZh={isZh}
+            variant="manuscript"
+            label={isZh ? "导出" : "Export"}
+            onSaved={(path) => showToast(path ? (isZh ? `已导出到项目目录：${path}` : `Exported to the project directory: ${path}`) : (isZh ? "已导出到项目目录" : "Exported to the project directory"), "success")}
+            onError={(message) => showToast(message, "error")}
+          />
+          {candidate ? <DropdownMenu><DropdownMenuTrigger className="quiet" disabled={locked || dirty} aria-label={isZh ? "更多操作" : "More actions"}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">
             <DropdownMenuItem disabled={generateHeld} onClick={() => setGeneration({})}>{isZh ? "重新生成" : "Regenerate"}</DropdownMenuItem>
             {chapterStateMissing ? <DropdownMenuItem data-testid="write-settle-state" onClick={() => retrySettle(adoptedId)}>{isZh ? "整理状态" : "Settle state"}</DropdownMenuItem> : null}
             <DropdownMenuItem onClick={() => setHistoryOpen(true)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!storedReport} onClick={() => setReportOpen(true)}>{isZh ? "查看审查意见" : "View review"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!parentId} onClick={() => setDiffOpen(true)}>{isZh ? "比较修改前后" : "Compare versions"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!body.trim()} data-testid="write-copy-chapter" onClick={copyChapter}>{isZh ? "复制本章" : "Copy chapter"}</DropdownMenuItem>
-          </DropdownMenuContent></DropdownMenu>
-          </> : <><button type="button" className="primary" disabled={locked || generateHeld || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={locked || !ready} /></>}
+          </DropdownMenuContent></DropdownMenu> : <><button type="button" className="primary" disabled={locked || generateHeld || !ready || dirty} data-testid="write-generate" onClick={() => void generateChapter(requirementNotes)}><PenLine size={15} />{busy === "generate" ? (isZh ? "正在写…" : "Writing…") : (isZh ? "创作本章" : "Write chapter")}</button><GenerationRequirements value={requirementNotes} onChange={setRequirementNotes} isZh={isZh} disabled={locked || !ready} /></>}
           </>}
         </div>
       </div>

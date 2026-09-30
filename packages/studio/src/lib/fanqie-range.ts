@@ -1,5 +1,5 @@
 /**
- * Chapter range for a Tomato export. Empty bounds mean the whole book.
+ * Chapter range for a TXT export. Empty bounds mean the whole book.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
