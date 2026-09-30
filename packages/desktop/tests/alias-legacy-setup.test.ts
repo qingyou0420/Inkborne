@@ -41,11 +41,11 @@ describe("alias-legacy-setup names", () => {
   it("treats Inkborne-Setup as primary and emits both legacy prefixes", () => {
     expect(CURRENT_SETUP_PREFIX).toBe("Inkborne-Setup");
     expect(LEGACY_SETUP_PREFIXES).toEqual(["FantaWriter-Setup", "Fantasy-Writer-Setup"]);
-    const names = setupNamesForVersion("v2.6.0");
-    expect(names.version).toBe("2.6.0");
-    expect(names.primary).toBe("Inkborne-Setup-2.6.0.exe");
-    expect(names.aliases).toEqual(["FantaWriter-Setup-2.6.0.exe", "Fantasy-Writer-Setup-2.6.0.exe"]);
-    expect(names.legacy).toBe("FantaWriter-Setup-2.6.0.exe");
+    const names = setupNamesForVersion("v2.6.1");
+    expect(names.version).toBe("2.6.1");
+    expect(names.primary).toBe("Inkborne-Setup-2.6.1.exe");
+    expect(names.aliases).toEqual(["FantaWriter-Setup-2.6.1.exe", "Fantasy-Writer-Setup-2.6.1.exe"]);
+    expect(names.legacy).toBe("FantaWriter-Setup-2.6.1.exe");
   });
 });
 
@@ -53,17 +53,17 @@ describe("aliasLegacySetup", () => {
   it("copies primary Inkborne-Setup to both legacy names with matching sha256", () => {
     const distDir = mkdtempSync(join(tmpdir(), "fw-alias-"));
     temps.push(distDir);
-    const primaryName = "Inkborne-Setup-2.6.0.exe";
+    const primaryName = "Inkborne-Setup-2.6.1.exe";
     const payload = Buffer.from("inkborne-setup-fixture");
     writeFileSync(join(distDir, primaryName), payload);
     const sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     writeFileSync(join(distDir, `${primaryName}.sha256`), `${sha256}  ${primaryName}\n`);
 
-    const result = aliasLegacySetup({ distDir, version: "2.6.0" });
+    const result = aliasLegacySetup({ distDir, version: "2.6.1" });
     expect(result.sha256).toBe(sha256);
     expect(result.aliases).toHaveLength(2);
 
-    for (const name of ["FantaWriter-Setup-2.6.0.exe", "Fantasy-Writer-Setup-2.6.0.exe"]) {
+    for (const name of ["FantaWriter-Setup-2.6.1.exe", "Fantasy-Writer-Setup-2.6.1.exe"]) {
       const dest = join(distDir, name);
       expect(readFileSync(dest).equals(payload)).toBe(true);
       expect(hashFromSha256Sidecar(readFileSync(`${dest}.sha256`, "utf8"))).toBe(sha256);
@@ -74,6 +74,6 @@ describe("aliasLegacySetup", () => {
   it("throws when the Inkborne primary is missing", () => {
     const distDir = mkdtempSync(join(tmpdir(), "fw-alias-missing-"));
     temps.push(distDir);
-    expect(() => aliasLegacySetup({ distDir, version: "2.6.0" })).toThrow(/找不到安装包/);
+    expect(() => aliasLegacySetup({ distDir, version: "2.6.1" })).toThrow(/找不到安装包/);
   });
 });
