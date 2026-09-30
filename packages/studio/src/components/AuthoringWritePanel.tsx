@@ -22,6 +22,7 @@ import {
 import { isAuthoringRunActive, isBackgroundAuthoringStart, useAuthoringRun } from "../hooks/use-authoring-run";
 import { previousChapterSettleHold, producedArtifactForScope, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRun, writeRetryAction } from "../lib/authoring-run-selection";
 import { writeStateMissing } from "../lib/write-directory";
+import { editingAfterStream } from "../lib/write-editing-state";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
 import { copyToClipboard, renderFanqieChapter } from "../lib/fanqie-text";
@@ -405,12 +406,12 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
     payload: unknown,
     snapshot: string,
   ): Promise<AuthoringStreamResult | undefined> => {
+    const wasEditing = editing;
     setBusy(label);
     busyRef.current = true;
     setStopping(false);
     setStartedAt(Date.now());
     composingRef.current = true;
-    setEditing(true);
     runIdRef.current = "";
     let streamed = "";
     try {
@@ -426,6 +427,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
       if (result.status === "cancelled" && !result.artifactId) {
         setBody(snapshot);
         showToast(isZh ? "已停下。还没写出字，没有留下半截稿。" : "Stopped before any words were written.", "info");
+        setEditing(wasEditing);
       } else {
         setBody(result.body || streamed);
         dirtyRef.current = false;
@@ -443,6 +445,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         if (result.status === "cancelled") {
           showToast(isZh ? "已停下。写到这里的内容留在候选稿里，这本书没有锁住。" : "Stopped. The words so far stay in the draft.", "info");
         }
+        setEditing(editingAfterStream({ wasEditing, artifactProduced: Boolean(result.artifactId) }));
       }
       await refetch();
       onChanged?.();
@@ -454,11 +457,14 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         dirtyRef.current = false;
         setDirty(false);
         pendingEditRef.current = null;
+        setEditing(wasEditing);
       } else if (streamed) {
         setBody(streamed);
         await refetch();
+        setEditing(wasEditing);
       } else {
         await refetch();
+        setEditing(wasEditing);
       }
       showToast(error instanceof Error ? error.message : String(error), "error");
       return undefined;

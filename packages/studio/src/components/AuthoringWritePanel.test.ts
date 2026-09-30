@@ -85,3 +85,28 @@ describe("write page chapter heading", () => {
     expect(source).toMatch(/ManuscriptView body=\{readingBody\}/);
   });
 });
+
+describe("write page returns to reading after generation", () => {
+  beforeEach(() => { mocks.body = ""; });
+
+  it("opens an empty chapter in reading mode", () => {
+    const html = renderWrite();
+    expect(html).toContain("write-action-bar");
+    expect(html).toContain("编辑");
+    expect(html).toContain("导出");
+    expect(html).toContain("创作本章");
+    expect(html).not.toContain('data-testid="write-save"');
+    expect(html).not.toContain("write-candidate-body");
+    const bar = html.slice(html.indexOf("write-action-bar"));
+    expect(bar.indexOf("编辑")).toBeGreaterThanOrEqual(0);
+    expect(bar.indexOf("导出")).toBeGreaterThan(bar.indexOf("编辑"));
+  });
+
+  it("does not force edit mode when a stream starts", () => {
+    const source = readFileSync(new URL("./AuthoringWritePanel.tsx", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const runStream = async ("), source.indexOf("const startGenerate"));
+    expect(body).not.toContain("setEditing(true)");
+    expect(body).toContain("editingAfterStream");
+    expect(source).toContain("../lib/write-editing-state");
+  });
+});
