@@ -1,8 +1,10 @@
 /**
- * 番茄纯文本的可选排版。默认段间空一行、段首不缩进。
+ * TXT 导出的可选排版。默认段间空一行、段首不缩进。
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
+
+import { useId } from "react";
 
 export interface FanqieFieldState {
   readonly from: string;
@@ -31,6 +33,7 @@ export function FanqieExportFields({
   readonly indent: boolean;
   readonly onChange: (patch: Partial<FanqieFieldState>) => void;
 }) {
+  const layoutName = useId();
   return (
     <div className="space-y-2 border-t border-border/60 pt-2" data-testid="fanqie-export-fields">
       {showRange ? (
@@ -61,7 +64,7 @@ export function FanqieExportFields({
           <label className="flex items-center gap-2 text-sm">
             <input
               type="radio"
-              name="fanqie-layout"
+              name={layoutName}
               checked={layout === "combined"}
               onChange={() => onChange({ layout: "combined" })}
             />
@@ -70,7 +73,7 @@ export function FanqieExportFields({
           <label className="flex items-center gap-2 text-sm">
             <input
               type="radio"
-              name="fanqie-layout"
+              name={layoutName}
               checked={layout === "per-chapter"}
               onChange={() => onChange({ layout: "per-chapter" })}
               data-testid="fanqie-per-chapter"
@@ -99,8 +102,8 @@ export function FanqieExportFields({
       </label>
       <p className="text-xs leading-5 text-muted-foreground">
         {isZh
-          ? "默认段间空一行、段首不缩进。空行是为了贴进番茄时能分成一段一段；阅读器自己会缩进，再空两格容易叠成两层。预览段距太大，就把空行关掉。"
-          : "Default: a blank line between paragraphs and no indent, so Tomato Novel can split paragraphs. Turn the blank line off if the preview looks too loose."}
+          ? "默认段间空一行、段首不缩进。空行是为了贴进番茄等平台后台时能分成一段一段；阅读器自己会缩进，再空两格容易叠成两层。预览段距太大，就把空行关掉。"
+          : "Default: a blank line between paragraphs and no indent, so pasting into a platform editor can split paragraphs. Turn the blank line off if the preview looks too loose."}
       </p>
     </div>
   );

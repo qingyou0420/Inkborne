@@ -11,7 +11,7 @@ import {
   type FanqieExportOptions,
 } from "./fanqie-text.js";
 
-export type BookExportFormat = "txt" | "md" | "epub" | "fanqie";
+export type BookExportFormat = "txt" | "md" | "epub";
 
 export interface BookExportOptions extends FanqieExportOptions {
   readonly format?: BookExportFormat;
@@ -84,7 +84,7 @@ function selectChapters<T extends { readonly number: number; readonly status: st
   const approved = options.approvedOnly
     ? index.filter((chapter) => chapter.status === "approved")
     : [...index];
-  if (format !== "fanqie") return approved;
+  if (format !== "txt") return approved;
   const fromChapter = options.fromChapter;
   const toChapter = options.toChapter;
   if (fromChapter !== undefined && toChapter !== undefined && fromChapter > toChapter) {
@@ -108,17 +108,17 @@ export async function buildExportArtifact(
   const chapters = selectChapters(index, options, format);
 
   if (chapters.length === 0) {
-    throw new Error(format === "fanqie" ? "没有可导出的章节。" : "No chapters to export.");
+    throw new Error(format === "txt" ? "没有可导出的章节。" : "No chapters to export.");
   }
 
   const bookDir = state.bookDir(bookId);
   const chaptersDir = join(bookDir, "chapters");
   const projectRoot = dirname(dirname(bookDir));
-  const outputPath = options.outputPath ?? join(projectRoot, `${bookId}_export.${format === "fanqie" ? "txt" : format}`);
+  const outputPath = options.outputPath ?? join(projectRoot, `${bookId}_export.${format}`);
   const chapterFiles = buildChapterFileLookup(await readdir(chaptersDir));
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
 
-  if (format === "fanqie") {
+  if (format === "txt") {
     return buildFanqieArtifact({
       bookTitle: book.title,
       chaptersDir,
@@ -223,7 +223,7 @@ async function buildFanqieArtifact(input: {
       fileName: downloadName,
       chaptersExported: files.length,
       totalWords: input.totalWords,
-      format: "fanqie",
+      format: "txt",
       contentType: "application/zip",
       payload: await zipFanqieFiles(files),
       chapterFiles: files,
@@ -235,7 +235,7 @@ async function buildFanqieArtifact(input: {
     fileName: downloadName,
     chaptersExported: files.length,
     totalWords: input.totalWords,
-    format: "fanqie",
+    format: "txt",
     contentType: "text/plain; charset=utf-8",
     payload: `${combined.trim()}\n`,
     chapterFiles: files,
@@ -249,7 +249,7 @@ export async function writeExportArtifact(
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName" | "chapterFiles">> {
   const artifact = await buildExportArtifact(state, bookId, options);
   if (
-    artifact.format === "fanqie"
+    artifact.format === "txt"
     && options.layout === "per-chapter"
     && artifact.chapterFiles
     && options.outputPath

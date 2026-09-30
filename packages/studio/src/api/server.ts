@@ -255,6 +255,11 @@ function pick(lang: StudioLanguage, zh: string, en: string): string {
   return lang === "en" ? en : zh;
 }
 
+/** Old bookmarks used format=fanqie. TXT is that cleaned plain text now. */
+function normalizeRequestedExportFormat(format: string): string {
+  return format === "fanqie" ? "txt" : format;
+}
+
 // -- Pipeline stage definitions per agent type --
 
 interface BilingualLabel {
@@ -6786,11 +6791,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books/:id/export", async (c) => {
     const id = c.req.param("id");
-    const format = (c.req.query("format") ?? "txt") as string;
+    const format = normalizeRequestedExportFormat(c.req.query("format") ?? "txt");
     const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
-      const fanqie = format === "fanqie" ? fanqieOptionsFromQuery({
+      const textOptions = format === "txt" ? fanqieOptionsFromQuery({
         from: c.req.query("from"),
         to: c.req.query("to"),
         layout: c.req.query("layout"),
@@ -6798,9 +6803,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         indent: c.req.query("indent"),
       }) : {};
       const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub" | "fanqie",
+        format: format as "txt" | "md" | "epub",
         approvedOnly,
-        ...fanqie,
+        ...textOptions,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -6830,26 +6835,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       blankLine?: boolean;
       indent?: boolean;
     } = await c.req.json().catch(() => ({ format: "txt", approvedOnly: false }));
-    const fmt = body.format ?? "txt";
+    const fmt = normalizeRequestedExportFormat(body.format ?? "txt");
     const approvedOnly = body.approvedOnly;
 
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
-      const perChapter = fmt === "fanqie" && body.layout === "per-chapter";
-      const outputPath = fmt === "fanqie"
-        ? join(bookDir, "exports", perChapter ? "番茄" : "番茄.txt")
+      const perChapter = fmt === "txt" && body.layout === "per-chapter";
+      const outputPath = perChapter
+        ? join(bookDir, "exports", "chapters")
         : join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
       const result = await processProjectInteractionRequest({
         projectRoot: root,
         request: {
           intent: "export_book",
           bookId: id,
-          format: fmt as "txt" | "md" | "epub" | "fanqie",
+          format: fmt as "txt" | "md" | "epub",
           approvedOnly,
           outputPath,
-          ...(fmt === "fanqie" ? {
+          ...(fmt === "txt" ? {
             fromChapter: body.fromChapter,
             toChapter: body.toChapter,
             layout: body.layout,
@@ -7815,19 +7820,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `Invalid short id: "${id}"` } }, 400);
     }
-    const format = (c.req.query("format") ?? "txt") as string;
-    if (format !== "txt" && format !== "md" && format !== "fanqie") {
-      return c.json({ error: { code: "INVALID_FORMAT", message: "导出格式只能是 txt、md 或番茄纯文本" } }, 400);
+    const format = normalizeRequestedExportFormat((c.req.query("format") ?? "txt") as string);
+    if (format !== "txt" && format !== "md") {
+      return c.json({ error: { code: "INVALID_FORMAT", message: "导出格式只能是 txt、md" } }, 400);
     }
     try {
-      const fanqie = format === "fanqie" ? fanqieOptionsFromQuery({
+      const textOptions = format === "txt" ? fanqieOptionsFromQuery({
         from: c.req.query("from"),
         to: c.req.query("to"),
         layout: c.req.query("layout"),
         blankLine: c.req.query("blankLine"),
         indent: c.req.query("indent"),
       }) : undefined;
-      const artifact = await exportStudioShortManuscript(root, id, format, fanqie);
+      const artifact = await exportStudioShortManuscript(root, id, format, textOptions);
       if (!artifact) {
         return c.json({ error: { code: "NOT_FOUND", message: `Short "${id}" not found` } }, 404);
       }

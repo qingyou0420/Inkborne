@@ -32,7 +32,8 @@ describe("P1-5 落笔", () => {
     expect(read("src/components/ExportMenu.tsx")).toMatch(/book\.download/);
     expect(detail).toMatch(/formatStudyWords/);
     expect(detail).toMatch(/StageDot/);
-    expect(detail).toMatch(/authoringBook \?[\s\S]*write-export-tools/);
+    expect(detail).toMatch(/authoringBook \? null : \(/);
+    expect(detail).not.toMatch(/write-export-tools/);
     expect(detail).toMatch(/!authoringBook[\s\S]*book\.rewrite/);
   });
 

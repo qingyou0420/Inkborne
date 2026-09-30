@@ -1,10 +1,11 @@
 /**
- * 番茄纯文本：去掉 Markdown，整理成能贴进番茄作家后台的段落。
+ * TXT 导出的清洗：去掉 Markdown，整理成能贴进番茄等平台后台的段落。
  *
- * 默认（2026 年作者后台的常见粘贴结果）：
+ * 默认：
  * - 段间空一行。网页编辑器粘贴纯文本时，单个换行经常被并成同一段；空一行才能稳稳切开。
- * - 段首不缩进。番茄阅读器自己会首行缩进，再写两个全角空格容易叠成双缩进。
+ * - 段首不缩进。阅读器自己会首行缩进，再写两个全角空格容易叠成双缩进。
  * 这两项都可以关掉或打开。标题行不缩进。
+ * 分节符（---、***、空行横线等）先整行认出来，再统一写成一行 `* * *`，不加段首缩进。
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
@@ -33,6 +34,9 @@ export interface FanqieManuscript {
   readonly chaptersExported: number;
   readonly numbered: boolean;
 }
+
+/** 纯文本里的分节符。星号加空格，便于居中，也不会被当成 Markdown 横线或一长串破折号。 */
+export const SCENE_BREAK = "* * *";
 
 const AUTHOR_NOTE_RE = /^(?:#{1,6}[ \t]+)?(?:【|\[)?(?:作者有话说|作者的话|作者说|作者备注)(?:】|\])?(?:[ \t]*[:：].*)?$/;
 const OUTLINE_HEADING_RE = /^(?:#{1,6}[ \t]+)?(?:【|\[)?(?:章纲|本章纲要|本章细纲|本章大纲|细纲|写作备注)(?:】|\])?[ \t]*[:：]?[ \t]*$/;
@@ -84,7 +88,7 @@ export function fanqieChapterFileName(chapterNumber: number, title: string): str
 
 export function fanqieDownloadName(title: string, layout: "combined" | "per-chapter"): string {
   const safe = sanitizeFilePart(title || "书");
-  return layout === "per-chapter" ? `${safe}-番茄.zip` : `${safe}-番茄.txt`;
+  return layout === "per-chapter" ? `${safe}.zip` : `${safe}.txt`;
 }
 
 export function renderFanqieChapter(input: {
@@ -184,7 +188,10 @@ function joinHeadingAndParagraphs(
   paragraphs: readonly string[],
   style: { blankLine: boolean; indent: boolean },
 ): string {
-  const body = paragraphs.map((paragraph) => (style.indent ? `\u3000\u3000${paragraph}` : paragraph));
+  const body = paragraphs.map((paragraph) => {
+    if (paragraph === SCENE_BREAK) return paragraph;
+    return style.indent ? `\u3000\u3000${paragraph}` : paragraph;
+  });
   const separator = style.blankLine ? "\n\n" : "\n";
   const parts = [heading.trim(), body.join(separator)].filter((part) => part.length > 0);
   if (!style.blankLine) return parts.join("\n").trim();
@@ -199,12 +206,64 @@ function extractParagraphs(
   const kept = stripNotes(prepared.split(/\r?\n/));
   const body = stripLeadingTitles(kept, identity);
   const paragraphs: string[] = [];
+  let pendingBreak = false;
+  let seenBody = false;
   for (const line of body) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (isSceneBreakLine(trimmed)) {
+      if (seenBody) pendingBreak = true;
+      continue;
+    }
     const text = stripInlineMarkdown(line).trim();
-    if (!text || isHorizontalRule(text)) continue;
+    if (!text) continue;
+    if (pendingBreak) {
+      paragraphs.push(SCENE_BREAK);
+      pendingBreak = false;
+    }
     paragraphs.push(text);
+    seenBody = true;
   }
   return paragraphs;
+}
+
+const HORIZONTAL_LINE_CHARS = new Set(["—", "―", "─"]);
+
+/** Whole line is a scene break. Checked before inline Markdown is stripped. */
+function isSceneBreakLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  let kind: "ascii" | "horizontal" | "equals" | "" = "";
+  let marker = "";
+  let count = 0;
+  for (const char of trimmed) {
+    if (char === " " || char === "\t" || char === "\u3000") continue;
+    if (char === "-" || char === "*" || char === "_") {
+      if (kind !== "" && kind !== "ascii") return false;
+      if (marker && char !== marker) return false;
+      kind = "ascii";
+      marker = char;
+      count += 1;
+      continue;
+    }
+    if (HORIZONTAL_LINE_CHARS.has(char)) {
+      if (kind !== "" && kind !== "horizontal") return false;
+      kind = "horizontal";
+      count += 1;
+      continue;
+    }
+    if (char === "=") {
+      if (kind !== "" && kind !== "equals") return false;
+      kind = "equals";
+      count += 1;
+      continue;
+    }
+    return false;
+  }
+  if (kind === "ascii") return count >= 3;
+  if (kind === "horizontal") return count >= 2;
+  if (kind === "equals") return count >= 3;
+  return false;
 }
 
 function prefaceParagraphs(markdown: string, bookTitle: string): string[] {
@@ -451,7 +510,7 @@ function stripInlineMarkdown(line: string): string {
   return text;
 }
 
-/** Drop fence marker lines and keep the text inside. Tomato paste has no code blocks. */
+/** Drop fence marker lines and keep the text inside. Plain-text export has no code blocks. */
 function stripFencedCode(markdown: string): string {
   return markdown
     .split(/\r?\n/)
@@ -467,10 +526,6 @@ function stripFrontmatter(markdown: string): string {
 
 function isListLine(line: string): boolean {
   return /^(?:[-*+]|\d+[.)])[ \t]+/.test(line) || /^>[ \t]?/.test(line);
-}
-
-function isHorizontalRule(line: string): boolean {
-  return /^(?:---|\*\*\*|___|——+)$/.test(line.trim());
 }
 
 function normalizeText(value: string): string {
