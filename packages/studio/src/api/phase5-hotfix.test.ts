@@ -401,4 +401,119 @@ describe("Phase 5 hotfix 1 — Studio truth file endpoints", () => {
     const shimEntry = body.files.find((f) => f.name === "book_rules.md");
     expect(shimEntry?.legacy).toBe(true);
   });
+
+  it("serves protected story files read-only and hides files GET cannot read", async () => {
+    const brief = "BRIEF_UNIQUE 原始意图\n";
+    const canon = "CANON_UNIQUE 授权书\n";
+    const workflow = "{\"lastStage\":\"ask\"}\n";
+    const profile = "{\"fingerprint\":\"style-a\"}\n";
+    const volumes = "VOLUME_SUMMARIES 第一卷压缩记忆\n";
+    const drift = "AUDIT_DRIFT 下一章避免重复开场\n";
+    await writeFile(join(storyDir, "brief.md"), brief, "utf-8");
+    await writeFile(join(storyDir, "canon.md"), canon, "utf-8");
+    await writeFile(join(storyDir, "workflow.json"), workflow, "utf-8");
+    await writeFile(join(storyDir, "author_intent.md"), brief, "utf-8");
+    await writeFile(join(storyDir, "style_profile.json"), profile, "utf-8");
+    await writeFile(join(storyDir, "volume_summaries.md"), volumes, "utf-8");
+    await writeFile(join(storyDir, "audit_drift.md"), drift, "utf-8");
+    await writeFile(join(storyDir, "random.md"), "RANDOM should stay hidden\n", "utf-8");
+    await writeFile(join(storyDir, "reference_bindings.json"), "{\"version\":1}\n", "utf-8");
+    await writeFile(join(storyDir, "detection_history.json"), "[]\n", "utf-8");
+    await writeFile(join(storyDir, "outline/unknown.md"), "not allow-listed\n", "utf-8");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const listResponse = await app.request("http://localhost/api/v1/books/hotfix-book/truth");
+    expect(listResponse.status).toBe(200);
+    const listed = await listResponse.json() as {
+      files: ReadonlyArray<{ name: string; readonly?: boolean; readonlyReason?: string }>;
+    };
+    const names = listed.files.map((file) => file.name).sort();
+    expect(names).toEqual([
+      "audit_drift.md",
+      "author_intent.md",
+      "brief.md",
+      "canon.md",
+      "style_profile.json",
+      "volume_summaries.md",
+      "workflow.json",
+    ]);
+    expect(names).not.toContain("random.md");
+    expect(names).not.toContain("reference_bindings.json");
+    expect(names).not.toContain("detection_history.json");
+    expect(names).not.toContain("outline/unknown.md");
+
+    const bodies = new Map<string, { file: string; content: string | null; readonly?: boolean; readonlyReason?: string }>();
+    for (const name of names) {
+      const response = await app.request(`http://localhost/api/v1/books/hotfix-book/truth/${name}`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { file: string; content: string | null; readonly?: boolean; readonlyReason?: string };
+      expect(body.file).toBe(name);
+      bodies.set(name, body);
+    }
+
+    expect(bodies.get("brief.md")?.content).toBe(brief);
+    expect(bodies.get("canon.md")?.content).toBe(canon);
+    expect(bodies.get("workflow.json")?.content).toBe(workflow);
+    expect(new Set([brief, canon, workflow]).size).toBe(3);
+    expect(bodies.get("author_intent.md")?.content).toBe(brief);
+    expect(bodies.get("author_intent.md")?.readonly).toBeUndefined();
+    expect(bodies.get("style_profile.json")?.content).toBe(profile);
+    expect(bodies.get("volume_summaries.md")?.content).toBe(volumes);
+    expect(bodies.get("audit_drift.md")?.content).toBe(drift);
+
+    for (const name of ["brief.md", "canon.md", "workflow.json", "style_profile.json", "volume_summaries.md", "audit_drift.md"]) {
+      expect(bodies.get(name)?.readonly).toBe(true);
+      expect(bodies.get(name)?.readonlyReason).toBe("protected");
+      const entry = listed.files.find((file) => file.name === name);
+      expect(entry?.readonly).toBe(true);
+      expect(entry?.readonlyReason).toBe("protected");
+
+      const put = await app.request(`http://localhost/api/v1/books/hotfix-book/truth/${name}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "MUTATED" }),
+      });
+      expect(put.status).toBe(400);
+      const errorBody = await put.json() as { error: string };
+      expect(errorBody.error).toMatch(/^Read-only file:/);
+      await expect(readFile(join(storyDir, name), "utf-8")).resolves.toBe(bodies.get(name)?.content);
+    }
+    await expect(readFile(join(storyDir, "brief.md"), "utf-8")).resolves.toBe(brief);
+    await expect(readFile(join(storyDir, "canon.md"), "utf-8")).resolves.toBe(canon);
+    await expect(readFile(join(storyDir, "workflow.json"), "utf-8")).resolves.toBe(workflow);
+
+    const putIntent = await app.request("http://localhost/api/v1/books/hotfix-book/truth/author_intent.md", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "updated intent" }),
+    });
+    expect(putIntent.status).toBe(200);
+    await expect(readFile(join(storyDir, "author_intent.md"), "utf-8")).resolves.toBe("updated intent");
+
+    for (const hidden of ["random.md", "reference_bindings.json", "detection_history.json", "outline/unknown.md", "roles/其他/x.md"]) {
+      const response = await app.request(`http://localhost/api/v1/books/hotfix-book/truth/${hidden}`);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid truth file" });
+    }
+
+    const traversal = await app.request(
+      "http://localhost/api/v1/books/hotfix-book/truth/outline/..%2F..%2Fetc%2Fpasswd",
+    );
+    expect(traversal.status).toBe(400);
+    await expect(traversal.json()).resolves.toEqual({ error: "Invalid truth file" });
+
+    const putTraversal = await app.request(
+      "http://localhost/api/v1/books/hotfix-book/truth/..%2Fbrief.md",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "MUTATED" }),
+      },
+    );
+    expect(putTraversal.status).toBe(400);
+    await expect(putTraversal.json()).resolves.toEqual({ error: "Invalid truth file" });
+    await expect(readFile(join(storyDir, "brief.md"), "utf-8")).resolves.toBe(brief);
+  });
 });
