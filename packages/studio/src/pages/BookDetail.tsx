@@ -4,7 +4,6 @@ import { CorruptBookCard } from "../components/CorruptBookCard";
 import { downloadRequestDiagnostics } from "../lib/engine-connection";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SerialCockpitStrip } from "../components/SerialCockpitStrip";
-import { FanqieExportFields } from "../components/FanqieExportFields";
 import { AuthoringWritePanel, type WriteLeaveGuard } from "../components/AuthoringWritePanel";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import type { AuthoringWorkspace } from "../lib/authoring-workspace";
@@ -17,14 +16,13 @@ import {
   type WriteDirectoryChapter,
 } from "../lib/write-directory";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { ExportMenu, type ExportFormat } from "../components/ExportMenu";
+import { ExportMenu } from "../components/ExportMenu";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
-import { bookManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
 import { formatReviewIssueCopy, hasPreviousChapterUnapprovedReason, isMustFixSeverity } from "../lib/copy-map";
 import { groupReviewIssues } from "../lib/review-dimensions";
 import { parseVolumeMapTree } from "../lib/volume-map-tree";
@@ -132,13 +130,6 @@ export function BookDetail({
   const [rewritingChapters, setRewritingChapters] = useState<ReadonlyArray<number>>([]);
   const [revisingChapters, setRevisingChapters] = useState<ReadonlyArray<number>>([]);
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
-  const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
-  const [fanqieFrom, setFanqieFrom] = useState("");
-  const [fanqieTo, setFanqieTo] = useState("");
-  const [fanqieLayout, setFanqieLayout] = useState<"combined" | "per-chapter">("combined");
-  const [fanqieBlankLine, setFanqieBlankLine] = useState(true);
-  const [fanqieIndent, setFanqieIndent] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   const [reviewMode, setReviewMode] = useState<"auto" | "manual">("auto");
   const [skipPreviousApproval, setSkipPreviousApproval] = useState(false);
@@ -482,15 +473,6 @@ export function BookDetail({
     isZh,
   });
 
-  const fanqieQuery: FanqieExportQuery | undefined = {
-    fromChapter: Number(fanqieFrom) || undefined,
-    toChapter: Number(fanqieTo) || undefined,
-    layout: fanqieLayout,
-    blankLine: fanqieBlankLine,
-    indent: fanqieIndent,
-  };
-  const exportHref = bookManuscriptExportPath(bookId, exportFormat, exportApprovedOnly);
-  const fanqieHref = bookManuscriptExportPath(bookId, "fanqie", exportApprovedOnly, fanqieQuery);
   const briefDialog = briefPrompt ? briefCopy(briefPrompt.kind) : null;
   const volumeTree = parseVolumeMapTree(outline?.content ?? "");
   const directoryGroups = filterChapterGroups(
@@ -747,54 +729,17 @@ export function BookDetail({
         </div>
       </div>
 
-        {authoringBook ? (
-        <div className="flex flex-wrap items-center gap-2" data-testid="write-export-tools" aria-label={t("book.exportMenu")}>
-          <ExportMenu
-            bookId={bookId}
-            t={t}
-            exportFormat={exportFormat}
-            exportApprovedOnly={exportApprovedOnly}
-            exportHref={exportHref}
-            onFormatChange={setExportFormat}
-            onApprovedOnlyChange={setExportApprovedOnly}
-            onSaved={(path) => setBookActionPending(`saved:${path}`)}
-            onError={(message) => setBookActionPending(message)}
-          />
-          <a href={fanqieHref} download data-testid="export-format-fanqie" className="btn-secondary">{isZh ? "番茄纯文本" : "Tomato plain text"}</a>
-          <FanqieExportFields
-            isZh={isZh}
-            showRange
-            from={fanqieFrom}
-            to={fanqieTo}
-            layout={fanqieLayout}
-            blankLine={fanqieBlankLine}
-            indent={fanqieIndent}
-            onChange={(patch) => {
-              if (patch.from !== undefined) setFanqieFrom(patch.from);
-              if (patch.to !== undefined) setFanqieTo(patch.to);
-              if (patch.layout !== undefined) setFanqieLayout(patch.layout);
-              if (patch.blankLine !== undefined) setFanqieBlankLine(patch.blankLine);
-              if (patch.indent !== undefined) setFanqieIndent(patch.indent);
-            }}
-          />
-        </div>
-        ) : (
+        {authoringBook ? null : (
         <details className="write-legacy" data-testid="write-legacy-tools">
           <summary>{isZh ? "旧管线" : "Legacy pipeline"}</summary>
           <p className="my-3 text-sm text-muted-foreground">{book.genre} · {chapters.length} {t("dash.chapters")} · {formatStudyWords(totalWords, isZh)}</p>
         <div className="flex flex-wrap items-center gap-2">
           <ExportMenu
             bookId={bookId}
-            t={t}
-            exportFormat={exportFormat}
-            exportApprovedOnly={exportApprovedOnly}
-            exportHref={exportHref}
-            onFormatChange={setExportFormat}
-            onApprovedOnlyChange={setExportApprovedOnly}
+            isZh={isZh}
             onSaved={(path) => setBookActionPending(`saved:${path}`)}
             onError={(message) => setBookActionPending(message)}
           />
-          <a href={fanqieHref} download data-testid="book-export-fanqie" className="btn-secondary">{isZh ? "番茄纯文本" : "Tomato plain text"}</a>
           <div className="inline-flex overflow-hidden rounded-lg bg-primary text-primary-foreground">
             <button
               type="button"

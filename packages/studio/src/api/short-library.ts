@@ -2,7 +2,6 @@ import { access, readdir, readFile, rm, stat, writeFile } from "node:fs/promises
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { StudioShortContentKind, StudioShortDetail, StudioShortStatus, StudioShortSummary } from "../shared/short-works.js";
 import { fanqieDownloadName, fanqieOptionsFromQuery, renderFanqieManuscript, zipFanqieFiles, type FanqieExportOptions } from "@actalk/inkos-core";
-import { manuscriptToPlainText } from "../lib/work-export.js";
 import { isSafeBookId } from "./safety.js";
 
 export type { StudioShortContentKind, StudioShortDetail, StudioShortStatus, StudioShortSummary };
@@ -232,7 +231,7 @@ export interface StudioShortExportArtifact {
 export async function exportStudioShortManuscript(
   root: string,
   storyId: string,
-  format: "txt" | "md" | "fanqie",
+  format: "txt" | "md",
   fanqie?: FanqieExportOptions,
 ): Promise<StudioShortExportArtifact | undefined> {
   const detail = await loadStudioShort(root, storyId);
@@ -240,7 +239,7 @@ export async function exportStudioShortManuscript(
   if (!detail.content.trim()) {
     throw new Error("No manuscript to export");
   }
-  if (format === "fanqie") {
+  if (format === "txt") {
     const options = fanqie ?? fanqieOptionsFromQuery({});
     const manuscript = renderFanqieManuscript({
       title: detail.title,
@@ -265,11 +264,10 @@ export async function exportStudioShortManuscript(
       contentKind: detail.contentKind,
     };
   }
-  const payload = format === "md" ? detail.content : manuscriptToPlainText(detail.content);
   return {
-    fileName: `${storyId}.${format}`,
-    contentType: format === "md" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8",
-    payload,
+    fileName: `${storyId}.md`,
+    contentType: "text/markdown; charset=utf-8",
+    payload: detail.content,
     contentKind: detail.contentKind,
   };
 }

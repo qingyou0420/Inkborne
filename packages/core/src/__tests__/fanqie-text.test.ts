@@ -4,13 +4,14 @@ import { join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildExportArtifact, writeExportArtifact, type ExportStateLike } from "../interaction/export-artifact.js";
+import { InteractionRequestSchema } from "../interaction/intents.js";
 import {
   fanqieOptionsFromQuery,
   renderFanqieChapter,
   renderFanqieManuscript,
 } from "../interaction/fanqie-text.js";
 
-describe("番茄纯文本", () => {
+describe("TXT 纯文本", () => {
   it("去掉 Markdown，标题只留一行，默认段间空一行、段首不缩进", () => {
     const text = renderFanqieChapter({
       chapterNumber: 12,
@@ -38,6 +39,8 @@ describe("番茄纯文本", () => {
       "第12章 夜港",
       "",
       "雾从码头漫上来，他没打伞。",
+      "",
+      "* * *",
       "",
       "巷子是空的。",
       "",
@@ -151,9 +154,162 @@ describe("番茄纯文本", () => {
       indent: true,
     });
   });
+
+  it("把常见分节符收成一行 * * *，章首章末和连续的都只留中间那一个", () => {
+    const between = (mark: string) => renderFanqieChapter({
+      chapterNumber: 1,
+      title: "雨",
+      markdown: `# 第1章 雨\n\n上。\n\n${mark}\n\n下。\n`,
+    });
+    const expected = ["第1章 雨", "", "上。", "", "* * *", "", "下。"].join("\n");
+    for (const mark of ["---", "***", "___", "———", "* * *", "- - -", "===", "──", "――", "= = ="]) {
+      expect(between(mark), mark).toBe(expected);
+    }
+
+    const edges = renderFanqieChapter({
+      chapterNumber: 1,
+      title: "雨",
+      markdown: [
+        "# 第1章 雨",
+        "",
+        "---",
+        "",
+        "***",
+        "",
+        "上。",
+        "",
+        "---",
+        "",
+        "***",
+        "",
+        "———",
+        "",
+        "___",
+        "",
+        "下。",
+        "",
+        "---",
+        "",
+      ].join("\n"),
+    });
+    expect(edges).toBe(["第1章 雨", "", "上。", "", "* * *", "", "下。"].join("\n"));
+  });
+
+  it("缩进不加在分节符上；关掉空行时分节符仍独占一行", () => {
+    const indented = renderFanqieChapter({
+      chapterNumber: 1,
+      title: "雨",
+      markdown: "# 第1章 雨\n\n上。\n\n---\n\n下。\n",
+      style: { indent: true, blankLine: true },
+    });
+    expect(indented).toBe([
+      "第1章 雨",
+      "",
+      "　　上。",
+      "",
+      "* * *",
+      "",
+      "　　下。",
+    ].join("\n"));
+    expect(indented).not.toContain("　　* * *");
+
+    const tight = renderFanqieChapter({
+      chapterNumber: 1,
+      title: "雨",
+      markdown: "# 第1章 雨\n\n上。\n\n* * *\n\n下。\n",
+      style: { indent: true, blankLine: false },
+    });
+    expect(tight).toBe(["第1章 雨", "　　上。", "* * *", "　　下。"].join("\n"));
+  });
+
+  it("行内的横线和单独一个破折号留着，文首的 frontmatter 仍剥掉", () => {
+    const text = renderFanqieChapter({
+      chapterNumber: 1,
+      title: "雨",
+      markdown: [
+        "---",
+        "title: 夜",
+        "---",
+        "",
+        "# 第1章 雨",
+        "",
+        "今天 --- 继续。",
+        "",
+        "—",
+        "",
+        "他说——完了。",
+        "",
+        "--",
+        "",
+        "**",
+        "",
+        "下。",
+      ].join("\n"),
+    });
+    expect(text).not.toContain("title");
+    expect(text).not.toContain("* * *");
+    expect(text).toContain("今天 --- 继续。");
+    expect(text).toContain("—");
+    expect(text).toContain("他说——完了。");
+    expect(text).toContain("--");
+    expect(text).toContain("下。");
+    expect(text.split("\n").some((line) => line.trim() === "*")).toBe(false);
+  });
+
+  it("合成稿和每章文件、没有章号的短篇都带上分节符", () => {
+    const serial = renderFanqieManuscript({
+      title: "夜港",
+      markdown: [
+        "引子之前。",
+        "",
+        "---",
+        "",
+        "引子之后。",
+        "",
+        "# 第1章 雨",
+        "",
+        "雨下了。",
+        "",
+        "---",
+        "",
+        "他抬头。",
+        "",
+        "# 第2章 雾",
+        "",
+        "***",
+        "",
+        "雾来了。",
+        "",
+        "___",
+        "",
+        "还有人。",
+      ].join("\n"),
+    });
+    expect(serial.combined).toContain("* * *");
+    expect(serial.combined).not.toContain("---");
+    expect(serial.combined).not.toContain("***");
+    expect(serial.files[0]?.text).toBe("第1章 雨\n\n雨下了。\n\n* * *\n\n他抬头。\n");
+    expect(serial.files[1]?.text).toBe("第2章 雾\n\n雾来了。\n\n* * *\n\n还有人。\n");
+    expect(serial.combined).toContain("引子之前。");
+    expect(serial.combined).toContain("引子之后。");
+
+    const plain = renderFanqieManuscript({
+      title: "短信",
+      markdown: "# 短信\n\n上一段。\n\n---\n\n下一段。\n",
+    });
+    expect(plain.numbered).toBe(false);
+    expect(plain.combined).toContain("* * *");
+    expect(plain.combined).not.toContain("---");
+    expect(plain.files[0]?.text).toContain("* * *");
+  });
+
+  it("交互请求不再接受 fanqie 格式值", () => {
+    expect(InteractionRequestSchema.safeParse({ intent: "export_book", format: "fanqie" }).success).toBe(false);
+    expect(InteractionRequestSchema.safeParse({ intent: "export_book", format: "txt" }).success).toBe(true);
+  });
 });
 
-describe("番茄导出文件", () => {
+describe("TXT 导出文件", () => {
   let root = "";
   afterEach(async () => {
     if (root) await rm(root, { recursive: true, force: true });
@@ -176,21 +332,25 @@ describe("番茄导出文件", () => {
     };
   }
 
-  it("合成一个 txt，并保留原来的 txt 原样导出", async () => {
+  it("合成一个 txt，md 仍是原来的 Markdown 拼接", async () => {
     const state = await fixture();
-    const fanqie = await buildExportArtifact(state, "harbor", {
-      format: "fanqie",
+    const txt = await buildExportArtifact(state, "harbor", {
+      format: "txt",
       fromChapter: 1,
       toChapter: 2,
     });
-    expect(fanqie.fileName).toBe("夜港-番茄.txt");
-    expect(fanqie.contentType).toContain("text/plain");
-    expect(String(fanqie.payload).trim()).toBe([
+    expect(txt.format).toBe("txt");
+    expect(txt.fileName).toBe("夜港.txt");
+    expect(txt.outputPath).toBe(join(root, "harbor_export.txt"));
+    expect(txt.contentType).toContain("text/plain");
+    expect(String(txt.payload).trim()).toBe([
       "夜港",
       "",
       "第1章 雨",
       "",
       "雨下了。",
+      "",
+      "* * *",
       "",
       "他抬头。",
       "",
@@ -198,13 +358,21 @@ describe("番茄导出文件", () => {
       "",
       "雾来了。",
     ].join("\n"));
-    expect(String(fanqie.payload).match(/第2章 雾/g)).toHaveLength(1);
-    expect(String(fanqie.payload)).not.toContain("作者有话说");
-    expect(String(fanqie.payload)).not.toContain("#");
+    expect(String(txt.payload).match(/第2章 雾/g)).toHaveLength(1);
+    expect(String(txt.payload)).not.toContain("作者有话说");
+    expect(String(txt.payload)).not.toContain("#");
+    expect(String(txt.payload)).not.toContain("**");
+    expect(String(txt.payload)).not.toContain("---");
 
-    const raw = await buildExportArtifact(state, "harbor", { format: "txt" });
-    expect(String(raw.payload)).toContain("# 第1章 雨");
-    expect(String(raw.payload)).toContain("**雨**");
+    const markdown = await buildExportArtifact(state, "harbor", {
+      format: "md",
+      fromChapter: 2,
+      toChapter: 2,
+    });
+    expect(String(markdown.payload)).toContain("# 第1章 雨");
+    expect(String(markdown.payload)).toContain("**雨**");
+    expect(String(markdown.payload)).toContain("---");
+    expect(markdown.fileName).toBe("harbor.md");
   });
 
   it("按章范围写成一章一个文件，文件名带章号和章名", async () => {
@@ -213,7 +381,7 @@ describe("番茄导出文件", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "旧的.txt"), "旧", "utf-8");
     const saved = await writeExportArtifact(state, "harbor", {
-      format: "fanqie",
+      format: "txt",
       layout: "per-chapter",
       fromChapter: 2,
       toChapter: 2,
@@ -227,23 +395,46 @@ describe("番茄导出文件", () => {
     await expect(readFile(join(dir, "第0001章 雨.txt"), "utf-8")).rejects.toThrow();
 
     const zipArtifact = await buildExportArtifact(state, "harbor", {
-      format: "fanqie",
+      format: "txt",
       layout: "per-chapter",
     });
+    expect(zipArtifact.fileName).toBe("夜港.zip");
     expect(zipArtifact.contentType).toContain("zip");
     const zip = await JSZip.loadAsync(zipArtifact.payload);
     expect(Object.keys(zip.files).sort()).toEqual(["第0001章 雨.txt", "第0002章 雾.txt"]);
-    expect(await zip.file("第0001章 雨.txt")?.async("string")).toContain("他抬头。");
+    const chapter = await zip.file("第0001章 雨.txt")?.async("string");
+    expect(chapter).toContain("他抬头。");
+    expect(chapter).toContain("* * *");
+    expect(chapter).not.toContain("---");
+    expect(chapter?.split("\n").some((line) => line.trim() === "*")).toBe(false);
   });
 
   it("只导出已通过的章", async () => {
     const state = await fixture();
     const artifact = await buildExportArtifact(state, "harbor", {
-      format: "fanqie",
+      format: "txt",
       approvedOnly: true,
     });
     expect(artifact.chaptersExported).toBe(1);
     expect(String(artifact.payload)).toContain("第1章 雨");
+    expect(String(artifact.payload)).toContain("* * *");
     expect(String(artifact.payload)).not.toContain("第2章 雾");
+  });
+
+  it("没有章节时，txt 用中文报错，md 和 epub 仍用英文", async () => {
+    const state = await fixture();
+    const empty = { ...state, loadChapterIndex: async () => [] };
+    await expect(buildExportArtifact(empty, "harbor", { format: "txt" })).rejects.toThrow("没有可导出的章节。");
+    await expect(buildExportArtifact(empty, "harbor", { format: "md" })).rejects.toThrow("No chapters to export.");
+    await expect(buildExportArtifact(empty, "harbor", { format: "epub" })).rejects.toThrow("No chapters to export.");
+  });
+
+  it("epub 仍能生成", async () => {
+    const state = await fixture();
+    const epub = await buildExportArtifact(state, "harbor", { format: "epub" });
+    expect(epub.format).toBe("epub");
+    expect(epub.contentType).toContain("epub");
+    expect(Buffer.isBuffer(epub.payload)).toBe(true);
+    expect((epub.payload as Buffer).length).toBeGreaterThan(100);
   });
 });

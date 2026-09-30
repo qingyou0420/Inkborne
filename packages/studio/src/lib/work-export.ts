@@ -1,4 +1,4 @@
-export type ManuscriptExportFormat = "txt" | "md" | "fanqie";
+export type ManuscriptExportFormat = "txt" | "md";
 
 export interface FanqieExportQuery {
   readonly fromChapter?: number;
@@ -16,7 +16,7 @@ export function bookManuscriptExportPath(
 ): string {
   const params = new URLSearchParams({ format });
   if (approvedOnly) params.set("approvedOnly", "true");
-  appendFanqieQuery(params, format === "fanqie" ? fanqie : undefined);
+  appendFanqieQuery(params, format === "txt" ? fanqie : undefined);
   return `/api/v1/books/${encodeURIComponent(bookId)}/export?${params.toString()}`;
 }
 
@@ -26,7 +26,7 @@ export function shortManuscriptExportPath(
   fanqie?: FanqieExportQuery,
 ): string {
   const params = new URLSearchParams({ format });
-  appendFanqieQuery(params, format === "fanqie" ? fanqie : undefined);
+  appendFanqieQuery(params, format === "txt" ? fanqie : undefined);
   return `/api/v1/shorts/${encodeURIComponent(shortId)}/export?${params.toString()}`;
 }
 

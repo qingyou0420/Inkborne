@@ -209,7 +209,6 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
               <DropdownMenuItem onClick={() => setSettingsBookId(book.id)}>{isZh ? "作品设置" : "Work settings"}</DropdownMenuItem>
               <DropdownMenuItem onClick={() => nav.toAnalytics(book.id)}>{isZh ? "作品统计" : "Statistics"}</DropdownMenuItem>
               <DropdownMenuItem data-testid={`book-export-manuscript-${book.id}`} onClick={() => downloadWork(bookManuscriptExportPath(book.id))}>{isZh ? "导出正文" : "Export manuscript"}</DropdownMenuItem>
-              <DropdownMenuItem data-testid={`book-export-fanqie-${book.id}`} onClick={() => downloadWork(bookManuscriptExportPath(book.id, "fanqie"))}>{isZh ? "番茄纯文本" : "Tomato plain text"}</DropdownMenuItem>
               <DropdownMenuItem disabled={pending} onClick={() => void updateStatus(book, status ? "active" : "paused")}>{status ? (isZh ? "恢复创作" : "Resume") : (isZh ? "暂停作品" : "Pause")}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem data-testid={`home-book-delete-${book.id}`} variant="destructive" disabled={pending} onClick={() => setDeleteTarget({ kind: "book", id: book.id, title: book.title })}>{isZh ? "删除作品" : "Delete work"}</DropdownMenuItem>
@@ -224,7 +223,6 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
             <DropdownMenuItem onClick={() => nav.toShortSettings(short.id)}>{isZh ? "作品设置" : "Work settings"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => nav.toShortAnalytics(short.id)}>{isZh ? "作品统计" : "Statistics"}</DropdownMenuItem>
             <DropdownMenuItem data-testid={`short-export-manuscript-${short.id}`} onClick={() => downloadWork(shortManuscriptExportPath(short.id))}>{isZh ? "导出正文" : "Export manuscript"}</DropdownMenuItem>
-            <DropdownMenuItem data-testid={`short-export-fanqie-${short.id}`} onClick={() => downloadWork(shortManuscriptExportPath(short.id, "fanqie"))}>{isZh ? "番茄纯文本" : "Tomato plain text"}</DropdownMenuItem>
             <DropdownMenuSeparator /><DropdownMenuItem data-testid={`short-delete-${short.id}`} variant="destructive" disabled={pending} onClick={() => setDeleteTarget({ kind: "short", id: short.id, title: short.title })}>{isZh ? "删除作品" : "Delete work"}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

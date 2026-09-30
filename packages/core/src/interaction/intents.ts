@@ -49,7 +49,7 @@ export const InteractionRequestSchema = z.object({
   authorIntent: z.string().min(1).optional(),
   currentFocus: z.string().min(1).optional(),
   fileName: z.string().min(1).optional(),
-  format: z.enum(["txt", "md", "epub", "fanqie"]).optional(),
+  format: z.enum(["txt", "md", "epub"]).optional(),
   approvedOnly: z.boolean().optional(),
   outputPath: z.string().min(1).optional(),
   fromChapter: z.number().int().min(1).optional(),

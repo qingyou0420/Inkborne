@@ -165,9 +165,6 @@ export function ShortReader({ storyId, nav, theme: _theme, t }: {
             <DropdownMenuItem onClick={() => window.location.assign(shortManuscriptExportPath(storyId))}>
               {t("book.export")}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => window.location.assign(shortManuscriptExportPath(storyId, "fanqie"))}>
-              {isZh ? "番茄纯文本" : "Tomato plain text"}
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -303,7 +300,7 @@ function ShortPlainTextBar({
         toChapter: query.toChapter,
       });
       void copyToClipboard(manuscript.combined)
-        .then(() => showToast(isZh ? "纯文本已复制，可直接贴到番茄。标题只留一行。" : "Plain text copied.", "success"))
+        .then(() => showToast(isZh ? "纯文本已复制。标题只留了一行。" : "Plain text copied. The title is one line.", "success"))
         .catch((error) => showToast(error instanceof Error ? error.message : "复制失败", "error"));
     } catch (error) {
       showToast(error instanceof Error ? error.message : "复制失败", "error");
@@ -320,7 +317,7 @@ function ShortPlainTextBar({
         <a
           className={`btn-secondary ${rangeProblem ? "pointer-events-none opacity-40" : ""}`}
           data-testid="short-fanqie-download"
-          href={rangeProblem ? undefined : shortManuscriptExportPath(storyId, "fanqie", query)}
+          href={rangeProblem ? undefined : shortManuscriptExportPath(storyId, "txt", query)}
           aria-disabled={rangeProblem ? true : undefined}
           download
           onClick={(event) => {
@@ -328,7 +325,7 @@ function ShortPlainTextBar({
           }}
         >
           <Download size={14} />
-          {isZh ? "下载番茄纯文本" : "Download Tomato text"}
+          {isZh ? "下载 TXT" : "Download TXT"}
         </a>
       </div>
       <FanqieExportFields

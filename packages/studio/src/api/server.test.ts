@@ -375,6 +375,11 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     runWorkerAgent: runWorkerAgentMock,
     loadProjectConfig: loadProjectConfigMock,
     processProjectInteractionRequest: processProjectInteractionRequestMock,
+    buildExportArtifact: actual.buildExportArtifact,
+    fanqieOptionsFromQuery: actual.fanqieOptionsFromQuery,
+    fanqieDownloadName: actual.fanqieDownloadName,
+    renderFanqieManuscript: actual.renderFanqieManuscript,
+    zipFanqieFiles: actual.zipFanqieFiles,
     createInteractionToolsFromDeps: createInteractionToolsFromDepsMock,
     deleteLatestChapter: deleteLatestChapterMock,
     executeEditTransaction: actual.executeEditTransaction,
@@ -2766,6 +2771,13 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(exported.headers.get("content-type")).toContain("text/plain");
     expect(await exported.text()).toContain("终稿");
 
+    const exportedAlias = await app.request(`http://localhost/api/v1/shorts/${encodeURIComponent("明日来信")}/export?format=fanqie`);
+    expect(exportedAlias.status).toBe(200);
+    expect(exportedAlias.headers.get("content-type")).toContain("text/plain");
+    const aliasText = await exportedAlias.text();
+    expect(aliasText).toContain("终稿");
+    expect(aliasText).not.toContain("# 明日来信");
+
     const exportedMd = await app.request(`http://localhost/api/v1/shorts/${encodeURIComponent("明日来信")}/export?format=md`);
     expect(exportedMd.status).toBe(200);
     expect(await exportedMd.text()).toContain("# 明日来信");
@@ -3445,6 +3457,55 @@ describe("createStudioServer daemon lifecycle", () => {
       ok: true,
       chapters: 2,
     });
+  });
+
+  it("treats format=fanqie as cleaned txt on book export and export-save", async () => {
+    loadChapterIndexMock.mockResolvedValue([{
+      number: 3,
+      title: "Demo",
+      status: "draft",
+      wordCount: 1,
+    }]);
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const downloaded = await app.request("http://localhost/api/v1/books/demo-book/export?format=fanqie");
+    expect(downloaded.status).toBe(200);
+    expect(downloaded.headers.get("content-type")).toContain("text/plain");
+    const text = await downloaded.text();
+    expect(text).toContain("Body");
+    expect(text).toContain("第3章");
+    expect(text).not.toContain("# Demo");
+
+    const perChapter = await app.request("http://localhost/api/v1/books/demo-book/export-save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "fanqie", layout: "per-chapter" }),
+    });
+    expect(perChapter.status).toBe(200);
+    expect(processProjectInteractionRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        intent: "export_book",
+        format: "txt",
+        layout: "per-chapter",
+        outputPath: join(root, "books", "demo-book", "exports", "chapters"),
+      }),
+    }));
+
+    processProjectInteractionRequestMock.mockClear();
+    const combined = await app.request("http://localhost/api/v1/books/demo-book/export-save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "fanqie" }),
+    });
+    expect(combined.status).toBe(200);
+    expect(processProjectInteractionRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        intent: "export_book",
+        format: "txt",
+        outputPath: join(root, "books", "demo-book", "demo-book.txt"),
+      }),
+    }));
   });
 
   it("creates a fresh book session on POST /api/v1/sessions", async () => {

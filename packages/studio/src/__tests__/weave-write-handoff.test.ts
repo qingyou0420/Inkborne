@@ -125,7 +125,7 @@ describe("adopted weave to write handoff", () => {
     expect(html).not.toContain('data-testid="write-legacy-tools"');
     expect(html).not.toContain('data-testid="review-queue"');
     expect(html).not.toContain("改写");
-    expect(html).toContain('data-testid="write-export-tools"');
+    expect(html).not.toContain('data-testid="write-export-tools"');
   });
 
   it("shows a 先定全书篇幅 gate when canon length is missing", () => {

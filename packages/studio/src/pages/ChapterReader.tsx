@@ -25,7 +25,6 @@ import {
   Pencil,
   Save,
   MoreHorizontal,
-  Copy,
 } from "lucide-react";
 
 const pendingReaderEdits = new Map<string, { content: string; baseline: string }>();
@@ -254,7 +253,7 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
         markdown: copySource,
       });
       await copyToClipboard(text);
-      showToast(isZh ? "本章已复制，可直接贴到番茄。标题只留了一行。" : "Chapter copied.", "success");
+      showToast(isZh ? "本章已复制为纯文本。标题只留了一行。" : "Copied as plain text. The title is one line.", "success");
     } catch (copyError) {
       showToast(copyError instanceof Error ? copyError.message : "复制失败", "error");
     }
@@ -267,7 +266,7 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
           type="button"
           className="btn-secondary"
           data-testid="chapter-copy-plain"
-          title={isZh ? "番茄纯文本：段间空一行，段首不缩进，标题只留一行" : "Tomato plain text"}
+          title={isZh ? "纯文本：段间空一行，段首不缩进，标题只留一行" : "Plain text: a blank line between paragraphs, no indent, and the title kept to one line"}
           onClick={() => void copyChapter()}
         >
           {isZh ? "复制本章" : "Copy chapter"}
@@ -326,10 +325,6 @@ function ChapterReaderWorkspace({ bookId, chapterNumber, nav, theme: _theme, t, 
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => void handleOpenPacket()}>
               {t("reader.packet")}
-            </DropdownMenuItem>
-            <DropdownMenuItem data-testid="chapter-copy-fanqie" onClick={() => void copyChapter()}>
-              <Copy size={14} />
-              {isZh ? "番茄纯文本" : "Tomato plain text"}
             </DropdownMenuItem>
             <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
               {t("reader.deleteChapter")}
