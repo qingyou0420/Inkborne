@@ -1,5 +1,5 @@
 ---
-name: 墨生万象 · 水墨书房
+name: 轻光之集 / Lightbound · 水墨书房（原名墨生万象 / Inkborne）
 description: 留白中的墨意，阅读与写作在前。
 colors:
   ink: "#303a33"
@@ -57,7 +57,9 @@ components:
     padding: "12px 14px"
 ---
 
-# Design System: 墨生万象
+# Design System: 轻光之集 / Lightbound
+
+原名墨生万象 / Inkborne，更早为幻想作家 / FantaWriter。
 
 ## Overview
 

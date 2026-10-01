@@ -1,4 +1,6 @@
-# 墨生万象 / Inkborne
+# 轻光之集 / Lightbound
+
+原名墨生万象 / Inkborne，更早为幻想作家 / FantaWriter。
 
 <!-- impeccable:product-schema 1 -->
 

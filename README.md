@@ -1,10 +1,10 @@
-# 墨生万象 / Inkborne 2.0
+# 轻光之集 / Lightbound 2.0
 
-Windows 向的**本机桌面**长篇连载工作台（原名幻想作家 / FantaWriter）。2.0 是一次**重建**：InkOS 内核 + Electron 壳，不是把 1.7.x Next.js Studio 迁过来。
+Windows 向的**本机桌面**长篇连载工作台（原名墨生万象 / Inkborne，更早为幻想作家 / FantaWriter）。2.0 是一次**重建**：InkOS 内核 + Electron 壳，不是把 1.7.x Next.js Studio 迁过来。
 
 内核与 Studio UI fork 自 [InkOS](https://github.com/Narcooo/inkos) v1.8.x（AGPL-3.0）。Electron 壳负责单实例、钉端口、窗口、首启向导和退出杀引擎。稿件落在你选的项目根目录（默认 `%USERPROFILE%\Documents\幻想作家\`），标准 InkOS 布局：`inkos.json`、`books/`、`.inkos/secrets.json`。密钥只写在本机项目里，**不进 git、不进安装包**。
 
-当前源码版本：**2.6.1**。本地构建安装包：`Inkborne-Setup-2.6.1.exe`（同时提供 `FantaWriter-Setup-*` 与 `Fantasy-Writer-Setup-*` 别名）。已公开发布的安装包见 [Releases](https://github.com/qingyou0420/Inkborne/releases)。
+当前源码版本：**3.0.0**。本地构建安装包：`Lightbound-Setup-3.0.0.exe`（同时提供 `Inkborne-Setup-*`、`FantaWriter-Setup-*` 与 `Fantasy-Writer-Setup-*` 旧名别名）。已公开发布的安装包见 [Releases](https://github.com/qingyou0420/Lightbound/releases)。
 
 **[更新日志](./CHANGELOG.md)** · **[2.0 蓝图](./docs/2.0重构蓝图-InkOS内核桌面重建方案.md)** · **[上游说明](./docs/UPSTREAM.md)**
 
@@ -24,8 +24,7 @@ Windows 向的**本机桌面**长篇连载工作台（原名幻想作家 / Fanta
 ## 从源码运行
 
 ```bash
-git clone https://github.com/qingyou0420/Inkborne.git
-cd Inkborne
+git clone https://github.com/qingyou0420/Lightbound.git && cd Lightbound
 pnpm install
 pnpm build          # 编译 @actalk/inkos-core + Studio dist/
 pnpm test           # CI 会跑的子集
@@ -46,7 +45,7 @@ pnpm engine:smoke
 pnpm dist:win
 ```
 
-产物在 `dist-installer/Inkborne-Setup-2.6.1.exe`（另有 `FantaWriter-Setup-2.6.1.exe` 与 `Fantasy-Writer-Setup-2.6.1.exe` 别名）。更新扫描同时接受三套前缀。打包前会预构建 Studio、`INKOS_DISABLE_VITE_BUILD=1`，把 `packages/studio/dist` + core 装进 extraResources，并拒绝把 `.env` / `secrets.json` 打进安装包。
+产物在 `dist-installer/Lightbound-Setup-3.0.0.exe`（另有 `Inkborne-Setup-3.0.0.exe`、`FantaWriter-Setup-3.0.0.exe` 与 `Fantasy-Writer-Setup-3.0.0.exe` 旧名别名）。更新扫描同时接受主名前缀与三套旧名前缀。打包前会预构建 Studio、`INKOS_DISABLE_VITE_BUILD=1`，把 `packages/studio/dist` + core 装进 extraResources，并拒绝把 `.env` / `secrets.json` 打进安装包。
 
 调试 CLI（显式根，不要靠 cwd）：
 
@@ -70,4 +69,4 @@ git remote add inkos-upstream https://github.com/Narcooo/inkos.git
 
 ## 常见问题
 
-**升级后桌面 / 任务栏仍是旧图标？** 安装包会把 Inkborne 圆标写进 `Inkborne.exe`。Windows 可能缓存同一路径 exe 的旧图（`IconCache.db`）；运行 `ie4uinit.exe -show` 或重启资源管理器即可。之前「固定到任务栏」的图钉不会随升级自动换标，取消固定再固定一次。
+**升级后桌面 / 任务栏仍是旧图标？** 安装包会把轻光之集圆标写进 `Lightbound.exe`。Windows 可能缓存同一路径 exe 的旧图（`IconCache.db`）；运行 `ie4uinit.exe -show` 或重启资源管理器即可。之前「固定到任务栏」的图钉不会随升级自动换标，取消固定再固定一次。改名后任务栏图钉会失效，需要取消固定后重新固定。

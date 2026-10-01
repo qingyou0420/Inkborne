@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 3.0.0
+
+版本 3.0.0。用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。
+
+主安装包 `Lightbound-Setup-3.0.0.exe`，同时发布旧名别名 `Inkborne-Setup-3.0.0.exe`、`FantaWriter-Setup-3.0.0.exe`、`Fantasy-Writer-Setup-3.0.0.exe`。`appId` 仍为 `com.fantawriter.app`，userData 仍为 `%APPDATA%\fantawriter`。GitHub 仓库已改名为 Lightbound（https://github.com/qingyou0420/Lightbound），旧地址由 GitHub 重定向，不要再新建名为 Inkborne 的仓库。改名与图标、导出的具体技术变更见 #161、#162、#163、#164。
+
 ## 2.6.1
 
 用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。Windows 安装包 `Inkborne-Setup-2.6.1.exe`（2026-09-30）。

@@ -1,8 +1,25 @@
 # 更新日志
 
-本文件按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 记录对用户可见的改动。安装包在 [Releases](https://github.com/qingyou0420/Inkborne/releases) 下载。本软件中文名「墨生万象」，英文名 Inkborne（原名幻想作家 / FantaWriter）。
+本文件按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 记录对用户可见的改动。安装包在 [Releases](https://github.com/qingyou0420/Lightbound/releases) 下载。本软件中文名「轻光之集」，英文名 Lightbound（原名墨生万象 / Inkborne，更早为幻想作家 / FantaWriter）。
 
 ## [Unreleased]
+
+## [3.0.0] - 2026-10-02
+
+这一版把软件改名为「轻光之集 / Lightbound」。你的书稿、设置和模型配置都还在，升级后可以接着用。
+
+Windows 安装包：`Lightbound-Setup-3.0.0.exe`（同时上传 `Inkborne-Setup-3.0.0.exe`、`FantaWriter-Setup-3.0.0.exe` 与 `Fantasy-Writer-Setup-3.0.0.exe` 旧名安装包，方便旧版自动更新）。
+
+### 变更
+
+- 软件改名为「轻光之集 / Lightbound」（原名墨生万象 / Inkborne），窗口标题、关于页、界面和提示都换成新名。
+- 换了新图标。
+- 从旧版升级后首次打开会提示一次已更名。
+- 你的书稿、设置、模型配置原样保留，不用重新配置。新装用户默认书稿文件夹为「文档\轻光之集」，已有「文档\幻想作家」的继续沿用。
+- 如果之前把软件固定在任务栏，升级后图钉会失效，需要取消固定后重新固定。
+- 落笔页「导出」新增「导出本章」，只导出当前这一章。
+- 「范围导出」的起止章号可以直接用键盘输入、删除重输和粘贴，离开输入框或按回车会自动调整到有效章号，起始章比结束章大时自动对调并提示（短篇范围导出同样）。
+- 旧名字的安装包仍会同步发布，已安装旧版的用户在软件里「检查更新」依然能升级。
 
 ## [2.6.1] - 2026-09-30
 
@@ -753,6 +770,7 @@ P1 硬闸（仍是开发快照，不是正式 2.0.0）。
 - 提供 Windows 安装包。
 - 从本仓 GitHub Release 检查更新。
 
+[3.0.0]: https://github.com/qingyou0420/Lightbound/releases/tag/v3.0.0
 [2.6.1]: https://github.com/qingyou0420/Inkborne/releases/tag/v2.6.1
 [2.6.0]: https://github.com/qingyou0420/Inkborne/releases/tag/v2.6.0
 [2.2.10]: https://github.com/qingyou0420/Inkborne/releases/tag/v2.2.10
