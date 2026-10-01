@@ -3,9 +3,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { singleChapterExportFileName } from "@actalk/inkos-core";
+import { attachmentDisposition } from "../api/attachment-disposition";
 import {
   bookManuscriptExportPath,
   continueShortPrompt,
+  filenameFromContentDisposition,
   manuscriptToPlainText,
   shortManuscriptExportPath,
 } from "./work-export";
@@ -105,6 +107,21 @@ describe("manuscript export helpers", () => {
     const phrase = "番茄" + "纯文本";
     const packagesRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
     expect(filesContaining(packagesRoot, phrase)).toEqual([]);
+  });
+
+  it("reads a download filename from Content-Disposition", () => {
+    const chinese = "夜港 第3章 夜雨.txt";
+    const header = `attachment; filename="_.txt"; filename*=UTF-8''${encodeURIComponent(chinese)}`;
+    expect(filenameFromContentDisposition(header, "第3章.txt")).toBe(chinese);
+    expect(filenameFromContentDisposition(attachmentDisposition(chinese), "第3章.txt")).toBe(chinese);
+    expect(filenameFromContentDisposition('attachment; filename="harbor.txt"', "第3章.txt")).toBe("harbor.txt");
+    expect(filenameFromContentDisposition("attachment", "第3章.txt")).toBe("第3章.txt");
+    expect(filenameFromContentDisposition(null, "第3章.txt")).toBe("第3章.txt");
+    const broken = "attachment; filename*=UTF-8''%ZZ; filename=\"harbor.txt\"";
+    expect(() => filenameFromContentDisposition(broken, "第3章.txt")).not.toThrow();
+    expect(filenameFromContentDisposition(broken, "第3章.txt")).toBe("harbor.txt");
+    expect(() => filenameFromContentDisposition("attachment; filename*=UTF-8''%E4%B8", "第3章.txt")).not.toThrow();
+    expect(filenameFromContentDisposition("attachment; filename*=UTF-8''%E4%B8", "第3章.txt")).toBe("第3章.txt");
   });
 
   it("strips markdown chrome for 导出原文 txt", () => {

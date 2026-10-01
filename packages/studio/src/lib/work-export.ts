@@ -41,6 +41,32 @@ export function shortManuscriptExportPath(
   return `/api/v1/shorts/${encodeURIComponent(shortId)}/export?${params.toString()}`;
 }
 
+/**
+ * Name from a Content-Disposition header.
+ * Prefers `filename*=UTF-8''…` (percent-decoded). Then `filename="…"`.
+ * Otherwise `fallback`. A broken percent-encoding does not throw.
+ */
+export function filenameFromContentDisposition(header: string | null | undefined, fallback: string): string {
+  const source = header ?? "";
+  const starred = /filename\*\s*=\s*UTF-8''([^;]*)/i.exec(source);
+  if (starred) {
+    const encoded = starred[1].trim().replace(/"/g, "");
+    if (encoded) {
+      try {
+        const decoded = decodeURIComponent(encoded);
+        if (decoded) return decoded;
+      } catch {
+        // Malformed % sequence. Fall through to filename= or the fallback.
+      }
+    }
+  }
+  const quoted = /filename\s*=\s*"([^"]*)"/i.exec(source);
+  if (quoted?.[1]) return quoted[1];
+  const bare = /(?:^|;)\s*filename\s*=\s*([^;\s]+)/i.exec(source);
+  if (bare?.[1]) return bare[1];
+  return fallback;
+}
+
 function appendFanqieQuery(params: URLSearchParams, fanqie: FanqieExportQuery | undefined): void {
   if (!fanqie) return;
   if (fanqie.fromChapter) params.set("from", String(fanqie.fromChapter));

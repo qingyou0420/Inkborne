@@ -9,7 +9,7 @@ import { AlertCircle, Copy, Download, Feather, Loader2, MoreHorizontal } from "l
 import { useState } from "react";
 import { Streamdown } from "streamdown";
 import { FanqieExportFields } from "../components/FanqieExportFields";
-import { normalizeRange } from "../lib/export-range";
+import { maxChapterNumber, normalizeRange } from "../lib/export-range";
 import { fanqieRangeProblem } from "../lib/fanqie-range";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
@@ -279,7 +279,7 @@ function ShortPlainTextBar({
   readonly onChange: (patch: { from?: string; to?: string; layout?: "combined" | "per-chapter"; blankLine?: boolean; indent?: boolean }) => void;
 }) {
   const shape = describeFanqieManuscript(content, title);
-  const chapterCount = shape.chapters.length;
+  const chapterCount = maxChapterNumber(shape.chapters);
   const [rangeSwapped, setRangeSwapped] = useState(false);
   const settled = normalizeRange(from, to, chapterCount);
   const rangeProblem = fanqieRangeProblem(settled.from, settled.to, chapterCount, isZh);

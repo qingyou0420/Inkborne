@@ -1,6 +1,7 @@
 /**
  * Chapter-range drafts for export. Typing keeps the raw string; clamp and
- * swap happen only when the field is committed.
+ * swap happen when the field is committed (blur or Enter). Stepping clamps
+ * immediately because that click or arrow key is itself a commit.
  *
  * SPDX-License-Identifier: AGPL-3.0-only
  */
@@ -55,4 +56,43 @@ export function normalizeRange(from: string, to: string, chapterCount: number): 
     swapped = true;
   }
   return { from: start, to: end, swapped };
+}
+
+function clampChapter(value: number, chapterCount: number): number {
+  const lower = Math.max(1, value);
+  const upper = upperBound(chapterCount);
+  return upper > 0 ? Math.min(lower, upper) : lower;
+}
+
+/**
+ * Step one bound. Empty or non-numeric text does not continue from a guessed
+ * number: plus on "from" starts at 1, plus on "to" starts at the chapter total
+ * (or 1 when the total is unknown), and minus lands on 1. A parsed value
+ * (fullwidth digits included) moves by `delta`, then clamps to 1..chapterCount.
+ * An unknown total only clamps the lower bound.
+ */
+export function stepRangeField(
+  raw: string,
+  delta: number,
+  chapterCount: number,
+  kind: "from" | "to",
+): string {
+  const step = Number.isFinite(delta) ? delta : 0;
+  const parsed = parseChapterDraft(raw);
+  if (parsed === null) {
+    if (step < 0) return "1";
+    const upper = upperBound(chapterCount);
+    if (kind === "to" && upper > 0) return String(upper);
+    return "1";
+  }
+  return String(clampChapter(parsed + step, chapterCount));
+}
+
+/** Highest chapter number. An empty list is 0, so chapters 1 and 3 stay 3 rather than 2. */
+export function maxChapterNumber(chapters: ReadonlyArray<{ readonly number: number }>): number {
+  let max = 0;
+  for (const chapter of chapters) {
+    if (Number.isFinite(chapter.number) && chapter.number > max) max = chapter.number;
+  }
+  return max;
 }

@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
-import { fetchJson } from "../hooks/use-api";
+import { buildApiUrl, fetchJson } from "../hooks/use-api";
 import { useI18n } from "../hooks/use-i18n";
 import { normalizeRange } from "../lib/export-range";
 import { fanqieRangeProblem } from "../lib/fanqie-range";
-import { bookManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
+import { bookManuscriptExportPath, filenameFromContentDisposition, type FanqieExportQuery } from "../lib/work-export";
 import { FanqieExportFields } from "./FanqieExportFields";
 import {
   DropdownMenu,
@@ -52,6 +52,8 @@ export function ExportMenu({
   const [blankLine, setBlankLine] = useState(true);
   const [indent, setIndent] = useState(false);
   const [rangeSwapped, setRangeSwapped] = useState(false);
+  const [downloadingChapter, setDownloadingChapter] = useState(false);
+  const chapterDownloadLock = useRef(false);
   const showCurrentChapter = variant === "manuscript" && currentChapter !== undefined;
   const settled = normalizeRange(from, to, chapterCount);
   const rangeProblem = format === "txt" ? fanqieRangeProblem(settled.from, settled.to, chapterCount, isZh) : "";
@@ -135,6 +137,46 @@ export function ExportMenu({
       onSaved(exported.path ?? "");
     } catch (error) {
       onError(error instanceof Error ? error.message : "Export failed");
+    }
+  };
+
+  // Fetch first. <a download> would save the JSON error (for example 仅已通过) as a file.
+  // A successful download is not a save into the project, so this does not call onSaved.
+  const downloadCurrent = async () => {
+    const chapter = currentChapter;
+    if (!chapter || !currentChapterReady || chapterDownloadLock.current) return;
+    const url = buildApiUrl(currentHref);
+    if (!url) {
+      onError(t("book.exportDownloadFailed"));
+      return;
+    }
+    chapterDownloadLock.current = true;
+    setDownloadingChapter(true);
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) {
+        onError(await readDownloadError(res, t("book.exportDownloadFailed")));
+        return;
+      }
+      const blob = await res.blob();
+      const extension = format === "md" ? "md" : format === "epub" ? "epub" : "txt";
+      const fileName = filenameFromContentDisposition(
+        res.headers.get("Content-Disposition"),
+        `第${chapter.number}章.${extension}`,
+      );
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      onError(t("book.exportDownloadFailed"));
+    } finally {
+      chapterDownloadLock.current = false;
+      setDownloadingChapter(false);
     }
   };
 
@@ -247,18 +289,15 @@ export function ExportMenu({
         {showCurrentChapter ? (
           <div className="flex flex-col gap-1 border-t border-border/60 pt-2" data-testid="export-current-chapter">
             <p className="text-sm">{t("book.exportCurrentChapter")}</p>
-            <a
-              href={currentChapterReady ? currentHref : undefined}
-              download
+            <button
+              type="button"
+              className="btn-secondary text-center"
+              disabled={!currentChapterReady || downloadingChapter}
               data-testid="export-current-chapter-download"
-              className={`btn-secondary text-center ${currentChapterReady ? "" : "pointer-events-none opacity-40"}`}
-              aria-disabled={currentChapterReady ? undefined : true}
-              onClick={(event) => {
-                if (!currentChapterReady) event.preventDefault();
-              }}
+              onClick={() => { void downloadCurrent(); }}
             >
               {t("book.download")}
-            </a>
+            </button>
             <button
               type="button"
               className="btn-ghost w-full"
@@ -278,6 +317,16 @@ export function ExportMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+async function readDownloadError(res: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await res.json() as { error?: unknown };
+    if (payload && typeof payload.error === "string" && payload.error.trim()) return payload.error.trim();
+  } catch {
+    // Body was not JSON. The caller shows the generic line.
+  }
+  return fallback;
 }
 
 function positiveChapter(raw: string): number | undefined {
