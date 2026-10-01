@@ -17,6 +17,13 @@ const {
 };
 
 describe("versionFromSetupName (group 1 = semver)", () => {
+  it("parses Lightbound-Setup-2.6.1.exe as 2.6.1", () => {
+    // PR-1：主安装包前缀改为 Lightbound-Setup，group 1 仍是 semver
+    const m = "Lightbound-Setup-2.6.1.exe".match(SETUP_RE);
+    expect(m?.[1]).toBe("2.6.1");
+    expect(versionFromSetupName("Lightbound-Setup-2.6.1.exe")).toBe("2.6.1");
+  });
+
   it("parses Inkborne-Setup-2.6.1.exe as 2.6.1", () => {
     const m = "Inkborne-Setup-2.6.1.exe".match(SETUP_RE);
     expect(m?.[1]).toBe("2.6.1");
@@ -42,6 +49,8 @@ describe("versionFromSetupName (group 1 = semver)", () => {
   });
 
   it("parses pre-release suffix on all prefixes", () => {
+    // PR-1：预发布后缀同样覆盖 Lightbound-Setup
+    expect(versionFromSetupName("Lightbound-Setup-2.6.1-beta.1.exe")).toBe("2.6.1-beta.1");
     expect(versionFromSetupName("Inkborne-Setup-2.6.1-beta.1.exe")).toBe("2.6.1-beta.1");
     expect(versionFromSetupName("FantaWriter-Setup-1.5.0-beta.1.exe")).toBe("1.5.0-beta.1");
     expect(versionFromSetupName("Fantasy-Writer-Setup-1.5.0-beta.1.exe")).toBe("1.5.0-beta.1");
@@ -59,17 +68,26 @@ describe("versionFromSetupName (group 1 = semver)", () => {
 });
 
 describe("current installer filename", () => {
-  it("builds Inkborne-Setup-${version}.exe", () => {
-    expect(CURRENT_SETUP_PREFIX).toBe("Inkborne-Setup");
-    expect(setupFileNameForVersion("2.6.1")).toBe("Inkborne-Setup-2.6.1.exe");
-    expect(setupFileNameForVersion("v2.6.1")).toBe("Inkborne-Setup-2.6.1.exe");
+  it("builds Lightbound-Setup-${version}.exe", () => {
+    // PR-1：主安装包前缀改为 Lightbound-Setup
+    expect(CURRENT_SETUP_PREFIX).toBe("Lightbound-Setup");
+    expect(setupFileNameForVersion("2.6.1")).toBe("Lightbound-Setup-2.6.1.exe");
+    expect(setupFileNameForVersion("v2.6.1")).toBe("Lightbound-Setup-2.6.1.exe");
     expect(versionFromSetupName(setupFileNameForVersion("2.6.1"))).toBe("2.6.1");
   });
 
-  it("ranks Inkborne ahead of FantaWriter and the shipped 1.4.0 name", () => {
+  it("ranks Lightbound ahead of Inkborne, FantaWriter, and the shipped 1.4.0 name", () => {
+    // PR-1：同版本优先 Lightbound，其后仍是 Inkborne、FantaWriter、Fantasy-Writer
+    expect(preferSetupRank("Lightbound-Setup-2.6.1.exe")).toBe(0);
+    expect(preferSetupRank("Inkborne-Setup-2.6.1.exe")).toBe(1);
+    expect(preferSetupRank("Lightbound-Setup-2.6.1.exe")).toBeLessThan(
+      preferSetupRank("Inkborne-Setup-2.6.1.exe")
+    );
     expect(preferSetupRank("Inkborne-Setup-2.6.1.exe")).toBeLessThan(
       preferSetupRank("FantaWriter-Setup-2.6.1.exe")
     );
+    expect(preferSetupRank("FantaWriter-Setup-2.6.1.exe")).toBe(2);
+    expect(preferSetupRank("Fantasy-Writer-Setup-1.4.0.exe")).toBe(3);
     expect(preferSetupRank("FantaWriter-Setup-1.4.1.exe")).toBeLessThan(
       preferSetupRank("Fantasy-Writer-Setup-1.4.0.exe")
     );

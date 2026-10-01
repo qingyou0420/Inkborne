@@ -14,7 +14,9 @@ describe("local update publication", () => {
     const plan = createUpdatePublishPlan("2.2.2", {
       platform: "win32", homeDir: "C:\\Users\\Writer", appData: "C:\\Roaming", execFileSync: run,
     });
+    // PR-1：桌面更新目录新增 Lightbound-Updates；userData 仍是 fantawriter\updates
     expect(plan.directories).toEqual([
+      path.join("E:\\桌面", "Lightbound-Updates"),
       path.join("E:\\桌面", "Inkborne-Updates"),
       path.join("E:\\桌面", "FantaWriter-Updates"),
       path.join("C:\\Roaming", "fantawriter", "updates"),
@@ -27,11 +29,17 @@ describe("local update publication", () => {
       .toBe(path.join("C:\\Users\\Writer", "Desktop"));
   });
 
-  it("publishes all three setup names even when the selected input is a legacy alias", () => {
-    const { versionFromSetupName } = require("../lib/setup-artifact.cjs") as { versionFromSetupName: (name: string) => string };
-    for (const source of ["FantaWriter-Setup-2.2.2.exe", "Fantasy-Writer-Setup-2.2.2.exe"]) {
-      const plan = createUpdatePublishPlan(versionFromSetupName(source), { platform: "linux", homeDir: "/home/writer", appData: "/data" });
-      expect(plan.names).toEqual(["Inkborne-Setup-2.2.2.exe", "FantaWriter-Setup-2.2.2.exe", "Fantasy-Writer-Setup-2.2.2.exe"]);
+  it("publishes all four setup names even when the selected input is a legacy alias", () => {
+    // PR-1：发布名为主包 Lightbound-Setup，加 Inkborne / FantaWriter / Fantasy-Writer
+    const { versionFromSetupName } = require("../lib/setup-artifact.cjs") as { versionFromSetupName: (name: string) => string | null };
+    for (const source of ["Inkborne-Setup-2.2.2.exe", "FantaWriter-Setup-2.2.2.exe", "Fantasy-Writer-Setup-2.2.2.exe"]) {
+      const plan = createUpdatePublishPlan(versionFromSetupName(source) || "", { platform: "linux", homeDir: "/home/writer", appData: "/data" });
+      expect(plan.names).toEqual([
+        "Lightbound-Setup-2.2.2.exe",
+        "Inkborne-Setup-2.2.2.exe",
+        "FantaWriter-Setup-2.2.2.exe",
+        "Fantasy-Writer-Setup-2.2.2.exe",
+      ]);
     }
   });
 });

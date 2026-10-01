@@ -1,6 +1,6 @@
 /**
- * 打包完成后，把最新 Inkborne-Setup（或旧名 FantaWriter-Setup / Fantasy-Writer-Setup）复制到可扫描目录：
- * 1. 桌面/Inkborne-Updates 与 FantaWriter-Updates
+ * 打包完成后，把最新 Lightbound-Setup（或旧名 Inkborne-Setup / FantaWriter-Setup / Fantasy-Writer-Setup）复制到可扫描目录：
+ * 1. 桌面/Lightbound-Updates、Inkborne-Updates 与 FantaWriter-Updates
  * 2. %APPDATA%/fantawriter/updates（Electron userData）
  */
 import fs from "fs";
@@ -9,7 +9,7 @@ import { createRequire } from "module";
 import { fileURLToPath } from "url";
 
 const require = createRequire(import.meta.url);
-const { SETUP_RE } = require("./setup-artifact.cjs");
+const { SETUP_RE, preferSetupRank } = require("./setup-artifact.cjs");
 const { createUpdatePublishPlan } = require("./publish-update-paths.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,12 +65,15 @@ function findLatestSetup() {
     })
     .filter(Boolean);
   if (!files.length) {
-    console.error("[publish-update] 未找到 Inkborne-Setup-*.exe / FantaWriter-Setup-*.exe");
+    console.error("[publish-update] 未找到 Lightbound-Setup-*.exe / Inkborne-Setup-*.exe / FantaWriter-Setup-*.exe / Fantasy-Writer-Setup-*.exe");
     process.exit(1);
   }
   files.sort((a, b) => {
     const c = cmp(b.version, a.version);
-    return c !== 0 ? c : b.mtime - a.mtime;
+    if (c !== 0) return c;
+    // 同版本优先 Lightbound-Setup；仍接受三个旧前缀。
+    const rank = preferSetupRank(a.name) - preferSetupRank(b.name);
+    return rank !== 0 ? rank : b.mtime - a.mtime;
   });
   return files[0];
 }
@@ -78,7 +81,7 @@ function findLatestSetup() {
 const latest = findLatestSetup();
 const { directories: targets, names } = createUpdatePublishPlan(latest.version);
 console.log(
-  `[publish-update] 发布 ${latest.name} (v${latest.version}) → 可被已安装客户端扫描的目录`
+  `[publish-update] 发布 ${latest.name} (v${latest.version})；同步四套文件名 Lightbound-Setup / Inkborne-Setup / FantaWriter-Setup / Fantasy-Writer-Setup`
 );
 for (const dir of targets) {
   try {

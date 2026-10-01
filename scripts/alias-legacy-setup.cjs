@@ -1,14 +1,23 @@
 /**
- * 发版辅助：把主安装包 Inkborne-Setup-<ver>.exe 与 .sha256
- * 复制为 FantaWriter-Setup-<ver>.exe 与 Fantasy-Writer-Setup-<ver>.exe。
- * 2.0.x 客户端认 FantaWriter-Setup；1.4.0 认 Fantasy-Writer-Setup。
- * latest Release 必须同时挂三套文件名。
+ * 发版辅助：把主安装包 Lightbound-Setup-<ver>.exe 与 .sha256
+ * 复制为 Inkborne-Setup、FantaWriter-Setup、Fantasy-Writer-Setup。
+ * 2.6.x 客户端认 Inkborne-Setup；2.0.x 认 FantaWriter-Setup；1.4.0 认 Fantasy-Writer-Setup。
+ * latest Release 必须同时挂四套文件名。
+ * legacy 仍指向 FantaWriter-Setup（按文件名查找，不是 aliases[0]）。
  */
 const fs = require("fs");
 const path = require("path");
 
-const CURRENT_SETUP_PREFIX = "Inkborne-Setup";
-const LEGACY_SETUP_PREFIXES = ["FantaWriter-Setup", "Fantasy-Writer-Setup"];
+const CURRENT_SETUP_PREFIX = "Lightbound-Setup";
+const LEGACY_SETUP_PREFIXES = ["Inkborne-Setup", "FantaWriter-Setup", "Fantasy-Writer-Setup"];
+// 原导出是最旧前缀。别名数组前插入 Inkborne-Setup 后不能再按下标取。
+const LEGACY_SETUP_PREFIX = "Fantasy-Writer-Setup";
+
+function fantaWriterAlias(names) {
+  const found = names.find((name) => path.basename(String(name)).startsWith("FantaWriter-Setup-"));
+  if (!found) throw new Error("缺少 FantaWriter-Setup 别名");
+  return found;
+}
 
 function setupNamesForVersion(version) {
   const v = String(version || "").replace(/^v/i, "");
@@ -18,7 +27,7 @@ function setupNamesForVersion(version) {
     version: v,
     primary: `${CURRENT_SETUP_PREFIX}-${v}.exe`,
     aliases,
-    legacy: aliases[0],
+    legacy: fantaWriterAlias(aliases),
   };
 }
 
@@ -57,7 +66,7 @@ function aliasLegacySetup(opts) {
     writeSha256Sidecar(dest, sha256, name);
     return dest;
   });
-  return { primary, aliases, legacy: aliases[0], sha256 };
+  return { primary, aliases, legacy: fantaWriterAlias(aliases), sha256 };
 }
 
 function main() {
@@ -83,7 +92,7 @@ if (require.main === module) {
 module.exports = {
   CURRENT_SETUP_PREFIX,
   LEGACY_SETUP_PREFIXES,
-  LEGACY_SETUP_PREFIX: LEGACY_SETUP_PREFIXES[1],
+  LEGACY_SETUP_PREFIX,
   setupNamesForVersion,
   hashFromSha256Sidecar,
   aliasLegacySetup,

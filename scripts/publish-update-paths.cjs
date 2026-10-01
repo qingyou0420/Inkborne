@@ -30,6 +30,7 @@ function createUpdatePublishPlan(version, options = {}) {
   const setup = setupNamesForVersion(version);
   return {
     directories: [
+      path.join(desktop, "Lightbound-Updates"),
       path.join(desktop, "Inkborne-Updates"),
       path.join(desktop, "FantaWriter-Updates"),
       path.join(appData, "fantawriter", "updates"),
