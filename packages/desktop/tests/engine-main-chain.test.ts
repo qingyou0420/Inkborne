@@ -60,6 +60,11 @@ function context() {
       events.push({ status, ...extra });
     },
     loadShellConfig: () => ({ instanceToken: "review-owner", enginePort: 17831 }),
+    // boot 在拉起引擎前读壳配置；沙箱里补上这些空实现
+    readConfigMap: () => new Map(),
+    getConfigPath: () => "/synthetic-unused/config.env",
+    shouldShowRenameNotice: () => false,
+    renameNoticeCopy: (root: string) => ({ title: "已更名为轻光之集", message: String(root), button: "知道了" }),
     provisionProjectRoot: () => "/synthetic-unused",
     ensureProjectLayout: () => undefined,
     saveShellConfig: (value: unknown) => events.push({ savedConfig: value }),
@@ -79,7 +84,10 @@ function context() {
     registerIpc: () => undefined,
     buildMenu: () => undefined,
     app: { quit: () => events.push("app quit"), getPath: (name: string) => `/synthetic-unused/${name}` },
-    dialog: { showErrorBox: (title: string, message: string) => events.push({ dialog: title, message }) },
+    dialog: {
+      showErrorBox: (title: string, message: string) => events.push({ dialog: title, message }),
+      showMessageBox: () => Promise.resolve({ response: 0 }),
+    },
     getLogPath: () => "/synthetic-unused/log",
     powerMonitor: { on: (_name: string, cb: () => void) => { ctx.resumeListener = cb; } },
     createWindow: (url: string) => { ctx.rendererUrl = `${url}/books/synthetic?stage=write&chapter=3`; },

@@ -19,9 +19,9 @@ export const STUDIO_FONT_STACKS: Record<StudioFontId, string> = {
 };
 
 export const STUDIO_FONT_LABELS: Record<StudioFontId, { zh: string; en: string; sample: string }> = {
-  sans: { zh: "思源黑体", en: "Noto Sans SC", sample: "墨生万象" },
-  serif: { zh: "思源宋体", en: "Noto Serif SC", sample: "墨生万象" },
-  wenkai: { zh: "霞鹜文楷", en: "LXGW WenKai", sample: "墨生万象" },
+  sans: { zh: "思源黑体", en: "Noto Sans SC", sample: "轻光之集" },
+  serif: { zh: "思源宋体", en: "Noto Serif SC", sample: "轻光之集" },
+  wenkai: { zh: "霞鹜文楷", en: "LXGW WenKai", sample: "轻光之集" },
 };
 
 export const PROSE_SIZE_OPTIONS: ReadonlyArray<ProseSizePx> = [17, 19, 21, 23];

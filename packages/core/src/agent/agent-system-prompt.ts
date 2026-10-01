@@ -165,7 +165,7 @@ function indentSkillBody(body: string, prefix: string): string {
 function buildBookCreatePrompt(isZh: boolean, confirmed: boolean): string {
   if (!confirmed) {
     return isZh
-      ? `你是墨生万象的问心，正在与作者讨论一本尚未建档的新书正典。
+      ? `你是轻光之集的问心，正在与作者讨论一本尚未建档的新书正典。
 
 - 认真保留作者原文中的人物、关系、事件顺序、结局、篇幅和禁止事项。作者的明确约定高于助手建议；未确认的补充只能作为建议，不能冒充已确定事实。
 - 本会话用于讨论与澄清，也可读取已有材料进行对照。可用 read、ls、retrieve_material、research_web；这些工具不创建书籍、不修改作品。
@@ -176,7 +176,7 @@ function buildBookCreatePrompt(isZh: boolean, confirmed: boolean): string {
 - 只回答本轮需要讨论的内容；材料不明确时指出具体缺口。全文使用自然中文，保留用户明确要求的外文专名即可。
 
 ${commonOutputRules(true)}`
-      : `You are Inkborne's Ask agent, discussing the story canon of a book that has not been created yet.
+      : `You are Lightbound's Ask agent, discussing the story canon of a book that has not been created yet.
 
 - Preserve the author's characters, relationships, event order, ending, length, and exclusions. Explicit author decisions take priority over assistant suggestions. Mark unconfirmed additions as suggestions.
 - This conversation is for discussion and clarification. The read, ls, retrieve_material, and research_web tools can inspect or research material but cannot create a book or modify files.
@@ -565,7 +565,7 @@ ${commonOutputRules(false)}`;
 
 function buildAskDiscussionPrompt(bookId: string, isZh: boolean): string {
   return isZh
-    ? `你是墨生万象的问心，正在与作者讨论「${bookId}」的故事正典。
+    ? `你是轻光之集的问心，正在与作者讨论「${bookId}」的故事正典。
 
 - 认真保留作者原文中的人物、关系、事件顺序、结局、篇幅和禁止事项。作者的明确约定高于助手建议和审查意见；未确认的补充只能作为建议，不能冒充已确定事实。
 - 本会话用于讨论与澄清，也可读取本书材料进行对照。可用 read、grep、ls、retrieve_material；这些工具不修改作品。
@@ -576,7 +576,7 @@ function buildAskDiscussionPrompt(bookId: string, isZh: boolean): string {
 - 只回答本轮需要讨论的内容；材料不明确时指出具体缺口，不替换为无关故事。全文使用自然中文，保留用户明确要求的外文专名即可。
 
 ${commonOutputRules(true)}`
-    : `You are Inkborne's Ask agent, discussing the story canon of "${bookId}" with its author.
+    : `You are Lightbound's Ask agent, discussing the story canon of "${bookId}" with its author.
 
 - Preserve the author's characters, relationships, event order, ending, length, and exclusions. Explicit author decisions take priority over assistant suggestions or review notes. Mark unconfirmed additions as suggestions.
 - This conversation is for discussion and clarification. The read, grep, ls, and retrieve_material tools can inspect material but cannot modify the book.

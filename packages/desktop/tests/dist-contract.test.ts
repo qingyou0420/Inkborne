@@ -98,9 +98,10 @@ describe("2.6.1 Windows installer contract", () => {
     expect(main.match(/process\.platform === "win32" \? "icon\.ico" : "icon\.png"/g)?.length).toBe(3);
   });
 
-  it("brands the Electron window as 墨生万象, not InkOS, and skips the setup wizard", () => {
+  it("brands the Electron window as 轻光之集, not InkOS, and skips the setup wizard", () => {
     const main = readFileSync(join(desktopDir, "main.cjs"), "utf8");
-    expect(main).toMatch(/title: "墨生万象 \/ Inkborne"/);
+    // PR-2：窗口标题改名
+    expect(main).toMatch(/title: "轻光之集 \/ Lightbound"/);
     expect(main).toMatch(/process\.platform === "win32" \? "icon\.ico" : "icon\.png"/);
     expect(main).not.toMatch(/title: "InkOS/);
     expect(main).not.toMatch(/createWindow\(firstRunFileUrl\(\)\)/);

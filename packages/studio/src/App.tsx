@@ -314,7 +314,7 @@ export function App() {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-5">
         <BrandMark className="w-16 h-16 rounded-full" />
-        <div className="font-serif text-2xl text-foreground">墨生万象</div>
+        <div className="font-serif text-2xl text-foreground">轻光之集</div>
         <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
       </div>
     );
