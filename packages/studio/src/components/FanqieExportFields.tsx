@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { useId } from "react";
+import { useId, type KeyboardEvent } from "react";
+import { useI18n } from "../hooks/use-i18n";
 
 export interface FanqieFieldState {
   readonly from: string;
@@ -23,6 +24,9 @@ export function FanqieExportFields({
   blankLine,
   indent,
   onChange,
+  onCommit,
+  chapterCount,
+  swapped = false,
 }: {
   readonly isZh: boolean;
   readonly showRange: boolean;
@@ -32,8 +36,20 @@ export function FanqieExportFields({
   readonly blankLine: boolean;
   readonly indent: boolean;
   readonly onChange: (patch: Partial<FanqieFieldState>) => void;
+  /** Called on blur or Enter. The draft string is still the raw input. */
+  readonly onCommit?: (patch: Partial<Pick<FanqieFieldState, "from" | "to">>) => void;
+  readonly chapterCount?: number;
+  readonly swapped?: boolean;
 }) {
+  const { t } = useI18n();
   const layoutName = useId();
+  const rangeMax = chapterCount && chapterCount > 0 ? chapterCount : undefined;
+  const commitFromKey = (field: "from" | "to", event: KeyboardEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    onCommit?.({ [field]: event.currentTarget.value });
+  };
   return (
     <div className="space-y-2 border-t border-border/60 pt-2" data-testid="fanqie-export-fields">
       {showRange ? (
@@ -43,9 +59,13 @@ export function FanqieExportFields({
             <input
               type="number"
               min={1}
+              max={rangeMax}
+              step={1}
               value={from}
               placeholder={isZh ? "起" : "start"}
               onChange={(event) => onChange({ from: event.target.value })}
+              onBlur={(event) => onCommit?.({ from: event.target.value })}
+              onKeyDown={(event) => commitFromKey("from", event)}
               className="h-8 w-16 rounded-md border border-border bg-background px-2"
               data-testid="fanqie-from"
             />
@@ -53,14 +73,19 @@ export function FanqieExportFields({
             <input
               type="number"
               min={1}
+              max={rangeMax}
+              step={1}
               value={to}
               placeholder={isZh ? "止" : "end"}
               onChange={(event) => onChange({ to: event.target.value })}
+              onBlur={(event) => onCommit?.({ to: event.target.value })}
+              onKeyDown={(event) => commitFromKey("to", event)}
               className="h-8 w-16 rounded-md border border-border bg-background px-2"
               data-testid="fanqie-to"
             />
             <span>{isZh ? "章" : ""}</span>
           </div>
+          {swapped ? <p className="text-xs leading-5 text-muted-foreground" data-testid="fanqie-range-swapped">{t("export.rangeSwapped")}</p> : null}
           <label className="flex items-center gap-2 text-sm">
             <input
               type="radio"

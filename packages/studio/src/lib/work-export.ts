@@ -3,6 +3,8 @@ export type ManuscriptExportFormat = "txt" | "md";
 export interface FanqieExportQuery {
   readonly fromChapter?: number;
   readonly toChapter?: number;
+  /** Export this one chapter. Omits from/to and per-chapter layout. */
+  readonly chapter?: number;
   readonly layout?: "combined" | "per-chapter";
   readonly blankLine?: boolean;
   readonly indent?: boolean;
@@ -16,6 +18,15 @@ export function bookManuscriptExportPath(
 ): string {
   const params = new URLSearchParams({ format });
   if (approvedOnly) params.set("approvedOnly", "true");
+  const chapter = fanqie?.chapter;
+  if (chapter !== undefined && Number.isInteger(chapter) && chapter >= 1) {
+    params.set("chapter", String(chapter));
+    if (format === "txt") {
+      if (fanqie?.blankLine === false) params.set("blankLine", "0");
+      if (fanqie?.indent) params.set("indent", "1");
+    }
+    return `/api/v1/books/${encodeURIComponent(bookId)}/export?${params.toString()}`;
+  }
   appendFanqieQuery(params, format === "txt" ? fanqie : undefined);
   return `/api/v1/books/${encodeURIComponent(bookId)}/export?${params.toString()}`;
 }

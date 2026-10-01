@@ -8,6 +8,7 @@ import { useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
 import { fetchJson } from "../hooks/use-api";
 import { useI18n } from "../hooks/use-i18n";
+import { normalizeRange } from "../lib/export-range";
 import { fanqieRangeProblem } from "../lib/fanqie-range";
 import { bookManuscriptExportPath, type FanqieExportQuery } from "../lib/work-export";
 import { FanqieExportFields } from "./FanqieExportFields";
@@ -26,6 +27,9 @@ export function ExportMenu({
   onError,
   variant = "toolbar",
   label,
+  chapterCount = 0,
+  currentChapter,
+  currentChapterReady = false,
 }: {
   readonly bookId: string;
   readonly isZh: boolean;
@@ -33,6 +37,11 @@ export function ExportMenu({
   readonly onError: (message: string) => void;
   readonly variant?: "toolbar" | "manuscript";
   readonly label?: string;
+  /** Highest chapter number in the index. 0 means the total is unknown. */
+  readonly chapterCount?: number;
+  /** Write page only. Other callers omit this and the single-chapter block stays hidden. */
+  readonly currentChapter?: { readonly number: number; readonly title?: string };
+  readonly currentChapterReady?: boolean;
 }) {
   const { t } = useI18n();
   const [format, setFormat] = useState<ExportFormat>("txt");
@@ -42,15 +51,25 @@ export function ExportMenu({
   const [layout, setLayout] = useState<"combined" | "per-chapter">("combined");
   const [blankLine, setBlankLine] = useState(true);
   const [indent, setIndent] = useState(false);
-  const rangeProblem = format === "txt" ? fanqieRangeProblem(from, to, 0, isZh) : "";
+  const [rangeSwapped, setRangeSwapped] = useState(false);
+  const showCurrentChapter = variant === "manuscript" && currentChapter !== undefined;
+  const settled = normalizeRange(from, to, chapterCount);
+  const rangeProblem = format === "txt" ? fanqieRangeProblem(settled.from, settled.to, chapterCount, isZh) : "";
   const textQuery: FanqieExportQuery | undefined = format === "txt" ? {
-    fromChapter: positiveChapter(from),
-    toChapter: positiveChapter(to),
+    fromChapter: positiveChapter(settled.from),
+    toChapter: positiveChapter(settled.to),
     layout,
     blankLine,
     indent,
   } : undefined;
   const href = bookManuscriptExportPath(bookId, format, approvedOnly, textQuery);
+  const currentHref = showCurrentChapter && currentChapter
+    ? bookManuscriptExportPath(bookId, format, approvedOnly, format === "txt" ? {
+      chapter: currentChapter.number,
+      blankLine,
+      indent,
+    } : { chapter: currentChapter.number })
+    : "";
   const buttonLabel = label ?? (variant === "manuscript" ? (isZh ? "导出" : "Export") : t("book.exportMenu"));
   const formatLabel: Record<ExportFormat, string> = {
     txt: isZh ? "TXT（纯文本）" : "TXT (plain text)",
@@ -58,9 +77,21 @@ export function ExportMenu({
     epub: "EPUB",
   };
 
+  const commitRange = (patch: { from?: string; to?: string }) => {
+    const next = normalizeRange(patch.from ?? from, patch.to ?? to, chapterCount);
+    setFrom(next.from);
+    setTo(next.to);
+    setRangeSwapped(next.swapped);
+  };
+
   const save = async () => {
-    if (rangeProblem) {
-      onError(rangeProblem);
+    const next = normalizeRange(from, to, chapterCount);
+    setFrom(next.from);
+    setTo(next.to);
+    setRangeSwapped(next.swapped);
+    const problem = format === "txt" ? fanqieRangeProblem(next.from, next.to, chapterCount, isZh) : "";
+    if (problem) {
+      onError(problem);
       return;
     }
     try {
@@ -71,12 +102,34 @@ export function ExportMenu({
           format,
           approvedOnly,
           ...(format === "txt" ? {
-            fromChapter: textQuery?.fromChapter,
-            toChapter: textQuery?.toChapter,
+            fromChapter: positiveChapter(next.from),
+            toChapter: positiveChapter(next.to),
             layout,
             blankLine,
             indent,
           } : {}),
+        }),
+      });
+      onSaved(exported.path ?? "");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Export failed");
+    }
+  };
+
+  const saveCurrent = async () => {
+    if (!currentChapter || !currentChapterReady) {
+      onError(t("book.exportCurrentChapterDisabled"));
+      return;
+    }
+    try {
+      const exported = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format,
+          approvedOnly,
+          chapter: currentChapter.number,
+          ...(format === "txt" ? { layout: "combined" as const, blankLine, indent } : {}),
         }),
       });
       onSaved(exported.path ?? "");
@@ -138,9 +191,18 @@ export function ExportMenu({
             layout={layout}
             blankLine={blankLine}
             indent={indent}
+            chapterCount={chapterCount}
+            swapped={rangeSwapped}
+            onCommit={commitRange}
             onChange={(patch) => {
-              if (patch.from !== undefined) setFrom(patch.from);
-              if (patch.to !== undefined) setTo(patch.to);
+              if (patch.from !== undefined) {
+                setFrom(patch.from);
+                setRangeSwapped(false);
+              }
+              if (patch.to !== undefined) {
+                setTo(patch.to);
+                setRangeSwapped(false);
+              }
               if (patch.layout !== undefined) setLayout(patch.layout);
               if (patch.blankLine !== undefined) setBlankLine(patch.blankLine);
               if (patch.indent !== undefined) setIndent(patch.indent);
@@ -149,6 +211,7 @@ export function ExportMenu({
         ) : null}
         {rangeProblem ? <p className="text-xs text-destructive">{rangeProblem}</p> : null}
         <div className="flex flex-col gap-1 pt-1">
+          <p className="text-xs text-muted-foreground">{t("book.exportScope")}</p>
           <a
             href={rangeProblem ? undefined : href}
             download
@@ -156,7 +219,23 @@ export function ExportMenu({
             className={`btn-secondary text-center ${rangeProblem ? "pointer-events-none opacity-40" : ""}`}
             aria-disabled={rangeProblem ? true : undefined}
             onClick={(event) => {
-              if (rangeProblem) event.preventDefault();
+              const next = normalizeRange(from, to, chapterCount);
+              setFrom(next.from);
+              setTo(next.to);
+              setRangeSwapped(next.swapped);
+              const problem = format === "txt" ? fanqieRangeProblem(next.from, next.to, chapterCount, isZh) : "";
+              if (problem) {
+                event.preventDefault();
+                onError(problem);
+                return;
+              }
+              event.currentTarget.href = bookManuscriptExportPath(bookId, format, approvedOnly, format === "txt" ? {
+                fromChapter: positiveChapter(next.from),
+                toChapter: positiveChapter(next.to),
+                layout,
+                blankLine,
+                indent,
+              } : undefined);
             }}
           >
             {t("book.download")}
@@ -165,6 +244,37 @@ export function ExportMenu({
             {t("book.exportSave")}
           </button>
         </div>
+        {showCurrentChapter ? (
+          <div className="flex flex-col gap-1 border-t border-border/60 pt-2" data-testid="export-current-chapter">
+            <p className="text-sm">{t("book.exportCurrentChapter")}</p>
+            <a
+              href={currentChapterReady ? currentHref : undefined}
+              download
+              data-testid="export-current-chapter-download"
+              className={`btn-secondary text-center ${currentChapterReady ? "" : "pointer-events-none opacity-40"}`}
+              aria-disabled={currentChapterReady ? undefined : true}
+              onClick={(event) => {
+                if (!currentChapterReady) event.preventDefault();
+              }}
+            >
+              {t("book.download")}
+            </a>
+            <button
+              type="button"
+              className="btn-ghost w-full"
+              disabled={!currentChapterReady}
+              data-testid="export-current-chapter-save"
+              onClick={() => void saveCurrent()}
+            >
+              {t("book.exportSave")}
+            </button>
+            {currentChapterReady ? null : (
+              <p className="text-xs leading-5 text-muted-foreground" data-testid="export-current-chapter-hint">
+                {t("book.exportCurrentChapterDisabled")}
+              </p>
+            )}
+          </div>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

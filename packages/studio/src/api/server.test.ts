@@ -3508,6 +3508,82 @@ describe("createStudioServer daemon lifecycle", () => {
     }));
   });
 
+  it("exports one chapter with the chapter number and title in the download name", async () => {
+    loadBookConfigMock.mockResolvedValue({
+      id: "demo-book",
+      title: "夜港",
+      platform: "qidian",
+      genre: "xuanhuan",
+      status: "active",
+      targetChapters: 100,
+      chapterWordCount: 3000,
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+    });
+    loadChapterIndexMock.mockResolvedValue([
+      { number: 1, title: "序", status: "approved", wordCount: 4 },
+      { number: 3, title: "夜雨", status: "approved", wordCount: 2 },
+    ]);
+    await writeFile(join(root, "books", "demo-book", "chapters", "0001_序.md"), "# 第1章 序\n\n序章正文不应出现。\n", "utf-8");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const downloaded = await app.request("http://localhost/api/v1/books/demo-book/export?format=txt&chapter=3&from=1&to=1&layout=per-chapter");
+    expect(downloaded.status).toBe(200);
+    const disposition = downloaded.headers.get("content-disposition") ?? "";
+    expect(disposition).toContain("filename*=UTF-8''");
+    expect(disposition).toContain(encodeURIComponent("夜港 第3章 夜雨.txt"));
+    expect(disposition).not.toMatch(/[\u0080-\uFFFF]/);
+    const text = await downloaded.text();
+    expect(text).toContain("第3章 夜雨");
+    expect(text).not.toContain("序章正文不应出现");
+
+    const invalid = await app.request("http://localhost/api/v1/books/demo-book/export?chapter=0");
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({ error: "章号得是正整数。" });
+
+    const missing = await app.request("http://localhost/api/v1/books/demo-book/export?chapter=9");
+    expect(missing.status).toBe(400);
+    await expect(missing.json()).resolves.toMatchObject({ error: "第9章还没有正文，不能导出。" });
+
+    processProjectInteractionRequestMock.mockClear();
+    const saved = await app.request("http://localhost/api/v1/books/demo-book/export-save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        format: "txt",
+        chapter: 3,
+        layout: "per-chapter",
+        fromChapter: 1,
+        toChapter: 8,
+        indent: true,
+      }),
+    });
+    expect(saved.status).toBe(200);
+    const request = processProjectInteractionRequestMock.mock.calls.at(-1)?.[0] as {
+      request?: { fromChapter?: number; toChapter?: number; onlyChapter?: number; layout?: string; outputPath?: string };
+    };
+    expect(request.request).toMatchObject({
+      intent: "export_book",
+      onlyChapter: 3,
+      layout: "combined",
+      indent: true,
+      outputPath: join(root, "books", "demo-book", "exports"),
+    });
+    expect(request.request?.fromChapter).toBeUndefined();
+    expect(request.request?.toChapter).toBeUndefined();
+
+    processProjectInteractionRequestMock.mockClear();
+    const badSave = await app.request("http://localhost/api/v1/books/demo-book/export-save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "md", chapter: "第3章" }),
+    });
+    expect(badSave.status).toBe(400);
+    await expect(badSave.json()).resolves.toMatchObject({ error: "章号得是正整数。" });
+    expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
+  });
+
   it("creates a fresh book session on POST /api/v1/sessions", async () => {
     createAndPersistBookSessionMock.mockResolvedValueOnce({
       sessionId: "fresh-session",

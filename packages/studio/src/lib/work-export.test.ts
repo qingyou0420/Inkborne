@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { singleChapterExportFileName } from "@actalk/inkos-core";
 import {
   bookManuscriptExportPath,
   continueShortPrompt,
@@ -41,6 +42,28 @@ describe("manuscript export helpers", () => {
     expect(shortManuscriptExportPath("明日来信", "txt", { fromChapter: 2, layout: "per-chapter" })).toBe(
       `/api/v1/shorts/${encodeURIComponent("明日来信")}/export?format=txt&from=2&layout=per-chapter`,
     );
+    expect(bookManuscriptExportPath("harbor", "txt", true, {
+      chapter: 3,
+      fromChapter: 1,
+      toChapter: 8,
+      layout: "per-chapter",
+      blankLine: false,
+      indent: true,
+    })).toBe("/api/v1/books/harbor/export?format=txt&approvedOnly=true&chapter=3&blankLine=0&indent=1");
+    expect(bookManuscriptExportPath("harbor", "md", false, { chapter: 3, fromChapter: 2 })).toBe(
+      "/api/v1/books/harbor/export?format=md&chapter=3",
+    );
+    expect(bookManuscriptExportPath("harbor", "epub", false, { chapter: 3 })).toBe(
+      "/api/v1/books/harbor/export?format=epub&chapter=3",
+    );
+  });
+
+  it("names a single exported chapter with the book, chapter number, and title", () => {
+    expect(singleChapterExportFileName("夜港", 3, "夜雨", "txt")).toBe("夜港 第3章 夜雨.txt");
+    expect(singleChapterExportFileName("夜港", 3, "", "md")).toBe("夜港 第3章 未命名.md");
+    expect(singleChapterExportFileName("夜港", 3, "第3章 夜雨", "epub")).toBe("夜港 第3章 夜雨.epub");
+    expect(singleChapterExportFileName("夜/港", 3, "雨:夜?", "txt")).toBe("夜 港 第3章 雨 夜.txt");
+    expect(singleChapterExportFileName("", 3, "第3章", "txt")).toBe("书 第3章 未命名.txt");
   });
 
   it("keeps TXT layout fields and 复制本章 on the long and short flows", () => {

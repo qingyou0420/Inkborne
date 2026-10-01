@@ -9,6 +9,7 @@ import {
   fanqieOptionsFromQuery,
   renderFanqieChapter,
   renderFanqieManuscript,
+  singleChapterExportFileName,
 } from "../interaction/fanqie-text.js";
 
 describe("TXT 纯文本", () => {
@@ -306,6 +307,16 @@ describe("TXT 纯文本", () => {
   it("交互请求不再接受 fanqie 格式值", () => {
     expect(InteractionRequestSchema.safeParse({ intent: "export_book", format: "fanqie" }).success).toBe(false);
     expect(InteractionRequestSchema.safeParse({ intent: "export_book", format: "txt" }).success).toBe(true);
+    expect(InteractionRequestSchema.safeParse({ intent: "export_book", onlyChapter: 3 }).success).toBe(true);
+    expect(InteractionRequestSchema.safeParse({ intent: "export_book", onlyChapter: 0 }).success).toBe(false);
+  });
+
+  it("单章文件名带书名、章号和章名，空章名用未命名，并去掉重复的章号前缀", () => {
+    expect(singleChapterExportFileName("夜港", 3, "夜雨", "txt")).toBe("夜港 第3章 夜雨.txt");
+    expect(singleChapterExportFileName("夜港", 3, "", "md")).toBe("夜港 第3章 未命名.md");
+    expect(singleChapterExportFileName("夜港", 3, "第3章 夜雨", "epub")).toBe("夜港 第3章 夜雨.epub");
+    expect(singleChapterExportFileName("夜/港", 3, "雨:夜?", "txt")).toBe("夜 港 第3章 雨 夜.txt");
+    expect(singleChapterExportFileName("", 3, "第3章", "txt")).toBe("书 第3章 未命名.txt");
   });
 });
 
@@ -436,5 +447,92 @@ describe("TXT 导出文件", () => {
     expect(epub.contentType).toContain("epub");
     expect(Buffer.isBuffer(epub.payload)).toBe(true);
     expect((epub.payload as Buffer).length).toBeGreaterThan(100);
+  });
+
+  it("只导出指定的一章，md 和 epub 也收窄，分节符仍是 * * *", async () => {
+    const state = await fixture();
+    const txt = await buildExportArtifact(state, "harbor", {
+      format: "txt",
+      onlyChapter: 1,
+      layout: "per-chapter",
+      fromChapter: 2,
+      toChapter: 2,
+    });
+    expect(txt.fileName).toBe("夜港 第1章 雨.txt");
+    expect(txt.contentType).toContain("text/plain");
+    expect(txt.chaptersExported).toBe(1);
+    expect(String(txt.payload)).toContain("他抬头。");
+    expect(String(txt.payload)).toContain("* * *");
+    expect(String(txt.payload)).not.toContain("---");
+    expect(String(txt.payload)).not.toContain("雾来了");
+
+    const markdown = await buildExportArtifact(state, "harbor", {
+      format: "md",
+      onlyChapter: 2,
+      fromChapter: 1,
+      toChapter: 1,
+    });
+    expect(markdown.fileName).toBe("夜港 第2章 雾.md");
+    expect(String(markdown.payload)).toContain("雾来了");
+    expect(String(markdown.payload)).not.toContain("他抬头");
+    expect(String(markdown.payload)).not.toContain("# 第1章 雨");
+
+    const epub = await buildExportArtifact(state, "harbor", { format: "epub", onlyChapter: 1 });
+    expect(epub.fileName).toBe("夜港 第1章 雨.epub");
+    const zip = await JSZip.loadAsync(epub.payload);
+    const texts: string[] = [];
+    for (const name of Object.keys(zip.files)) {
+      const file = zip.file(name);
+      if (!file || name.endsWith("/")) continue;
+      if (/\.(html|xhtml|opf|ncx)$/i.test(name)) texts.push(await file.async("string"));
+    }
+    const packed = texts.join("\n");
+    // epub-gen 把正文写成数字字符引用，解码后再核对这一章的原文。
+    const decoded = packed.replace(/&#x([0-9a-fA-F]+);|&#(\d+);/g, (token, hex: string | undefined, dec: string | undefined) => {
+      const code = hex ? Number.parseInt(hex, 16) : Number.parseInt(dec ?? "", 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : token;
+    });
+    expect(decoded).toContain("第1章 雨");
+    expect(decoded).toContain("他抬头");
+    expect(decoded).not.toContain("雾来了");
+    expect(decoded).not.toContain("第2章 雾");
+
+    const dir = join(root, "books", "harbor", "exports");
+    const saved = await writeExportArtifact(state, "harbor", {
+      format: "txt",
+      onlyChapter: 2,
+      layout: "per-chapter",
+      outputPath: dir,
+    });
+    expect(saved.chaptersExported).toBe(1);
+    expect(saved.outputPath).toBe(join(dir, "夜港 第2章 雾.txt"));
+    const savedText = await readFile(saved.outputPath, "utf-8");
+    expect(savedText).toContain("雾来了");
+    expect(savedText).not.toContain("他抬头");
+    await expect(readFile(join(state.bookDir("harbor"), "harbor.txt"), "utf-8")).rejects.toThrow();
+  });
+
+  it("章不存在，或只导出已通过时这一章未通过，都报错且不导出整本", async () => {
+    const state = await fixture();
+    await expect(buildExportArtifact(state, "harbor", { format: "txt", onlyChapter: 9 })).rejects.toThrow("第9章还没有正文，不能导出。");
+    await expect(buildExportArtifact(state, "harbor", { format: "md", onlyChapter: 9 })).rejects.toThrow("第9章还没有正文，不能导出。");
+    await expect(buildExportArtifact(state, "harbor", { format: "epub", onlyChapter: 9 })).rejects.toThrow("第9章还没有正文，不能导出。");
+    await expect(buildExportArtifact(state, "harbor", { format: "txt", onlyChapter: 2, approvedOnly: true })).rejects.toThrow("不能导出这一章");
+    await expect(buildExportArtifact(state, "harbor", { format: "md", onlyChapter: 2, approvedOnly: true })).rejects.toThrow("不能导出这一章");
+    await expect(buildExportArtifact(state, "harbor", { format: "epub", onlyChapter: 2, approvedOnly: true })).rejects.toThrow("不能导出这一章");
+
+    const untitled = {
+      ...state,
+      loadChapterIndex: async () => [{ number: 2, title: "第2章 雾", status: "drafted", wordCount: 3 }],
+    };
+    const named = await buildExportArtifact(untitled, "harbor", { format: "txt", onlyChapter: 2 });
+    expect(named.fileName).toBe("夜港 第2章 雾.txt");
+    const emptyTitle = {
+      ...state,
+      loadChapterIndex: async () => [{ number: 1, title: "", status: "approved", wordCount: 4 }],
+    };
+    const unnamed = await buildExportArtifact(emptyTitle, "harbor", { format: "md", onlyChapter: 1 });
+    expect(unnamed.fileName).toBe("夜港 第1章 未命名.md");
+    expect(String(unnamed.payload)).not.toContain("雾来了");
   });
 });
