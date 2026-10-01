@@ -16,6 +16,15 @@ const handles = require("../lib/engine-handle.cjs") as {
 const lifecycle = require("../lib/engine-lifecycle.cjs") as {
   createRestartBudget: () => unknown;
 };
+const renameNotice = require("../lib/rename-notice.cjs") as {
+  readRenameNoticePlan: (input: {
+    loadShellConfig: () => { firstRunDone?: boolean };
+    readConfigMap: (filePath: string) => Map<string, string>;
+    getConfigPath: () => string;
+    appendLog?: (line: string) => void;
+  }) => { show: boolean; record: boolean };
+  applyRenameNotice: (input: unknown) => void;
+};
 
 function part(from: string, to: string) {
   const a = source.indexOf(from);
@@ -60,11 +69,11 @@ function context() {
       events.push({ status, ...extra });
     },
     loadShellConfig: () => ({ instanceToken: "review-owner", enginePort: 17831 }),
-    // boot 在拉起引擎前读壳配置；沙箱里补上这些空实现
+    // PR-2 复审：boot 改为调用 lib。注入真实 read/apply，配置读写仍走下面的桩。
     readConfigMap: () => new Map(),
     getConfigPath: () => "/synthetic-unused/config.env",
-    shouldShowRenameNotice: () => false,
-    renameNoticeCopy: (root: string) => ({ title: "已更名为轻光之集", message: String(root), button: "知道了" }),
+    readRenameNoticePlan: renameNotice.readRenameNoticePlan,
+    applyRenameNotice: renameNotice.applyRenameNotice,
     provisionProjectRoot: () => "/synthetic-unused",
     ensureProjectLayout: () => undefined,
     saveShellConfig: (value: unknown) => events.push({ savedConfig: value }),
@@ -182,5 +191,73 @@ describe("desktop main chain", () => {
     await Promise.all([first, second]);
     expect(stops).toBe(1);
     expect(starts).toBe(1);
+  });
+
+  it("still boots when saving the rename notice throws", async () => {
+    // PR-2 复审：写 FW_RENAME_NOTICE_SHOWN 失败不得变成启动失败。
+    const c = context();
+    c.probeHealth = async () => null;
+    c.loadShellConfig = () => ({ instanceToken: "review-owner", enginePort: 17831, firstRunDone: true });
+    c.readConfigMap = () => new Map([["FW_FIRST_RUN_DONE", "1"]]);
+    const order: string[] = [];
+    c.createWindow = () => {
+      order.push("createWindow");
+    };
+    c.dialog = {
+      showErrorBox: (title: string, message: string) => {
+        (c.events as unknown[]).push({ dialog: title, message });
+      },
+      showMessageBox: () => {
+        order.push("showMessageBox");
+        return Promise.resolve({ response: 0 });
+      },
+    };
+    c.saveShellConfig = (value: Record<string, string>) => {
+      if (value && Object.prototype.hasOwnProperty.call(value, "FW_RENAME_NOTICE_SHOWN")) {
+        order.push("saveShellConfig");
+        throw new Error("disk full");
+      }
+      order.push(`saveShellConfig:${Object.keys(value || {}).join(",")}`);
+    };
+    vm.runInContext(stopPart + resolvePart + restartPart + bootPart, c);
+    await (c.boot as () => Promise<void>)();
+    expect(order).toEqual(["createWindow", "showMessageBox", "saveShellConfig"]);
+    const failed = (c.events as Array<{ dialog?: string }>).some((event) => event.dialog === "启动失败");
+    expect(failed).toBe(false);
+    expect(c.events).not.toContain("app quit");
+    const logged = (c.events as unknown[]).some((event) => typeof event === "string" && event.includes("disk full"));
+    expect(logged).toBe(true);
+  });
+
+  it("does not record the rename notice when the engine fails to start", async () => {
+    // PR-2 复审：引擎没起来时不写键、不弹更名窗；启动失败仍按原路径退出。
+    const c = context();
+    c.loadShellConfig = () => ({ instanceToken: "review-owner", enginePort: 17831, firstRunDone: true });
+    c.readConfigMap = () => new Map([["FW_FIRST_RUN_DONE", "1"]]);
+    const saved: string[] = [];
+    c.saveShellConfig = (value: Record<string, string>) => {
+      saved.push(...Object.keys(value || {}));
+    };
+    let renameDialogs = 0;
+    c.dialog = {
+      showErrorBox: (title: string, message: string) => {
+        (c.events as unknown[]).push({ dialog: title, message });
+      },
+      showMessageBox: () => {
+        renameDialogs += 1;
+        return Promise.resolve({ response: 0 });
+      },
+    };
+    c.provisionProjectRoot = () => {
+      throw new Error("provision failed");
+    };
+    vm.runInContext(stopPart + resolvePart + restartPart + bootPart, c);
+    await (c.boot as () => Promise<void>)();
+    expect(saved).not.toContain("FW_RENAME_NOTICE_SHOWN");
+    expect(renameDialogs).toBe(0);
+    expect(c.rendererUrl).toBeUndefined();
+    const failed = (c.events as Array<{ dialog?: string }>).some((event) => event.dialog === "启动失败");
+    expect(failed).toBe(true);
+    expect(c.events).toContain("app quit");
   });
 });

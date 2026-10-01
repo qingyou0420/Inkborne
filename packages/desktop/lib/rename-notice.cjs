@@ -1,7 +1,8 @@
 /**
- * One-time "renamed to 轻光之集" notice. Pure helpers; the dialog stays in main.cjs.
+ * One-time "renamed to 轻光之集" notice.
  * Old users (FW_FIRST_RUN_DONE=1, notice not yet recorded) see it once.
- * Fresh installs do not. The shell writes FW_RENAME_NOTICE_SHOWN=1 either way.
+ * Fresh installs only record the key. The key is written after the window
+ * exists; a failure is logged and never blocks startup.
  */
 const NOTICE_KEY = "FW_RENAME_NOTICE_SHOWN";
 const FIRST_RUN_KEY = "FW_FIRST_RUN_DONE";
@@ -35,8 +36,83 @@ function renameNoticeCopy(projectRoot) {
   };
 }
 
+function errorText(error) {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
+}
+
+function safeLog(appendLog, line) {
+  if (typeof appendLog !== "function") return;
+  try {
+    appendLog(line);
+  } catch {
+    /* logging must not break startup */
+  }
+}
+
+/** Snapshot notice state before the engine starts. Never writes. */
+function readRenameNoticePlan(deps) {
+  let appendLog;
+  try {
+    appendLog = deps.appendLog;
+    const priorShell = deps.loadShellConfig();
+    const priorMap = deps.readConfigMap(deps.getConfigPath());
+    if (configValue(priorMap, NOTICE_KEY) === "1") {
+      return { show: false, record: false };
+    }
+    const show = Boolean(priorShell && priorShell.firstRunDone === true)
+      && shouldShowRenameNotice(priorMap);
+    return { show, record: true };
+  } catch (error) {
+    safeLog(appendLog, `rename notice: read failed: ${errorText(error)}`);
+    return { show: false, record: false };
+  }
+}
+
+/** Show and/or record the notice after the window exists. Never throws. */
+function applyRenameNotice(deps) {
+  let appendLog;
+  try {
+    appendLog = deps && deps.appendLog;
+    const plan = (deps && deps.plan) || {};
+    const show = plan.show === true;
+    const record = plan.record === true;
+    if (!show && !record) return;
+    if (show) {
+      const copy = renameNoticeCopy(deps.projectRoot);
+      try {
+        const pending = deps.dialog.showMessageBox(deps.mainWindow || undefined, {
+          type: "info",
+          title: copy.title,
+          message: copy.message,
+          buttons: [copy.button],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (pending && typeof pending.catch === "function") {
+          void pending.catch((error) => {
+            safeLog(appendLog, `rename notice: dialog failed: ${errorText(error)}`);
+          });
+        }
+      } catch (error) {
+        safeLog(appendLog, `rename notice: dialog failed: ${errorText(error)}`);
+        return;
+      }
+    }
+    try {
+      deps.saveShellConfig({ [NOTICE_KEY]: "1" });
+    } catch (error) {
+      safeLog(appendLog, `rename notice: save failed: ${errorText(error)}`);
+    }
+  } catch (error) {
+    safeLog(appendLog, `rename notice: apply failed: ${errorText(error)}`);
+  }
+}
+
 module.exports = {
   NOTICE_KEY,
   shouldShowRenameNotice,
   renameNoticeCopy,
+  readRenameNoticePlan,
+  applyRenameNotice,
 };

@@ -9,7 +9,7 @@ const http = require("http");
 const crypto = require("crypto");
 const { spawn, execFile } = require("child_process");
 const { defaultProjectRoot, ensureProjectLayout, resolveSavedProjectRoot, saveFirstRunLlm } = require("./lib/project.cjs");
-const { shouldShowRenameNotice, renameNoticeCopy } = require("./lib/rename-notice.cjs");
+const { readRenameNoticePlan, applyRenameNotice } = require("./lib/rename-notice.cjs");
 const { HOST, SCAN_START, normalizePinnedPort, pickListenPort, canBindPort } = require("./lib/port.cjs");
 const {
   emptyEngineHandle,
@@ -1341,27 +1341,39 @@ async function boot() {
   process.env.INKOS_USER_DATA = app.getPath("userData");
   registerIpc();
   buildMenu();
+  // resolveEngineUrl 会写入 FW_FIRST_RUN_DONE，更名提示必须先读旧状态。
+  // 键 FW_RENAME_NOTICE_SHOWN 只在窗口创建之后写入；失败只记日志，不进入启动失败。
+  let renamePlan = { show: false, record: false };
   try {
-    // resolveEngineUrl 会写入 FW_FIRST_RUN_DONE，更名提示必须先读旧状态。
-    const priorShell = loadShellConfig();
-    const priorMap = readConfigMap(getConfigPath());
-    const showRenameNotice = priorShell.firstRunDone === true && shouldShowRenameNotice(priorMap);
-    if (priorMap.get("FW_RENAME_NOTICE_SHOWN") !== "1") {
-      saveShellConfig({ FW_RENAME_NOTICE_SHOWN: "1" });
-    }
+    const plan = readRenameNoticePlan({
+      loadShellConfig,
+      readConfigMap,
+      getConfigPath,
+      appendLog,
+    });
+    if (plan && typeof plan === "object") renamePlan = plan;
+  } catch (error) {
+    try {
+      appendLog(`rename notice: read failed: ${error instanceof Error ? error.message : error}`);
+    } catch { /* ignore */ }
+  }
+  try {
     const url = await resolveEngineUrl();
     setEngineStatus("ready", { url });
     createWindow(url);
-    if (showRenameNotice) {
-      const copy = renameNoticeCopy(projectRoot);
-      void dialog.showMessageBox(mainWindow || undefined, {
-        type: "info",
-        title: copy.title,
-        message: copy.message,
-        buttons: [copy.button],
-        defaultId: 0,
-        cancelId: 0,
+    try {
+      applyRenameNotice({
+        plan: renamePlan,
+        dialog,
+        mainWindow,
+        projectRoot,
+        saveShellConfig,
+        appendLog,
       });
+    } catch (error) {
+      try {
+        appendLog(`rename notice: apply failed: ${error instanceof Error ? error.message : error}`);
+      } catch { /* ignore */ }
     }
     if (powerMonitor && typeof powerMonitor.on === "function") {
       let resumeTimer;
