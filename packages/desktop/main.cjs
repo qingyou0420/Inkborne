@@ -26,7 +26,7 @@ const {
   nextEngineStatus,
   isPidAlive,
 } = require("./lib/engine-lifecycle.cjs");
-const { versionFromSetupName, setupFileNameForVersion } = require("./lib/setup-artifact.cjs");
+const { versionFromSetupName, setupFileNameForVersion, compareSetupCandidates } = require("./lib/setup-artifact.cjs");
 const {
   DEFAULT_GITHUB_REPO,
   githubLatestApiUrl,
@@ -946,7 +946,7 @@ async function findLatestInstaller(currentVersion, kind = "manual") {
   }
   const newer = all.filter((x) => compareVersions(x.version, currentVersion) > 0);
   const pool = newer.length ? newer : all;
-  pool.sort((a, b) => compareVersions(b.version, a.version) || b.mtime - a.mtime);
+  pool.sort((a, b) => compareSetupCandidates(a, b, compareVersions));
   return { candidates: pool, searchedDirs: searched, allCount: all.length };
 }
 

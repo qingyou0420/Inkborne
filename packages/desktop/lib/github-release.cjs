@@ -166,7 +166,7 @@ function setupFileNameFromUrl(url) {
 function githubCheckErrorMessage(err) {
   const msg = err instanceof Error ? err.message : String(err);
   if (/HTTP 404/.test(msg)) {
-    return "无法读取 GitHub latest release（本仓公开，请确认已发布 Lightbound-Setup 或 Inkborne-Setup 或 FantaWriter-Setup 安装包）";
+    return "无法读取 GitHub latest release（本仓公开，请确认已发布 Lightbound-Setup 或 Inkborne-Setup 或 FantaWriter-Setup 或 Fantasy-Writer-Setup 安装包）";
   }
   if (/HTTP 401|HTTP 403/.test(msg)) {
     return "GitHub 访问被拒绝，请稍后重试";

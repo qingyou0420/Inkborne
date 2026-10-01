@@ -196,6 +196,8 @@ describe("github download guards", () => {
     // PR-1：404 提示补上 Lightbound-Setup，仍说明本仓公开
     expect(githubCheckErrorMessage(new Error("HTTP 404"))).toMatch(/公开/);
     expect(githubCheckErrorMessage(new Error("HTTP 404"))).toMatch(/Lightbound-Setup/);
+    // PR-1 复审：404 提示补全四个前缀
+    expect(githubCheckErrorMessage(new Error("HTTP 404"))).toMatch(/Fantasy-Writer-Setup/);
     expect(githubCheckErrorMessage(new Error("HTTP 401"))).toMatch(/拒绝/);
   });
 });

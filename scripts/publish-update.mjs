@@ -10,7 +10,7 @@ import { fileURLToPath } from "url";
 
 const require = createRequire(import.meta.url);
 const { SETUP_RE, preferSetupRank } = require("./setup-artifact.cjs");
-const { createUpdatePublishPlan } = require("./publish-update-paths.cjs");
+const { createUpdatePublishPlan, resolveSetupHash, publishSetupCopies } = require("./publish-update-paths.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -31,17 +31,6 @@ function cmp(a, b) {
     if (pa[i] < pb[i]) return -1;
   }
   return 0;
-}
-
-function ensureDir(d) {
-  fs.mkdirSync(d, { recursive: true });
-}
-
-function copyTo(src, destDir, destName = path.basename(src)) {
-  ensureDir(destDir);
-  const dest = path.join(destDir, destName);
-  fs.copyFileSync(src, dest);
-  return dest;
 }
 
 function findLatestSetup() {
@@ -80,14 +69,16 @@ function findLatestSetup() {
 
 const latest = findLatestSetup();
 const { directories: targets, names } = createUpdatePublishPlan(latest.version);
+const hash = resolveSetupHash(latest.path);
 console.log(
   `[publish-update] 发布 ${latest.name} (v${latest.version})；同步四套文件名 Lightbound-Setup / Inkborne-Setup / FantaWriter-Setup / Fantasy-Writer-Setup`
 );
 for (const dir of targets) {
   try {
-    for (const name of names) {
-      const dest = copyTo(latest.path, dir, name);
+    const written = publishSetupCopies(dir, latest.path, names, hash);
+    for (const dest of written) {
       console.log(`  ✓ ${dest}`);
+      console.log(`  ✓ ${dest}.sha256`);
     }
   } catch (e) {
     console.warn(`  ✗ ${dir}: ${e.message || e}`);

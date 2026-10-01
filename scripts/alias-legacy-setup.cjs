@@ -95,5 +95,6 @@ module.exports = {
   LEGACY_SETUP_PREFIX,
   setupNamesForVersion,
   hashFromSha256Sidecar,
+  writeSha256Sidecar,
   aliasLegacySetup,
 };
