@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-09-16T01:18:00+08:00",
-  "title": "Design System: 墨生万象 · 水墨书房",
+  "title": "Design System: 轻光之集 / Lightbound（原名墨生万象 / Inkborne）· 水墨书房",
   "extensions": {
     "colorMeta": {"ink":{"role":"primary","displayName":"墨色"},"paper":{"role":"neutral","displayName":"素白纸"},"night-paper":{"role":"neutral","displayName":"深炭灰"}},
     "typographyMeta": {"display":{"displayName":"书法阶段名","purpose":"仅问心、研墨、织卷、落笔"},"body":{"displayName":"宋体文稿","purpose":"可切换字体、字号与行距"}},

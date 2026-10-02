@@ -1,4 +1,6 @@
-# FantaWriter 2.0 agent notes
+# 轻光之集 / Lightbound 2.0 agent notes
+
+原名墨生万象 / Inkborne，更早为幻想作家 / FantaWriter。包名与环境变量名不因改名而改。
 
 This repo is a **desktop product**: Electron shell (`packages/desktop`) + forked InkOS (`packages/core`, `packages/studio`, `packages/cli`).
 

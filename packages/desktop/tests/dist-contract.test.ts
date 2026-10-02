@@ -24,19 +24,19 @@ const { CURRENT_SETUP_PREFIX, setupNamesForVersion } = require("../../../scripts
   setupNamesForVersion: (version: string) => { primary: string; aliases: string[]; legacy: string };
 };
 
-describe("2.6.1 Windows installer contract", () => {
-  it("keeps root and desktop on the same stable 2.6.1", () => {
-    expect(rootPkg.version).toBe("2.6.1");
-    expect(desktopPkg.version).toBe("2.6.1");
+describe("3.0.0 Windows installer contract", () => {
+  it("keeps root and desktop on the same stable 3.0.0", () => {
+    expect(rootPkg.version).toBe("3.0.0");
+    expect(desktopPkg.version).toBe("3.0.0");
     expect(desktopPkg.license).toBe("AGPL-3.0-only");
     expect(desktopPkg.name).toBe("@fantawriter/desktop");
     expect(rootPkg.scripts["dist:win"]).toBe("node scripts/dist-win.mjs");
     expect(rootPkg.scripts["dist:win"]).not.toMatch(/exit 1/);
   });
 
-  it("names the NSIS artifact Lightbound-Setup-2.6.1.exe and keeps appId", () => {
+  it("names the NSIS artifact Lightbound-Setup-3.0.0.exe and keeps appId", () => {
     // PR-1：主安装包、产品名、快捷方式改为 Lightbound / 轻光之集；appId 不变
-    expect(setupFileNameForVersion(rootPkg.version)).toBe("Lightbound-Setup-2.6.1.exe");
+    expect(setupFileNameForVersion(rootPkg.version)).toBe("Lightbound-Setup-3.0.0.exe");
     const yml = readFileSync(join(desktopDir, "electron-builder.yml"), "utf8");
     expect(yml).toMatch(/appId:\s*com\.fantawriter\.app/);
     expect(yml).toMatch(/productName:\s*Lightbound/);
@@ -63,14 +63,14 @@ describe("2.6.1 Windows installer contract", () => {
     expect(distWin).toMatch(/INKBORNE_ALLOW_UNBRANDED_EXE/);
 
     expect(CURRENT_SETUP_PREFIX).toBe("Lightbound-Setup");
-    const names = setupNamesForVersion("2.6.1");
-    expect(names.primary).toBe("Lightbound-Setup-2.6.1.exe");
+    const names = setupNamesForVersion("3.0.0");
+    expect(names.primary).toBe("Lightbound-Setup-3.0.0.exe");
     expect(names.aliases).toEqual([
-      "Inkborne-Setup-2.6.1.exe",
-      "FantaWriter-Setup-2.6.1.exe",
-      "Fantasy-Writer-Setup-2.6.1.exe",
+      "Inkborne-Setup-3.0.0.exe",
+      "FantaWriter-Setup-3.0.0.exe",
+      "Fantasy-Writer-Setup-3.0.0.exe",
     ]);
-    expect(names.legacy).toBe("FantaWriter-Setup-2.6.1.exe");
+    expect(names.legacy).toBe("FantaWriter-Setup-3.0.0.exe");
 
     const workflow = readFileSync(join(repoRoot, ".github", "workflows", "release-win.yml"), "utf8");
     expect(workflow).toMatch(/asset=Lightbound-Setup-\$\{PKG\}\.exe/);
