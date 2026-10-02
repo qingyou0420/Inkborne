@@ -9,6 +9,7 @@ import { AlertCircle, Copy, Download, Feather, Loader2, MoreHorizontal } from "l
 import { useState } from "react";
 import { Streamdown } from "streamdown";
 import { FanqieExportFields } from "../components/FanqieExportFields";
+import { maxChapterNumber, normalizeRange } from "../lib/export-range";
 import { fanqieRangeProblem } from "../lib/fanqie-range";
 import { LiteraryEmpty } from "../components/LiteraryEmpty";
 import { StageDot } from "../components/StageDot";
@@ -278,26 +279,43 @@ function ShortPlainTextBar({
   readonly onChange: (patch: { from?: string; to?: string; layout?: "combined" | "per-chapter"; blankLine?: boolean; indent?: boolean }) => void;
 }) {
   const shape = describeFanqieManuscript(content, title);
-  const rangeProblem = fanqieRangeProblem(from, to, shape.chapters.length, isZh);
-  const query: FanqieExportQuery = rangeProblem ? { layout, blankLine, indent } : {
-    ...(positiveChapter(from) ? { fromChapter: positiveChapter(from) } : {}),
-    ...(positiveChapter(to) ? { toChapter: positiveChapter(to) } : {}),
-    layout,
-    blankLine,
-    indent,
+  const chapterCount = maxChapterNumber(shape.chapters);
+  const [rangeSwapped, setRangeSwapped] = useState(false);
+  const settled = normalizeRange(from, to, chapterCount);
+  const rangeProblem = fanqieRangeProblem(settled.from, settled.to, chapterCount, isZh);
+  const queryFor = (bounds: { from: string; to: string }): FanqieExportQuery => {
+    const problem = fanqieRangeProblem(bounds.from, bounds.to, chapterCount, isZh);
+    if (problem) return { layout, blankLine, indent };
+    return {
+      ...(positiveChapter(bounds.from) ? { fromChapter: positiveChapter(bounds.from) } : {}),
+      ...(positiveChapter(bounds.to) ? { toChapter: positiveChapter(bounds.to) } : {}),
+      layout,
+      blankLine,
+      indent,
+    };
+  };
+  const query = queryFor(settled);
+  const commitRange = (patch: { from?: string; to?: string } = {}) => {
+    const next = normalizeRange(patch.from ?? from, patch.to ?? to, chapterCount);
+    setRangeSwapped(next.swapped);
+    onChange({ from: next.from, to: next.to });
+    return next;
   };
   const copyPlain = () => {
-    if (rangeProblem) {
-      showToast(rangeProblem, "error");
+    const next = commitRange();
+    const problem = fanqieRangeProblem(next.from, next.to, chapterCount, isZh);
+    if (problem) {
+      showToast(problem, "error");
       return;
     }
+    const chosen = queryFor(next);
     try {
       const manuscript = renderFanqieManuscript({
         title,
         markdown: content,
         style: { blankLine, indent },
-        fromChapter: query.fromChapter,
-        toChapter: query.toChapter,
+        fromChapter: chosen.fromChapter,
+        toChapter: chosen.toChapter,
       });
       void copyToClipboard(manuscript.combined)
         .then(() => showToast(isZh ? "纯文本已复制。标题只留了一行。" : "Plain text copied. The title is one line.", "success"))
@@ -321,7 +339,14 @@ function ShortPlainTextBar({
           aria-disabled={rangeProblem ? true : undefined}
           download
           onClick={(event) => {
-            if (rangeProblem) event.preventDefault();
+            const next = commitRange();
+            const problem = fanqieRangeProblem(next.from, next.to, chapterCount, isZh);
+            if (problem) {
+              event.preventDefault();
+              showToast(problem, "error");
+              return;
+            }
+            event.currentTarget.href = shortManuscriptExportPath(storyId, "txt", queryFor(next));
           }}
         >
           <Download size={14} />
@@ -336,7 +361,13 @@ function ShortPlainTextBar({
         layout={layout}
         blankLine={blankLine}
         indent={indent}
-        onChange={onChange}
+        chapterCount={chapterCount}
+        swapped={rangeSwapped}
+        onCommit={commitRange}
+        onChange={(patch) => {
+          if (patch.from !== undefined || patch.to !== undefined) setRangeSwapped(false);
+          onChange(patch);
+        }}
       />
     </div>
   );

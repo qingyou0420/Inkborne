@@ -260,6 +260,29 @@ function normalizeRequestedExportFormat(format: string): string {
   return format === "fanqie" ? "txt" : format;
 }
 
+/** `chapter` query/body. Empty means the whole book. Anything else must be a positive integer. */
+function parseExportChapter(value: unknown): { readonly chapter?: number; readonly error?: string } {
+  if (value == null || value === "") return {};
+  const raw = typeof value === "number"
+    ? (Number.isInteger(value) ? String(value) : "")
+    : typeof value === "string"
+      ? value.trim()
+      : "";
+  if (!/^[1-9]\d*$/.test(raw)) return { error: "章号得是正整数。" };
+  return { chapter: Number(raw) };
+}
+
+function exportFailureStatus(message: string): 400 | 500 {
+  if (
+    message.includes("章号得是正整数")
+    || message.includes("还没有正文")
+    || message.includes("不能导出这一章")
+  ) {
+    return 400;
+  }
+  return 500;
+}
+
 // -- Pipeline stage definitions per agent type --
 
 interface BilingualLabel {
@@ -6793,9 +6816,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const format = normalizeRequestedExportFormat(c.req.query("format") ?? "txt");
     const approvedOnly = c.req.query("approvedOnly") === "true";
+    const parsedChapter = parseExportChapter(c.req.query("chapter"));
+    if (parsedChapter.error) return c.json({ error: parsedChapter.error }, 400);
+    const onlyChapter = parsedChapter.chapter;
 
     try {
-      const textOptions = format === "txt" ? fanqieOptionsFromQuery({
+      const textOptions = format === "txt" ? fanqieOptionsFromQuery(onlyChapter !== undefined ? {
+        layout: "combined",
+        blankLine: c.req.query("blankLine"),
+        indent: c.req.query("indent"),
+      } : {
         from: c.req.query("from"),
         to: c.req.query("to"),
         layout: c.req.query("layout"),
@@ -6806,6 +6836,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         format: format as "txt" | "md" | "epub",
         approvedOnly,
         ...textOptions,
+        ...(onlyChapter !== undefined ? { onlyChapter } : {}),
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -6818,7 +6849,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Export failed";
-      return c.json({ error: message }, 500);
+      return c.json({ error: message }, exportFailureStatus(message));
     }
   });
 
@@ -6834,18 +6865,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       layout?: "combined" | "per-chapter";
       blankLine?: boolean;
       indent?: boolean;
+      chapter?: unknown;
     } = await c.req.json().catch(() => ({ format: "txt", approvedOnly: false }));
     const fmt = normalizeRequestedExportFormat(body.format ?? "txt");
     const approvedOnly = body.approvedOnly;
+    const parsedChapter = parseExportChapter(body.chapter);
+    if (parsedChapter.error) return c.json({ error: parsedChapter.error }, 400);
+    const onlyChapter = parsedChapter.chapter;
 
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
-      const perChapter = fmt === "txt" && body.layout === "per-chapter";
-      const outputPath = perChapter
-        ? join(bookDir, "exports", "chapters")
-        : join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
+      const perChapter = fmt === "txt" && body.layout === "per-chapter" && onlyChapter === undefined;
+      const outputPath = onlyChapter !== undefined
+        ? join(bookDir, "exports")
+        : perChapter
+          ? join(bookDir, "exports", "chapters")
+          : join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
       const result = await processProjectInteractionRequest({
         projectRoot: root,
         request: {
@@ -6854,10 +6891,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           format: fmt as "txt" | "md" | "epub",
           approvedOnly,
           outputPath,
+          ...(onlyChapter !== undefined ? { onlyChapter } : {}),
           ...(fmt === "txt" ? {
-            fromChapter: body.fromChapter,
-            toChapter: body.toChapter,
-            layout: body.layout,
+            ...(onlyChapter === undefined ? {
+              fromChapter: body.fromChapter,
+              toChapter: body.toChapter,
+              layout: body.layout,
+            } : {
+              layout: "combined" as const,
+            }),
             blankLine: body.blankLine,
             indent: body.indent,
           } : {}),
@@ -6873,7 +6915,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      return c.json({ error: message }, 500);
+      return c.json({ error: message }, exportFailureStatus(message));
     }
   });
 

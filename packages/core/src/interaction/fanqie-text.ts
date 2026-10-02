@@ -86,6 +86,18 @@ export function fanqieChapterFileName(chapterNumber: number, title: string): str
   return `第${padded}章 ${sanitizeFilePart(bare)}.txt`;
 }
 
+/** One chapter downloaded on its own: `书名 第3章 章名.txt`. */
+export function singleChapterExportFileName(
+  bookTitle: string,
+  chapterNumber: number,
+  title: string,
+  extension: "txt" | "md" | "epub",
+): string {
+  const book = sanitizeFilePart(bookTitle.trim() || "书");
+  const bare = stripRepeatedChapterPrefix(title, chapterNumber) || "未命名";
+  return `${book} 第${chapterNumber}章 ${sanitizeFilePart(bare)}.${extension}`;
+}
+
 export function fanqieDownloadName(title: string, layout: "combined" | "per-chapter"): string {
   const safe = sanitizeFilePart(title || "书");
   return layout === "per-chapter" ? `${safe}.zip` : `${safe}.txt`;

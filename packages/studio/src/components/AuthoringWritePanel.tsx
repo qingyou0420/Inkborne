@@ -95,6 +95,10 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   readonly onChanged?: () => void;
   readonly onRegisterBeforeLeave?: (guard: WriteLeaveGuard | null) => void;
   readonly onGoNextChapter?: () => void;
+  /** Highest chapter number already in the book index. Omit when unknown. */
+  readonly chapterCount?: number;
+  /** True when this chapter is already in the book index. */
+  readonly currentChapterReady?: boolean;
 }>(function AuthoringWritePanel({
   bookId,
   chapterNumber,
@@ -105,6 +109,8 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   onChanged,
   onRegisterBeforeLeave,
   onGoNextChapter,
+  chapterCount,
+  currentChapterReady,
 }, ref) {
   const { data, error: workspaceError, refetch } = useApi<AuthoringWorkspace>(
     `/authoring/workspace?${workspaceQuery(bookId, undefined, { chapter: chapterNumber })}`,
@@ -874,6 +880,9 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
             isZh={isZh}
             variant="manuscript"
             label={isZh ? "导出" : "Export"}
+            chapterCount={chapterCount}
+            currentChapter={{ number: chapterNumber, title: chapterTitle }}
+            currentChapterReady={Boolean(currentChapterReady) || Boolean(adoptedId) || Boolean((chapterForCurrent?.content ?? "").trim())}
             onSaved={(path) => showToast(path ? (isZh ? `已导出到项目目录：${path}` : `Exported to the project directory: ${path}`) : (isZh ? "已导出到项目目录" : "Exported to the project directory"), "success")}
             onError={(message) => showToast(message, "error")}
           />

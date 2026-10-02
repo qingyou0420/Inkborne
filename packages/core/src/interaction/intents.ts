@@ -54,6 +54,7 @@ export const InteractionRequestSchema = z.object({
   outputPath: z.string().min(1).optional(),
   fromChapter: z.number().int().min(1).optional(),
   toChapter: z.number().int().min(1).optional(),
+  onlyChapter: z.number().int().min(1).optional(),
   layout: z.enum(["combined", "per-chapter"]).optional(),
   blankLine: z.boolean().optional(),
   indent: z.boolean().optional(),

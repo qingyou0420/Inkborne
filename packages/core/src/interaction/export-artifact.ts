@@ -7,6 +7,7 @@ import {
   fanqieDownloadName,
   fanqieOptionsFromQuery,
   renderFanqieChapter,
+  singleChapterExportFileName,
   type FanqieChapterFile,
   type FanqieExportOptions,
 } from "./fanqie-text.js";
@@ -17,6 +18,8 @@ export interface BookExportOptions extends FanqieExportOptions {
   readonly format?: BookExportFormat;
   readonly approvedOnly?: boolean;
   readonly outputPath?: string;
+  /** Export this chapter only. Unlike from/to, this also narrows md and epub. */
+  readonly onlyChapter?: number;
 }
 
 export interface ExportStateLike {
@@ -81,6 +84,20 @@ function selectChapters<T extends { readonly number: number; readonly status: st
   options: BookExportOptions,
   format: BookExportFormat,
 ): T[] {
+  const onlyChapter = options.onlyChapter;
+  if (onlyChapter !== undefined) {
+    if (!Number.isInteger(onlyChapter) || onlyChapter < 1) {
+      throw new Error("章号得是正整数。");
+    }
+    const found = index.find((chapter) => chapter.number === onlyChapter);
+    if (!found) {
+      throw new Error(`第${onlyChapter}章还没有正文，不能导出。`);
+    }
+    if (options.approvedOnly && found.status !== "approved") {
+      throw new Error(`第${onlyChapter}章还没通过。勾了「仅已通过」时，不能导出这一章。`);
+    }
+    return [found];
+  }
   const approved = options.approvedOnly
     ? index.filter((chapter) => chapter.status === "approved")
     : [...index];
@@ -95,6 +112,17 @@ function selectChapters<T extends { readonly number: number; readonly status: st
     if (toChapter !== undefined && chapter.number > toChapter) return false;
     return true;
   });
+}
+
+function singleChapterOutputPath(
+  requested: string | undefined,
+  fallbackDir: string,
+  fileName: string,
+  format: BookExportFormat,
+): string {
+  if (!requested) return join(fallbackDir, fileName);
+  if (requested.toLowerCase().endsWith(`.${format}`)) return requested;
+  return join(requested, fileName);
 }
 
 export async function buildExportArtifact(
@@ -114,9 +142,20 @@ export async function buildExportArtifact(
   const bookDir = state.bookDir(bookId);
   const chaptersDir = join(bookDir, "chapters");
   const projectRoot = dirname(dirname(bookDir));
-  const outputPath = options.outputPath ?? join(projectRoot, `${bookId}_export.${format}`);
   const chapterFiles = buildChapterFileLookup(await readdir(chaptersDir));
+  if (options.onlyChapter !== undefined && !chapterFiles.has(options.onlyChapter)) {
+    throw new Error(`第${options.onlyChapter}章还没有正文，不能导出。`);
+  }
+  const singleName = options.onlyChapter !== undefined
+    ? singleChapterExportFileName(book.title, chapters[0]?.number ?? options.onlyChapter, chapters[0]?.title ?? "", format)
+    : undefined;
+  const outputPath = singleName
+    ? singleChapterOutputPath(options.outputPath, projectRoot, singleName, format)
+    : (options.outputPath ?? join(projectRoot, `${bookId}_export.${format}`));
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
+  const fanqieOptions: BookExportOptions = options.onlyChapter !== undefined
+    ? { ...options, layout: "combined" }
+    : options;
 
   if (format === "txt") {
     return buildFanqieArtifact({
@@ -124,9 +163,10 @@ export async function buildExportArtifact(
       chaptersDir,
       chapterFiles,
       chapters,
-      options,
+      options: fanqieOptions,
       outputPath,
       totalWords,
+      downloadName: singleName,
     });
   }
 
@@ -147,7 +187,7 @@ export async function buildExportArtifact(
     );
     return {
       outputPath,
-      fileName: `${bookId}.epub`,
+      fileName: singleName ?? `${bookId}.epub`,
       chaptersExported: chapters.length,
       totalWords,
       format,
@@ -169,7 +209,7 @@ export async function buildExportArtifact(
 
   return {
     outputPath,
-    fileName: `${bookId}.${format}`,
+    fileName: singleName ?? `${bookId}.${format}`,
     chaptersExported: chapters.length,
     totalWords,
     format,
@@ -186,6 +226,7 @@ async function buildFanqieArtifact(input: {
   readonly options: BookExportOptions;
   readonly outputPath: string;
   readonly totalWords: number;
+  readonly downloadName?: string;
 }): Promise<ExportArtifact> {
   const layout = input.options.layout === "per-chapter" ? "per-chapter" : "combined";
   const style = { blankLine: input.options.blankLine, indent: input.options.indent };
@@ -211,7 +252,7 @@ async function buildFanqieArtifact(input: {
   if (files.length === 0) {
     throw new Error("没有可导出的章节。");
   }
-  const downloadName = fanqieDownloadName(input.bookTitle, layout);
+  const downloadName = input.downloadName ?? fanqieDownloadName(input.bookTitle, layout);
   const bookTitle = input.bookTitle.trim();
   const firstLine = chapterTexts[0]?.split("\n")[0]?.trim() ?? "";
   if (layout === "per-chapter") {
@@ -249,7 +290,8 @@ export async function writeExportArtifact(
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName" | "chapterFiles">> {
   const artifact = await buildExportArtifact(state, bookId, options);
   if (
-    artifact.format === "txt"
+    options.onlyChapter === undefined
+    && artifact.format === "txt"
     && options.layout === "per-chapter"
     && artifact.chapterFiles
     && options.outputPath
