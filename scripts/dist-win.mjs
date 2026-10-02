@@ -93,7 +93,7 @@ async function buildInstaller() {
       join(distDir, "UNBRANDED.txt"),
       [
         "UNBRANDED Windows build",
-        "Packed with signAndEditExecutable=false; Inkborne.exe keeps the default Electron icon.",
+        "Packed with signAndEditExecutable=false; Lightbound.exe keeps the default Electron icon.",
         "Do not ship this artifact. Rebuild with rcedit enabled.",
         "",
       ].join("\n"),

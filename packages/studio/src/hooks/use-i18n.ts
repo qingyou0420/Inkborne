@@ -554,7 +554,7 @@ const strings = {
 
   // In-app update (desktop shell IPC)
   "update.title": { zh: "检查更新", en: "Check for Updates" },
-  "update.subtitle": { zh: "从 GitHub 检查墨生万象新版本。发现新版本后可下载安装包，再安装并重启。启动时不会自动访问 GitHub。", en: "Check GitHub for a newer Inkborne. Download the installer, then install and restart. Startup never hits GitHub by itself." },
+  "update.subtitle": { zh: "从 GitHub 检查轻光之集新版本。发现新版本后可下载安装包，再安装并重启。启动时不会自动访问 GitHub。", en: "Check GitHub for a newer Lightbound. Download the installer, then install and restart. Startup never hits GitHub by itself." },
   "update.current": { zh: "当前版本", en: "Current version" },
   "update.latestLabel": { zh: "最新版本", en: "Latest version" },
   "update.repo": { zh: "更新源", en: "Update source" },

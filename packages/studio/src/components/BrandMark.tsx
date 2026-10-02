@@ -5,7 +5,7 @@ export function BrandMark({ className }: { readonly className?: string }) {
   return (
     <img
       src="/lightbound-mark.png"
-      alt="墨生万象"
+      alt="轻光之集"
       className={className}
       draggable={false}
     />

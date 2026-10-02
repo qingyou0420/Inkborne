@@ -52,7 +52,7 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$PKG" >> "$GITHUB_OUTPUT"
-          echo "asset=Inkborne-Setup-${PKG}.exe" >> "$GITHUB_OUTPUT"
+          echo "asset=Lightbound-Setup-${PKG}.exe" >> "$GITHUB_OUTPUT"
 
       - run: pnpm install --frozen-lockfile
 
@@ -102,21 +102,21 @@ jobs:
           if (Test-Path "dist-installer\UNBRANDED.txt") {
             throw "UNBRANDED.txt present - refusing to release an exe without rcedit branding"
           }
-          $exe = "dist-installer\win-unpacked\Inkborne.exe"
+          $exe = "dist-installer\win-unpacked\Lightbound.exe"
           if (-not (Test-Path $exe)) {
             throw "missing $exe - rcedit / version-info check needs the unpacked exe"
           }
           $info = (Get-Item $exe).VersionInfo
-          if ($info.ProductName -ne "Inkborne") {
-            throw "ProductName is '$($info.ProductName)', expected Inkborne (signAndEditExecutable/rcedit did not run)"
+          if ($info.ProductName -ne "Lightbound") {
+            throw "ProductName is '$($info.ProductName)', expected Lightbound (signAndEditExecutable/rcedit did not run)"
           }
-          if ($info.FileDescription -notmatch "Inkborne") {
-            throw "FileDescription is '$($info.FileDescription)', expected Inkborne"
+          if ($info.FileDescription -notmatch "Lightbound") {
+            throw "FileDescription is '$($info.FileDescription)', expected Lightbound"
           }
           Add-Type -AssemblyName System.Drawing
           $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path $exe).Path)
           if (-not $icon -or $icon.Width -lt 16) {
-            throw "Inkborne.exe has no usable associated icon"
+            throw "Lightbound.exe has no usable associated icon"
           }
           Write-Host "branded exe ok ProductName=$($info.ProductName) icon=$($icon.Width)x$($icon.Height)"
 
@@ -132,8 +132,14 @@ jobs:
             echo "找不到校验文件 ${asset}.sha256"
             exit 1
           fi
+          test -f "dist-installer/Lightbound-Setup-${{ steps.meta.outputs.version }}.exe"
+          test -f "dist-installer/Lightbound-Setup-${{ steps.meta.outputs.version }}.exe.sha256"
+          test -f "dist-installer/Inkborne-Setup-${{ steps.meta.outputs.version }}.exe"
+          test -f "dist-installer/Inkborne-Setup-${{ steps.meta.outputs.version }}.exe.sha256"
           test -f "dist-installer/FantaWriter-Setup-${{ steps.meta.outputs.version }}.exe"
+          test -f "dist-installer/FantaWriter-Setup-${{ steps.meta.outputs.version }}.exe.sha256"
           test -f "dist-installer/Fantasy-Writer-Setup-${{ steps.meta.outputs.version }}.exe"
+          test -f "dist-installer/Fantasy-Writer-Setup-${{ steps.meta.outputs.version }}.exe.sha256"
           node scripts/lib/refuse-secrets.cjs dist-installer
           echo "installer ok $(wc -c < "$asset") bytes"
 
@@ -145,6 +151,8 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
+            dist-installer/Lightbound-Setup-*.exe
+            dist-installer/Lightbound-Setup-*.exe.sha256
             dist-installer/Inkborne-Setup-*.exe
             dist-installer/Inkborne-Setup-*.exe.sha256
             dist-installer/FantaWriter-Setup-*.exe
