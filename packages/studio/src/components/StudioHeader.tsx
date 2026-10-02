@@ -38,10 +38,10 @@ export function StudioHeader({
           type="button"
           className="brand"
           onClick={nav.toDashboard}
-          aria-label={isZh ? "墨生万象，回到书架" : "Inkborne, back to the bookshelf"}
+          aria-label={isZh ? "轻光之集，回到书架" : "Lightbound, back to the bookshelf"}
         >
           <BrandGlyph className="brand-mark-svg" />
-          <span className="brand-name">墨生万象</span>
+          <span className="brand-name">轻光之集</span>
         </button>
         <div className="header-actions">
           <AppMoreMenu

@@ -9,6 +9,7 @@ const http = require("http");
 const crypto = require("crypto");
 const { spawn, execFile } = require("child_process");
 const { defaultProjectRoot, ensureProjectLayout, resolveSavedProjectRoot, saveFirstRunLlm } = require("./lib/project.cjs");
+const { readRenameNoticePlan, applyRenameNotice } = require("./lib/rename-notice.cjs");
 const { HOST, SCAN_START, normalizePinnedPort, pickListenPort, canBindPort } = require("./lib/port.cjs");
 const {
   emptyEngineHandle,
@@ -217,7 +218,7 @@ function readConfigMap(filePath) {
 function writeConfigMap(filePath, map) {
   ensureDir(path.dirname(filePath));
   const lines = [
-    "# FantaWriter · 本机壳配置（由应用写入，请勿分享）",
+    "# 轻光之集 · 本机壳配置（由应用写入，请勿分享）",
     ...[...map.entries()].map(([k, v]) => `${k}=${v}`),
     "",
   ];
@@ -354,7 +355,7 @@ function startEngine(listenPort, root) {
   const entry = studioEntry();
   if (!entry) {
     throw new Error(
-      "找不到墨生万象引擎入口 packages/studio/dist/api/index.js。请先运行 pnpm build。",
+      "找不到轻光之集引擎入口 packages/studio/dist/api/index.js。请先运行 pnpm build。",
     );
   }
   const engineRoot = resolveEngineRoot(entry) || path.dirname(entry);
@@ -380,7 +381,7 @@ function startEngine(listenPort, root) {
     if (quitting || stoppingEngine || recoveringEngine) return;
     if (!autoRestartBudget.canAutoRestart()) {
       setEngineStatus("needs-attention");
-      dialog.showErrorBox("引擎已退出", `墨生万象引擎子进程退出（${code}）。\n日志：${getLogPath()}`);
+      dialog.showErrorBox("引擎已退出", `轻光之集引擎子进程退出（${code}）。\n日志：${getLogPath()}`);
       return;
     }
     autoRestartBudget.recordAttempt();
@@ -643,7 +644,7 @@ function createWindow(targetUrl) {
     minHeight: 720,
     show: false,
     autoHideMenuBar: true,
-    title: "墨生万象 / Inkborne",
+    title: "轻光之集 / Lightbound",
     icon: path.join(__dirname, process.platform === "win32" ? "icon.ico" : "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -752,15 +753,16 @@ async function openCheckUpdateUi() {
 function showAbout() {
   dialog.showMessageBox(mainWindow || undefined, {
     type: "info",
-    title: "关于墨生万象",
+    title: "关于轻光之集",
     icon: path.join(__dirname, process.platform === "win32" ? "icon.ico" : "icon.png"),
-    message: "墨生万象 / Inkborne 2.0",
+    message: "轻光之集 / Lightbound",
     detail: [
       "内核与工作台 fork 自 InkOS (https://github.com/Narcooo/inkos) v1.8.x。",
       "许可证：GNU Affero General Public License v3.0。",
-      "源码：https://github.com/qingyou0420/Inkborne",
+      "源码：https://github.com/qingyou0420/Lightbound",
       `版本：${app.getVersion()}`,
       "检查更新：工作台「系统 → 检查更新」，或本对话框 / 菜单「帮助 → 检查更新」。",
+      "原名：墨生万象 / Inkborne，更早为 幻想作家 / FantaWriter。",
     ].join("\n"),
     buttons: ["检查更新", "关闭"],
     defaultId: 1,
@@ -773,9 +775,9 @@ function showAbout() {
 function buildMenu() {
   const template = [
     {
-      label: "墨生万象",
+      label: "轻光之集",
       submenu: [
-        { label: "关于墨生万象", click: () => showAbout() },
+        { label: "关于轻光之集", click: () => showAbout() },
         { label: "检查更新", click: () => { openCheckUpdateUi(); } },
         { type: "separator" },
         { label: "重启引擎", click: () => restartEngine().catch((e) => dialog.showErrorBox("重启失败", String(e))) },
@@ -793,7 +795,7 @@ function buildMenu() {
         { label: "打开日志目录", click: () => { void openKnownDir(app.getPath("userData")); } },
         { label: "打开项目目录", click: () => { void openKnownDir(projectRoot); } },
         { type: "separator" },
-        { label: "关于墨生万象", click: () => showAbout() },
+        { label: "关于轻光之集", click: () => showAbout() },
       ],
     },
   ];
@@ -1189,7 +1191,7 @@ function registerIpc() {
 
   ipcMain.handle("app:pickProjectRoot", async () => {
     const res = await dialog.showOpenDialog(mainWindow || undefined, {
-      title: "选择墨生万象项目根目录",
+      title: "选择轻光之集项目根目录",
       properties: ["openDirectory", "createDirectory"],
       defaultPath: defaultProjectRoot(tryAppPath("documents") || undefined),
     });
@@ -1305,7 +1307,7 @@ function registerIpc() {
   });
   ipcMain.handle("app:pickInstaller", async () => {
     const res = await dialog.showOpenDialog(mainWindow || undefined, {
-      title: "选择墨生万象安装包",
+      title: "选择轻光之集安装包",
       filters: [{ name: "安装程序", extensions: ["exe"] }],
       properties: ["openFile"],
     });
@@ -1340,10 +1342,40 @@ async function boot() {
   process.env.INKOS_USER_DATA = app.getPath("userData");
   registerIpc();
   buildMenu();
+  // resolveEngineUrl 会写入 FW_FIRST_RUN_DONE，更名提示必须先读旧状态。
+  // 键 FW_RENAME_NOTICE_SHOWN 只在窗口创建之后写入；失败只记日志，不进入启动失败。
+  let renamePlan = { show: false, record: false };
+  try {
+    const plan = readRenameNoticePlan({
+      loadShellConfig,
+      readConfigMap,
+      getConfigPath,
+      appendLog,
+    });
+    if (plan && typeof plan === "object") renamePlan = plan;
+  } catch (error) {
+    try {
+      appendLog(`rename notice: read failed: ${error instanceof Error ? error.message : error}`);
+    } catch { /* ignore */ }
+  }
   try {
     const url = await resolveEngineUrl();
     setEngineStatus("ready", { url });
     createWindow(url);
+    try {
+      applyRenameNotice({
+        plan: renamePlan,
+        dialog,
+        mainWindow,
+        projectRoot,
+        saveShellConfig,
+        appendLog,
+      });
+    } catch (error) {
+      try {
+        appendLog(`rename notice: apply failed: ${error instanceof Error ? error.message : error}`);
+      } catch { /* ignore */ }
+    }
     if (powerMonitor && typeof powerMonitor.on === "function") {
       let resumeTimer;
       powerMonitor.on("resume", () => {

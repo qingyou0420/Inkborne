@@ -18,7 +18,8 @@ describe("ink home rendered hierarchy", () => {
   it("renders only the brand and a single global configuration trigger", () => {
     const html = renderToStaticMarkup(createElement(StudioHeader, { nav, t, isZh: true, isDark: false, onToggleTheme: noop, studyCurrent: true, sse: { messages: [] } }));
     expect((html.match(/<button\b/g) ?? []).length).toBe(2);
-    expect(html).toContain("墨生万象");
+    // PR-2：顶栏品牌名随改名更新
+    expect(html).toContain("轻光之集");
     expect(html).toContain('aria-label="配置"');
     expect(html).not.toContain('data-testid="nav-study"');
     expect(html).not.toContain("theme-top");

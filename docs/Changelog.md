@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 界面改名为「轻光之集 / Lightbound」。`lib/project.cjs` 默认书稿文件夹改为「轻光之集」；文档目录下已有「幻想作家」目录时仍返回该旧文件夹。壳配置新增键 `FW_RENAME_NOTICE_SHOWN=1`：老用户（`FW_FIRST_RUN_DONE` 已是 1）升级后首次打开提示一次，全新安装只写键不弹。关于页不再写死版本号，改用 `app.getVersion()`。
+
 ## 2.6.1
 
 用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。Windows 安装包 `Inkborne-Setup-2.6.1.exe`（2026-09-30）。

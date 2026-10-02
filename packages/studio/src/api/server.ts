@@ -1232,7 +1232,7 @@ function formatAgentFailure(
   if (kind === "internal") {
     return {
       code: "AGENT_INTERNAL_ERROR",
-      message: pick(lang, `墨生万象内部流程错误：${message}`, `Inkborne internal pipeline error: ${message}`),
+      message: pick(lang, `轻光之集内部流程错误：${message}`, `Lightbound internal pipeline error: ${message}`),
       status: 500,
     };
   }
@@ -8229,7 +8229,7 @@ export async function startStudioServer(
   }
 
   const hostname = options?.hostname ?? "127.0.0.1";
-  console.log(`FantaWriter engine listening on http://${hostname}:${port}`);
+  console.log(`Lightbound engine listening on http://${hostname}:${port}`);
   const server = serve({ fetch: app.fetch, port, hostname });
   return {
     close: () =>
