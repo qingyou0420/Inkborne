@@ -1,5 +1,0 @@
-Inkborne / 墨生万象 brand mark
-Source: product-provided circular logo (open book + mountain path + gold star).
-Recreated in-repo as packages/studio/public/inkborne-mark.svg for P0 favicon / window icon / BrandMark.
-Authorization: original artwork supplied by the product owner for this application.
-P2-3 local fonts: 霞鹜文楷 LXGW WenKai (OFL) subset + Instrument Serif under packages/studio/public/fonts/. See third_party/LXGW-WENKAI.txt and third_party/INSTRUMENT-SERIF.txt.

@@ -1,11 +1,11 @@
-// 墨生万象 / Inkborne circular mark: open book, mountain path, gold star.
-// PNG is served from packages/studio/public/inkborne-mark.png.
+// 星芒图标：深海军蓝底、四芒星、细轨道线、金点。
+// PNG is served from packages/studio/public/lightbound-mark.png.
 
 export function BrandMark({ className }: { readonly className?: string }) {
   return (
     <img
-      src="/inkborne-mark.png"
-      alt="墨生万象"
+      src="/lightbound-mark.png"
+      alt="轻光之集"
       className={className}
       draggable={false}
     />

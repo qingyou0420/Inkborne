@@ -15,8 +15,8 @@ export function LanguageSelector({ onSelect }: { onSelect: (lang: "zh" | "en") =
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-8">
       <div className="mb-16 text-center">
         <BrandMark className="w-24 h-24 mx-auto mb-5 rounded-full" />
-        <div className="font-serif text-5xl font-medium text-foreground">墨生万象</div>
-        <div className="mt-2 text-base text-muted-foreground tracking-[0.18em]">Inkborne</div>
+        <div className="font-serif text-5xl font-medium text-foreground">轻光之集</div>
+        <div className="mt-2 text-base text-muted-foreground tracking-[0.18em]">Lightbound</div>
       </div>
 
       {/* Language cards — generous, distinct, immersive */}

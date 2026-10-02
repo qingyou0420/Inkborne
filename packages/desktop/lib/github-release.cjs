@@ -4,8 +4,9 @@
  */
 const { versionFromSetupName, preferSetupRank } = require("./setup-artifact.cjs");
 
-const DEFAULT_GITHUB_REPO = "qingyou0420/Inkborne";
-const USER_AGENT = "FantaWriter";
+// 仓库改名后 qingyou0420/Inkborne 会重定向到此处；UPDATE_GITHUB_REPO 仍可覆盖。
+const DEFAULT_GITHUB_REPO = "qingyou0420/Lightbound";
+const USER_AGENT = "Lightbound";
 
 const ALLOWED_DOWNLOAD_HOSTS = new Set([
   "github.com",
@@ -165,7 +166,7 @@ function setupFileNameFromUrl(url) {
 function githubCheckErrorMessage(err) {
   const msg = err instanceof Error ? err.message : String(err);
   if (/HTTP 404/.test(msg)) {
-    return "无法读取 GitHub latest release（本仓公开，请确认已发布 Inkborne-Setup 或 FantaWriter-Setup 安装包）";
+    return "无法读取 GitHub latest release（本仓公开，请确认已发布 Lightbound-Setup 或 Inkborne-Setup 或 FantaWriter-Setup 或 Fantasy-Writer-Setup 安装包）";
   }
   if (/HTTP 401|HTTP 403/.test(msg)) {
     return "GitHub 访问被拒绝，请稍后重试";

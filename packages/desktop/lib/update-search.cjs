@@ -1,5 +1,5 @@
 /**
- * Where the desktop shell looks for Inkborne-Setup-*.exe and FantaWriter-Setup-*.exe.
+ * Where the desktop shell looks for Lightbound-Setup-*.exe, Inkborne-Setup-*.exe and FantaWriter-Setup-*.exe.
  *
  * Silent startup checks must stay off the first-paint path:
  * - do not readdir() 桌面 / 下载 / 文档 (huge, often OneDrive)
