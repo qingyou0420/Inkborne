@@ -435,7 +435,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
       >
         <div className="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
           <BrandMark className="h-3 w-3 rounded-full" />
-          <span>墨生万象 · Inkborne · v{PRODUCT_VERSION}</span>
+          <span>轻光之集 · Lightbound · v{PRODUCT_VERSION}</span>
         </div>
       </div>
 

@@ -6,10 +6,17 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const DEFAULT_FOLDER = "幻想作家";
+const DEFAULT_FOLDER = "轻光之集";
+const LEGACY_DEFAULT_FOLDER = "幻想作家";
 
 function defaultProjectRoot(documentsDir) {
   const documents = documentsDir || path.join(os.homedir(), "Documents");
+  const legacy = path.join(documents, LEGACY_DEFAULT_FOLDER);
+  try {
+    if (fs.existsSync(legacy) && fs.statSync(legacy).isDirectory()) return legacy;
+  } catch {
+    /* unreadable legacy folder: fall through to the new default */
+  }
   return path.join(documents, DEFAULT_FOLDER);
 }
 
@@ -46,7 +53,7 @@ function ensureProjectLayout(root) {
       configPath,
       `${JSON.stringify(
         {
-          name: path.basename(resolved) || "幻想作家",
+          name: path.basename(resolved) || DEFAULT_FOLDER,
           version: "0.1.0",
           language: "zh",
           llm: {
@@ -259,7 +266,7 @@ function writeProjectLlm(root, opts) {
     ...(baseUrl ? { baseUrl } : {}),
     ...(model ? { models: [model] } : {}),
   };
-  raw.name = raw.name || path.basename(root) || "幻想作家";
+  raw.name = raw.name || path.basename(root) || DEFAULT_FOLDER;
   raw.version = raw.version || "0.1.0";
   raw.language = raw.language || "zh";
   raw.llm = {
@@ -313,6 +320,7 @@ function listStudioCustomServices(llm, secrets) {
 
 module.exports = {
   DEFAULT_FOLDER,
+  LEGACY_DEFAULT_FOLDER,
   DEFAULT_CUSTOM_SERVICE_NAME,
   defaultProjectRoot,
   resolveSavedProjectRoot,

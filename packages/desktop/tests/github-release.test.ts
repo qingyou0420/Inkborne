@@ -36,11 +36,17 @@ const {
 };
 
 describe("github latest release parsing", () => {
-  it("defaults to the public Inkborne repo", () => {
-    expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Inkborne");
+  it("defaults to the public Lightbound repo", () => {
+    // PR-1：默认仓库改为 qingyou0420/Lightbound（旧地址会重定向）；显式传入的仓库仍生效
+    expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Lightbound");
     expect(githubLatestApiUrl()).toBe(
+      "https://api.github.com/repos/qingyou0420/Lightbound/releases/latest"
+    );
+    expect(githubLatestApiUrl("qingyou0420/Inkborne")).toBe(
       "https://api.github.com/repos/qingyou0420/Inkborne/releases/latest"
     );
+    expect(githubApiHeaders()["User-Agent"]).toBe("Lightbound");
+    expect(githubAssetHeaders()["User-Agent"]).toBe("Lightbound");
   });
 
   it("picks Fantasy-Writer-Setup and ignores other assets", () => {
@@ -86,6 +92,38 @@ describe("github latest release parsing", () => {
     expect(picked?.version).toBe("2.6.1");
   });
 
+  it("prefers Lightbound-Setup over the three legacy names", () => {
+    // PR-1：同版本四个前缀都能识别，Lightbound-Setup 优先
+    const picked = pickSetupAsset([
+      {
+        name: "Fantasy-Writer-Setup-3.0.0.exe",
+        browser_download_url:
+          "https://github.com/qingyou0420/Lightbound/releases/download/v3.0.0/Fantasy-Writer-Setup-3.0.0.exe",
+        url: "https://api.github.com/repos/qingyou0420/Lightbound/releases/assets/1",
+      },
+      {
+        name: "FantaWriter-Setup-3.0.0.exe",
+        browser_download_url:
+          "https://github.com/qingyou0420/Lightbound/releases/download/v3.0.0/FantaWriter-Setup-3.0.0.exe",
+        url: "https://api.github.com/repos/qingyou0420/Lightbound/releases/assets/2",
+      },
+      {
+        name: "Inkborne-Setup-3.0.0.exe",
+        browser_download_url:
+          "https://github.com/qingyou0420/Lightbound/releases/download/v3.0.0/Inkborne-Setup-3.0.0.exe",
+        url: "https://api.github.com/repos/qingyou0420/Lightbound/releases/assets/3",
+      },
+      {
+        name: "Lightbound-Setup-3.0.0.exe",
+        browser_download_url:
+          "https://github.com/qingyou0420/Lightbound/releases/download/v3.0.0/Lightbound-Setup-3.0.0.exe",
+        url: "https://api.github.com/repos/qingyou0420/Lightbound/releases/assets/4",
+      },
+    ]);
+    expect(picked?.name).toBe("Lightbound-Setup-3.0.0.exe");
+    expect(picked?.version).toBe("3.0.0");
+  });
+
   it("returns null when latest has no recognized Setup.exe", () => {
     expect(
       parseGithubLatestRelease({
@@ -98,6 +136,12 @@ describe("github latest release parsing", () => {
   });
 
   it("extracts Setup filename from a GitHub download URL", () => {
+    // PR-1：下载地址同样识别 Lightbound-Setup
+    expect(
+      setupFileNameFromUrl(
+        "https://github.com/qingyou0420/Lightbound/releases/download/v2.6.1/Lightbound-Setup-2.6.1.exe"
+      )
+    ).toBe("Lightbound-Setup-2.6.1.exe");
     expect(
       setupFileNameFromUrl(
         "https://github.com/qingyou0420/Inkborne/releases/download/v2.6.1/Inkborne-Setup-2.6.1.exe"
@@ -149,7 +193,11 @@ describe("github download guards", () => {
   });
 
   it("maps HTTP errors to public-repo hints", () => {
+    // PR-1：404 提示补上 Lightbound-Setup，仍说明本仓公开
     expect(githubCheckErrorMessage(new Error("HTTP 404"))).toMatch(/公开/);
+    expect(githubCheckErrorMessage(new Error("HTTP 404"))).toMatch(/Lightbound-Setup/);
+    // PR-1 复审：404 提示补全四个前缀
+    expect(githubCheckErrorMessage(new Error("HTTP 404"))).toMatch(/Fantasy-Writer-Setup/);
     expect(githubCheckErrorMessage(new Error("HTTP 401"))).toMatch(/拒绝/);
   });
 });

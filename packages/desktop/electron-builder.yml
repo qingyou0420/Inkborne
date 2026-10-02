@@ -1,6 +1,6 @@
 appId: com.fantawriter.app
-productName: Inkborne
-copyright: Copyright © 2026 Inkborne / 墨生万象（原名幻想作家）. InkOS © upstream authors.
+productName: Lightbound
+copyright: Copyright © 2026 轻光之集 / Lightbound（原名墨生万象 / Inkborne，更早为幻想作家）. InkOS © upstream authors.
 afterPack: ./scripts/after-pack.cjs
 electronVersion: 37.10.3
 npmRebuild: false
@@ -24,12 +24,12 @@ extraResources:
       - "**/*"
 win:
   icon: icon.ico
-  legalTrademarks: Inkborne / 墨生万象
+  legalTrademarks: Lightbound / 轻光之集
   target:
     - target: nsis
       arch:
         - x64
-  artifactName: Inkborne-Setup-${version}.${ext}
+  artifactName: Lightbound-Setup-${version}.${ext}
   # Do not set signAndEditExecutable: false — electron-builder then skips rcedit
   # (icon + FileDescription / ProductName). Unsigned builds still skip sign()
   # when CSC_IDENTITY_AUTO_DISCOVERY=false.
@@ -40,8 +40,8 @@ nsis:
   allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: 墨生万象 Inkborne
-  uninstallDisplayName: 墨生万象 Inkborne
+  shortcutName: 轻光之集 Lightbound
+  uninstallDisplayName: 轻光之集 Lightbound
   installerLanguages:
     - zh_CN
     - en_US

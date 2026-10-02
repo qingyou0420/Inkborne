@@ -1,0 +1,6 @@
+Lightbound / 轻光 brand mark (formerly Inkborne / 墨生万象)
+Source: original star-mark bitmap by 清游 (qingyou0420) — deep navy field, four-pointed star, fine orbital lines, gold dots. No vector source file.
+Files: build/icon.ico, build/icon.png, build/lightbound-mark.png, and the matching copies under packages/desktop/ (icon.ico, icon.png) and packages/studio/public/ (lightbound-mark.png, favicon.ico).
+Copyright: All rights reserved by the author. This artwork is not covered by the project's AGPL-3.0 license. Use is granted only for this application's icons, favicon, window/installer icons, and BrandMark. Redistribution or any other use requires the author's permission.
+中文：星芒图标为作者清游原创位图，版权归作者所有；仅授权用于本应用图标、favicon、窗口/安装器图标与 BrandMark，再分发或其他用途需作者许可。
+P2-3 local fonts: 霞鹜文楷 LXGW WenKai (OFL) subset + Instrument Serif under packages/studio/public/fonts/. See third_party/LXGW-WENKAI.txt and third_party/INSTRUMENT-SERIF.txt.

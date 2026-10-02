@@ -34,6 +34,8 @@ const PATHS = {
   exeUpdates: "/app/updates",
   userDataUpdates: "/data/updates",
   desktopUpdatesFolder: [
+    // PR-1：静默扫描示例与 main.cjs 一致，Lightbound-Updates 在三个旧目录之前
+    "/Users/me/Desktop/Lightbound-Updates",
     "/Users/me/Desktop/Inkborne-Updates",
     "/Users/me/Desktop/FantaWriter-Updates",
     "/Users/me/Desktop/Fantasy-Writer-Updates",

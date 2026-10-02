@@ -209,6 +209,20 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("创建长篇");
       expect(prompt).not.toContain("short_fiction_run");
       expect(prompt).not.toContain("play_start");
+      // PR-2 复审：建书确认稿自称改为轻光之集。
+      expect(prompt).toContain("轻光之集的建书助手");
+      expect(prompt).not.toContain("InkOS 建书助手");
+    });
+
+    it("names the English book-creation assistant after confirmation", () => {
+      const prompt = buildAgentSystemPrompt(null, "en", "book-create", {
+        actionSource: "button",
+        requestedIntent: "create_book",
+      });
+      // PR-2 复审：建书确认稿英文自称改为 Lightbound。
+      expect(prompt).toContain("Lightbound book creation assistant");
+      expect(prompt).not.toContain("InkOS book creation assistant");
+      expect(prompt).toContain("architect");
     });
 
     it("English book-create mode is isolated from short and play before confirmation", () => {
@@ -250,6 +264,20 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).not.toContain("generate_cover：");
       expect(prompt).not.toContain("sub_agent");
       expect(prompt).not.toContain("play_start");
+      // PR-2 复审：短篇确认稿自称改名。
+      expect(prompt).toContain("轻光之集的短篇助手");
+      expect(prompt).not.toContain("InkOS Short 助手");
+    });
+
+    it("names the English short assistant after confirmation", () => {
+      const prompt = buildAgentSystemPrompt(null, "en", "short", {
+        actionSource: "button",
+        requestedIntent: "short_run",
+      });
+      // PR-2 复审：短篇确认稿自称改名。
+      expect(prompt).toContain("Lightbound Short assistant");
+      expect(prompt).not.toContain("InkOS Short assistant");
+      expect(prompt).toContain("short_fiction_run");
     });
 
     it("runs generate_cover only after cover generation is confirmed", () => {

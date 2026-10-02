@@ -459,6 +459,7 @@ export function BookDetail({
   if (!data) return null;
 
   const { book, chapters } = data;
+  const chapterCount = chapters.reduce((max, chapter) => Math.max(max, chapter.number), 0);
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
   const reviewCount = chapters.filter((ch) => ch.status === "ready-for-review").length;
   const activeChapter = writeChapter ?? firstUnwritten;
@@ -704,6 +705,8 @@ export function BookDetail({
             bookId={bookId}
             chapterNumber={activeChapter}
             chapterTitle={writeDirectory.find((item) => item.number === activeChapter)?.title || data.chapters.find((item) => item.number === activeChapter)?.title}
+            chapterCount={chapterCount}
+            currentChapterReady={persistedByNumber.has(activeChapter)}
             isZh={isZh}
             onChanged={() => refetch()}
             onRegisterBeforeLeave={registerWriteGuard}
@@ -737,6 +740,7 @@ export function BookDetail({
           <ExportMenu
             bookId={bookId}
             isZh={isZh}
+            chapterCount={chapterCount}
             onSaved={(path) => setBookActionPending(`saved:${path}`)}
             onError={(message) => setBookActionPending(message)}
           />

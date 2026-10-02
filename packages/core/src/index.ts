@@ -557,6 +557,7 @@ export {
   fanqieChapterFileName,
   fanqieChapterHeading,
   fanqieDownloadName,
+  singleChapterExportFileName,
   describeFanqieManuscript,
   renderFanqieChapter,
   renderFanqieManuscript,

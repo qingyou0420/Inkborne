@@ -18,7 +18,7 @@ describe("production Studio static assets", () => {
     await writeFile(join(root, "assets/vendor/diagram.mjs"), "export default 1;");
     await writeFile(join(root, "fonts/body.ttf"), Buffer.from([0, 1, 2, 3]));
     await writeFile(join(root, "studio-light.png"), Buffer.from([137, 80, 78, 71]));
-    await writeFile(join(root, "inkborne-mark.png"), Buffer.from([137, 80, 78, 71]));
+    await writeFile(join(root, "lightbound-mark.png"), Buffer.from([137, 80, 78, 71]));
     await writeFile(join(root, "paper-grain.svg"), "<svg />");
     const app = new Hono(); await mountStudioStaticFiles(app, root);
     const module = await app.request("/assets/vendor/diagram.mjs");
@@ -30,7 +30,7 @@ describe("production Studio static assets", () => {
     const image = await app.request("/studio-light.png");
     expect(image.headers.get("content-type")).toBe("image/png");
     expect(image.status).toBe(200);
-    expect((await app.request("/inkborne-mark.png")).headers.get("content-type")).toBe("image/png");
+    expect((await app.request("/lightbound-mark.png")).headers.get("content-type")).toBe("image/png");
     expect((await app.request("/paper-grain.svg")).headers.get("content-type")).toBe("image/svg+xml");
     expect((await app.request("/fonts/missing.woff2")).status).toBe(404);
     expect((await app.request("/assets/missing.mjs")).status).toBe(404);

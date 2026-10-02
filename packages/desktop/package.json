@@ -3,8 +3,8 @@
   "version": "3.0.0",
   "private": true,
   "license": "AGPL-3.0-only",
-  "description": "Inkborne / 墨生万象 desktop shell around the InkOS Studio engine",
-  "author": "Inkborne",
+  "description": "Lightbound / 轻光之集 desktop shell around the InkOS Studio engine",
+  "author": "Lightbound / 轻光之集",
   "main": "main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",

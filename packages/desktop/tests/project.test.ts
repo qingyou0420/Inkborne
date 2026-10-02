@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -47,10 +47,19 @@ afterEach(() => {
 });
 
 describe("defaultProjectRoot", () => {
-  it("uses Documents/幻想作家 and never process.cwd()", () => {
+  it("uses Documents/轻光之集 when the legacy folder is absent", () => {
     const root = defaultProjectRoot("/Users/me/Documents");
-    expect(root).toBe(join("/Users/me/Documents", "幻想作家"));
+    // PR-2：没有旧文件夹时，默认书稿目录改为轻光之集
+    expect(root).toBe(join("/Users/me/Documents", "轻光之集"));
     expect(root).not.toBe(process.cwd());
+  });
+
+  it("keeps Documents/幻想作家 when that directory already exists", () => {
+    const documents = mkdtempSync(join(tmpdir(), "fw-docs-"));
+    temps.push(documents);
+    mkdirSync(join(documents, "幻想作家"));
+    // PR-2：老用户已有幻想作家目录时继续用它
+    expect(defaultProjectRoot(documents)).toBe(join(documents, "幻想作家"));
   });
 });
 

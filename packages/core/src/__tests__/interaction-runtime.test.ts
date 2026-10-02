@@ -162,6 +162,43 @@ describe("interaction runtime", () => {
     expect(result.responseText).toContain("Exported harbor");
   });
 
+  it("passes onlyChapter through export_book", async () => {
+    const exportBook = vi.fn(async () => ({
+      outputPath: "/tmp/project/books/harbor/exports/夜港 第3章 夜雨.txt",
+      chaptersExported: 1,
+    }));
+    await runInteractionRequest({
+      session: InteractionSessionSchema.parse({
+        sessionId: "session-export-chapter",
+        projectRoot: "/tmp/project",
+        activeBookId: "harbor",
+        automationMode: "semi",
+        messages: [],
+        events: [],
+      }),
+      request: {
+        intent: "export_book",
+        bookId: "harbor",
+        format: "txt",
+        onlyChapter: 3,
+        layout: "combined",
+        indent: true,
+        outputPath: "/tmp/project/books/harbor/exports",
+      },
+      tools: makeTools({ exportBook }),
+    });
+    expect(exportBook).toHaveBeenCalledWith("harbor", expect.objectContaining({
+      format: "txt",
+      outputPath: "/tmp/project/books/harbor/exports",
+      onlyChapter: 3,
+      layout: "combined",
+      indent: true,
+    }));
+    const options = exportBook.mock.calls[0]?.[1] as { fromChapter?: number; toChapter?: number };
+    expect(options.fromChapter).toBeUndefined();
+    expect(options.toChapter).toBeUndefined();
+  });
+
   it("keeps write_next completed in auto mode", async () => {
     const writeNextChapter = vi.fn(async () => ({
       chapterNumber: 7,

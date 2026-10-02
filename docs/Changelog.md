@@ -10,6 +10,12 @@
 
 主安装包 `Lightbound-Setup-3.0.0.exe`，同时发布旧名别名 `Inkborne-Setup-3.0.0.exe`、`FantaWriter-Setup-3.0.0.exe`、`Fantasy-Writer-Setup-3.0.0.exe`。`appId` 仍为 `com.fantawriter.app`，userData 仍为 `%APPDATA%\fantawriter`。GitHub 仓库已改名为 Lightbound（https://github.com/qingyou0420/Lightbound），旧地址由 GitHub 重定向，不要再新建名为 Inkborne 的仓库。改名与图标、导出的具体技术变更见 #161、#162、#163、#164。
 
+### 变更
+
+- 界面改名为「轻光之集 / Lightbound」。`lib/project.cjs` 默认书稿文件夹改为「轻光之集」；文档目录下已有「幻想作家」目录时仍返回该旧文件夹。壳配置新增键 `FW_RENAME_NOTICE_SHOWN=1`：老用户（`FW_FIRST_RUN_DONE` 已是 1）升级后首次打开提示一次，全新安装只写键不弹。关于页不再写死版本号，改用 `app.getVersion()`。
+- 落笔页「导出」里新增「导出本章」，只导出当前这一章，格式选择和文件名（含章节号和章名）与整本导出一致；这一章还没有正文时不能点。
+- 「范围导出」的起止章号现在可以直接用键盘输入、删除重输和粘贴；离开输入框或按回车时会自动调整到有效章号，起始章比结束章大时会自动对调并提示。短篇的范围导出也用同样的输入方式。
+
 ## 2.6.1
 
 用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。Windows 安装包 `Inkborne-Setup-2.6.1.exe`（2026-09-30）。

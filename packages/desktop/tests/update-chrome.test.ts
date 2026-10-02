@@ -47,7 +47,8 @@ describe("desktop update chrome", () => {
     expect(main).toMatch(/openCheckUpdateUi/);
     expect(main).toMatch(/buttons: \["检查更新", "关闭"\]/);
     expect(main).toMatch(/update-panel\.html/);
-    expect(main).toMatch(/选择墨生万象安装包/);
+    // PR-2：对话框标题改名
+    expect(main).toMatch(/选择轻光之集安装包/);
     expect(main).not.toMatch(/选择 FantaWriter 安装包/);
     const bootFn = main.match(/async function boot\(\) \{[\s\S]*?\nconst gotLock/);
     expect(bootFn?.[0] ?? "").not.toMatch(/checkUpdate\(|checkGithubLatest|findLatestInstaller/);
@@ -68,6 +69,7 @@ describe("desktop update chrome", () => {
     expect(yml).not.toMatch(/first-run\.html/);
     expect(main).not.toMatch(/first-run\.html/);
     expect(existsSync(join(desktopDir, "first-run.html"))).toBe(false);
-    expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Inkborne");
+    // PR-1：默认更新仓库改为 qingyou0420/Lightbound；「选择墨生万象安装包」文案留到 PR-2
+    expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Lightbound");
   });
 });

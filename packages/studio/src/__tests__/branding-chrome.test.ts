@@ -12,16 +12,20 @@ function read(rel: string): string {
 }
 
 describe("studio product chrome branding", () => {
-  it("ships BrandMark and the circular Inkborne mark, not InkOS or the old tile", () => {
+  it("ships BrandMark and the 星芒图标, not InkOS or the old tile", () => {
     expect(existsSync(join(studioRoot, "src/components/InkosLogo.tsx"))).toBe(false);
     expect(existsSync(join(studioRoot, "src/components/FantaWriterLogo.tsx"))).toBe(false);
     expect(existsSync(join(studioRoot, "src/components/BrandMark.tsx"))).toBe(true);
-    expect(existsSync(join(studioRoot, "public/inkborne-mark.png"))).toBe(true);
-    expect(existsSync(join(studioRoot, "public/inkborne-mark.svg"))).toBe(true);
-    const markSvg = read("public/inkborne-mark.svg");
-    expect(markSvg).toMatch(/<title>墨生万象 \/ Inkborne<\/title>/);
-    expect(markSvg).toMatch(/#22272d/);
-    expect(markSvg).not.toMatch(/#16382a/);
+    // 图标换成用户原创星芒位图（无矢量源），故不再锁 SVG title/颜色，改锁 PNG 存在与 1024 尺寸。
+    const publicMark = join(studioRoot, "public/lightbound-mark.png");
+    expect(existsSync(publicMark)).toBe(true);
+    const markPng = readFileSync(publicMark);
+    expect(markPng.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true);
+    expect(markPng.readUInt32BE(16)).toBe(1024);
+    expect(markPng.readUInt32BE(20)).toBe(1024);
+    expect(readFileSync(join(repoRoot, "build/lightbound-mark.png")).equals(markPng)).toBe(true);
+    expect(existsSync(join(studioRoot, "public/inkborne-mark.png"))).toBe(false);
+    expect(existsSync(join(studioRoot, "public/inkborne-mark.svg"))).toBe(false);
     expect(existsSync(join(studioRoot, "public/fantawriter-mark.png"))).toBe(false);
     expect(existsSync(join(studioRoot, "public/favicon.ico"))).toBe(true);
 
@@ -39,7 +43,8 @@ describe("studio product chrome branding", () => {
     expect(sidebar).not.toMatch(/幻想作家/);
     expect(sidebar).toMatch(/BrandMark/);
     expect(sidebar).toMatch(/sidebar-brand/);
-    expect(sidebar).toMatch(/墨生万象 · Inkborne · v\{PRODUCT_VERSION\}/);
+    // PR-2：页脚文案随改名更新
+    expect(sidebar).toMatch(/轻光之集 · Lightbound · v\{PRODUCT_VERSION\}/);
     expect(sidebar).toMatch(/nav\.createSection/);
     expect(sidebar.indexOf("data-testid=\"sidebar-brand\"")).toBeGreaterThan(
       sidebar.indexOf("data-testid=\"sidebar-system-list\""),
@@ -47,17 +52,20 @@ describe("studio product chrome branding", () => {
 
     expect(language).not.toMatch(/InkOS/);
     expect(language).toMatch(/BrandMark/);
-    expect(language).toMatch(/墨生万象/);
-    expect(language).toMatch(/Inkborne/);
+    // PR-2：欢迎页文案随改名更新
+    expect(language).toMatch(/轻光之集/);
+    expect(language).toMatch(/Lightbound/);
 
     expect(app).not.toMatch(/InkOS/);
     expect(app).toMatch(/BrandMark/);
-    expect(app).toMatch(/墨生万象/);
+    // PR-2：启动加载页文案随改名更新
+    expect(app).toMatch(/轻光之集/);
     expect(app).not.toMatch(/幻想作家/);
 
-    expect(indexHtml).toMatch(/墨生万象 \/ Inkborne/);
+    // PR-2：标题文案随改名更新
+    expect(indexHtml).toMatch(/轻光之集 \/ Lightbound/);
     expect(indexHtml).not.toMatch(/InkOS/);
-    expect(indexHtml).toMatch(/inkborne-mark\.png/);
+    expect(indexHtml).toMatch(/lightbound-mark\.png/);
 
     const css = read("src/index.css");
     expect(css).not.toMatch(/fonts\.googleapis\.com/);
@@ -70,7 +78,9 @@ describe("studio product chrome branding", () => {
     expect(i18n).not.toMatch(/幻想作家|FantaWriter|驾驶舱/);
     expect(i18n).not.toMatch(/连载书房|创作书房/);
     expect(i18n).toMatch(/打开一本书进入本书/);
-    expect(i18n).toMatch(/墨生万象/);
-    expect(i18n).toMatch(/Inkborne/);
+    // PR-2：检查更新说明随改名更新
+    expect(i18n).toMatch(/轻光之集/);
+    expect(i18n).toMatch(/Lightbound/);
+    expect(i18n).not.toMatch(/墨生万象|Inkborne/);
   });
 });

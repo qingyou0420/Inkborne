@@ -41,6 +41,7 @@ export interface InteractionRuntimeTools {
     readonly outputPath?: string;
     readonly fromChapter?: number;
     readonly toChapter?: number;
+    readonly onlyChapter?: number;
     readonly layout?: "combined" | "per-chapter";
     readonly blankLine?: boolean;
     readonly indent?: boolean;
@@ -1032,6 +1033,7 @@ export async function runInteractionRequest(params: {
         outputPath: request.outputPath,
         ...(request.fromChapter !== undefined ? { fromChapter: request.fromChapter } : {}),
         ...(request.toChapter !== undefined ? { toChapter: request.toChapter } : {}),
+        ...(request.onlyChapter !== undefined ? { onlyChapter: request.onlyChapter } : {}),
         ...(request.layout ? { layout: request.layout } : {}),
         ...(request.blankLine !== undefined ? { blankLine: request.blankLine } : {}),
         ...(request.indent !== undefined ? { indent: request.indent } : {}),
