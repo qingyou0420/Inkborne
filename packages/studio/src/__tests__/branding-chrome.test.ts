@@ -12,16 +12,20 @@ function read(rel: string): string {
 }
 
 describe("studio product chrome branding", () => {
-  it("ships BrandMark and the circular Inkborne mark, not InkOS or the old tile", () => {
+  it("ships BrandMark and the 星芒图标, not InkOS or the old tile", () => {
     expect(existsSync(join(studioRoot, "src/components/InkosLogo.tsx"))).toBe(false);
     expect(existsSync(join(studioRoot, "src/components/FantaWriterLogo.tsx"))).toBe(false);
     expect(existsSync(join(studioRoot, "src/components/BrandMark.tsx"))).toBe(true);
-    expect(existsSync(join(studioRoot, "public/inkborne-mark.png"))).toBe(true);
-    expect(existsSync(join(studioRoot, "public/inkborne-mark.svg"))).toBe(true);
-    const markSvg = read("public/inkborne-mark.svg");
-    expect(markSvg).toMatch(/<title>墨生万象 \/ Inkborne<\/title>/);
-    expect(markSvg).toMatch(/#22272d/);
-    expect(markSvg).not.toMatch(/#16382a/);
+    // 图标换成用户原创星芒位图（无矢量源），故不再锁 SVG title/颜色，改锁 PNG 存在与 1024 尺寸。
+    const publicMark = join(studioRoot, "public/lightbound-mark.png");
+    expect(existsSync(publicMark)).toBe(true);
+    const markPng = readFileSync(publicMark);
+    expect(markPng.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true);
+    expect(markPng.readUInt32BE(16)).toBe(1024);
+    expect(markPng.readUInt32BE(20)).toBe(1024);
+    expect(readFileSync(join(repoRoot, "build/lightbound-mark.png")).equals(markPng)).toBe(true);
+    expect(existsSync(join(studioRoot, "public/inkborne-mark.png"))).toBe(false);
+    expect(existsSync(join(studioRoot, "public/inkborne-mark.svg"))).toBe(false);
     expect(existsSync(join(studioRoot, "public/fantawriter-mark.png"))).toBe(false);
     expect(existsSync(join(studioRoot, "public/favicon.ico"))).toBe(true);
 
@@ -61,7 +65,7 @@ describe("studio product chrome branding", () => {
     // PR-2：标题文案随改名更新
     expect(indexHtml).toMatch(/轻光之集 \/ Lightbound/);
     expect(indexHtml).not.toMatch(/InkOS/);
-    expect(indexHtml).toMatch(/inkborne-mark\.png/);
+    expect(indexHtml).toMatch(/lightbound-mark\.png/);
 
     const css = read("src/index.css");
     expect(css).not.toMatch(/fonts\.googleapis\.com/);

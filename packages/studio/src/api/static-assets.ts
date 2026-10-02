@@ -14,7 +14,7 @@ const contentTypes: Record<string, string> = {
 /** Serve the bundled browser assets from the explicit engine distribution only. */
 export async function mountStudioStaticFiles(app: Hono, staticDir: string): Promise<void> {
   const root = resolve(staticDir);
-  app.on("GET", ["/assets/*", "/fonts/*", "/studio-light.png", "/inkborne-mark.png", "/inkborne-mark.svg", "/paper-grain.svg", "/favicon.ico"], async (c) => {
+  app.on("GET", ["/assets/*", "/fonts/*", "/studio-light.png", "/lightbound-mark.png", "/paper-grain.svg", "/favicon.ico"], async (c) => {
     let pathname: string;
     try { pathname = decodeURIComponent(c.req.path); } catch { return c.notFound(); }
     const file = resolve(root, `.${pathname}`);

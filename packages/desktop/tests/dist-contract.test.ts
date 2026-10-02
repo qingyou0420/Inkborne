@@ -90,7 +90,7 @@ describe("2.6.1 Windows installer contract", () => {
   it("ships icon.ico so the Windows installer is not the default Electron icon", () => {
     const ico = join(repoRoot, "build", "icon.ico");
     const png = join(repoRoot, "build", "icon.png");
-    const mark = join(repoRoot, "build", "inkborne-mark.png");
+    const mark = join(repoRoot, "build", "lightbound-mark.png");
     const desktopIco = join(desktopDir, "icon.ico");
     const yml = readFileSync(join(desktopDir, "electron-builder.yml"), "utf8");
     expect(existsSync(ico)).toBe(true);

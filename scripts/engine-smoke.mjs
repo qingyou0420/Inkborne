@@ -106,7 +106,7 @@ try {
     const fonts = [...css.matchAll(/url\(["']?(\/fonts\/[^)"']+)["']?\)/g)].map((match) => match[1]);
     const entryCode = assets.filter((asset) => asset.endsWith(".js")).map((asset) => readFileSync(join(dist, asset), "utf8")).join("\n");
     const diagrams = [...entryCode.matchAll(/["'](\/assets\/vendor\/mermaid-[^"']+\.mjs)["']/g)].map((match) => match[1]);
-    const requests = [...new Set([...assets, ...fonts, ...diagrams, "/inkborne-mark.png", "/studio-light.png"])];
+    const requests = [...new Set([...assets, ...fonts, ...diagrams, "/lightbound-mark.png", "/studio-light.png"])];
     const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
     for (const asset of requests) {
       const response = await fetch(`http://127.0.0.1:${port}${asset}`);
