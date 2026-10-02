@@ -8,12 +8,14 @@ const require = createRequire(import.meta.url);
 const {
   CURRENT_SETUP_PREFIX,
   LEGACY_SETUP_PREFIXES,
+  LEGACY_SETUP_PREFIX,
   setupNamesForVersion,
   hashFromSha256Sidecar,
   aliasLegacySetup,
 } = require("../../../scripts/alias-legacy-setup.cjs") as {
   CURRENT_SETUP_PREFIX: string;
   LEGACY_SETUP_PREFIXES: string[];
+  LEGACY_SETUP_PREFIX: string;
   setupNamesForVersion: (version: string) => {
     version: string;
     primary: string;
@@ -38,32 +40,43 @@ afterEach(() => {
 });
 
 describe("alias-legacy-setup names", () => {
-  it("treats Inkborne-Setup as primary and emits both legacy prefixes", () => {
-    expect(CURRENT_SETUP_PREFIX).toBe("Inkborne-Setup");
-    expect(LEGACY_SETUP_PREFIXES).toEqual(["FantaWriter-Setup", "Fantasy-Writer-Setup"]);
+  it("treats Lightbound-Setup as primary and emits three legacy prefixes", () => {
+    // PR-1：主安装包前缀改为 Lightbound-Setup，另复制三套旧名
+    expect(CURRENT_SETUP_PREFIX).toBe("Lightbound-Setup");
+    expect(LEGACY_SETUP_PREFIXES).toEqual(["Inkborne-Setup", "FantaWriter-Setup", "Fantasy-Writer-Setup"]);
+    // 别名数组前插入 Inkborne-Setup 后，该导出仍指最旧前缀，不跟下标走
+    expect(LEGACY_SETUP_PREFIX).toBe("Fantasy-Writer-Setup");
     const names = setupNamesForVersion("v2.6.1");
     expect(names.version).toBe("2.6.1");
-    expect(names.primary).toBe("Inkborne-Setup-2.6.1.exe");
-    expect(names.aliases).toEqual(["FantaWriter-Setup-2.6.1.exe", "Fantasy-Writer-Setup-2.6.1.exe"]);
+    expect(names.primary).toBe("Lightbound-Setup-2.6.1.exe");
+    expect(names.aliases).toEqual([
+      "Inkborne-Setup-2.6.1.exe",
+      "FantaWriter-Setup-2.6.1.exe",
+      "Fantasy-Writer-Setup-2.6.1.exe",
+    ]);
     expect(names.legacy).toBe("FantaWriter-Setup-2.6.1.exe");
+    expect(names.legacy).not.toBe(names.aliases[0]);
   });
 });
 
 describe("aliasLegacySetup", () => {
-  it("copies primary Inkborne-Setup to both legacy names with matching sha256", () => {
+  it("copies primary Lightbound-Setup to three legacy names with matching sha256", () => {
+    // PR-1：主文件改为 Lightbound-Setup，复制出三个旧名并各写 .sha256
     const distDir = mkdtempSync(join(tmpdir(), "fw-alias-"));
     temps.push(distDir);
-    const primaryName = "Inkborne-Setup-2.6.1.exe";
-    const payload = Buffer.from("inkborne-setup-fixture");
+    const primaryName = "Lightbound-Setup-2.6.1.exe";
+    const payload = Buffer.from("lightbound-setup-fixture");
     writeFileSync(join(distDir, primaryName), payload);
     const sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     writeFileSync(join(distDir, `${primaryName}.sha256`), `${sha256}  ${primaryName}\n`);
 
     const result = aliasLegacySetup({ distDir, version: "2.6.1" });
     expect(result.sha256).toBe(sha256);
-    expect(result.aliases).toHaveLength(2);
+    expect(result.aliases).toHaveLength(3);
+    expect(result.legacy).toBe(join(distDir, "FantaWriter-Setup-2.6.1.exe"));
+    expect(result.legacy).not.toBe(result.aliases[0]);
 
-    for (const name of ["FantaWriter-Setup-2.6.1.exe", "Fantasy-Writer-Setup-2.6.1.exe"]) {
+    for (const name of ["Inkborne-Setup-2.6.1.exe", "FantaWriter-Setup-2.6.1.exe", "Fantasy-Writer-Setup-2.6.1.exe"]) {
       const dest = join(distDir, name);
       expect(readFileSync(dest).equals(payload)).toBe(true);
       expect(hashFromSha256Sidecar(readFileSync(`${dest}.sha256`, "utf8"))).toBe(sha256);
@@ -71,7 +84,7 @@ describe("aliasLegacySetup", () => {
     }
   });
 
-  it("throws when the Inkborne primary is missing", () => {
+  it("throws when the Lightbound primary is missing", () => {
     const distDir = mkdtempSync(join(tmpdir(), "fw-alias-missing-"));
     temps.push(distDir);
     expect(() => aliasLegacySetup({ distDir, version: "2.6.1" })).toThrow(/找不到安装包/);

@@ -26,7 +26,7 @@ const {
   nextEngineStatus,
   isPidAlive,
 } = require("./lib/engine-lifecycle.cjs");
-const { versionFromSetupName, setupFileNameForVersion } = require("./lib/setup-artifact.cjs");
+const { versionFromSetupName, setupFileNameForVersion, compareSetupCandidates } = require("./lib/setup-artifact.cjs");
 const {
   DEFAULT_GITHUB_REPO,
   githubLatestApiUrl,
@@ -898,6 +898,7 @@ function getUpdateSearchDirs(kind) {
     userDataUpdates: path.join(app.getPath("userData"), "updates"),
     desktopUpdatesFolder: desktop
       ? [
+          path.join(desktop, "Lightbound-Updates"),
           path.join(desktop, "Inkborne-Updates"),
           path.join(desktop, "FantaWriter-Updates"),
           path.join(desktop, "Fantasy-Writer-Updates"),
@@ -945,7 +946,7 @@ async function findLatestInstaller(currentVersion, kind = "manual") {
   }
   const newer = all.filter((x) => compareVersions(x.version, currentVersion) > 0);
   const pool = newer.length ? newer : all;
-  pool.sort((a, b) => compareVersions(b.version, a.version) || b.mtime - a.mtime);
+  pool.sort((a, b) => compareSetupCandidates(a, b, compareVersions));
   return { candidates: pool, searchedDirs: searched, allCount: all.length };
 }
 
@@ -1071,7 +1072,7 @@ async function checkGithubLatest(current) {
   const token = getGithubUpdateToken();
   const data = await fetchJson(githubLatestApiUrl(repo), githubApiHeaders(token));
   const parsed = parseGithubLatestRelease(data);
-  if (!parsed) throw new Error("latest release 没有 Inkborne-Setup-x.y.z.exe / FantaWriter-Setup-x.y.z.exe 安装包");
+  if (!parsed) throw new Error("latest release 没有 Lightbound-Setup-x.y.z.exe / Inkborne-Setup-x.y.z.exe / FantaWriter-Setup-x.y.z.exe / Fantasy-Writer-Setup-x.y.z.exe 安装包");
   const hasUpdate = compareVersions(parsed.version, current) > 0;
   return {
     ok: true,
@@ -1281,8 +1282,8 @@ function registerIpc() {
     const url = String(opts.assetApiUrl || opts.downloadUrl || "").trim();
     if (!url || !isAllowedFeedDownloadUrl(url)) return { ok: false, message: "没有可下载的安装包地址" };
     const fileName = setupFileNameFromUrl(url) || (opts.version ? setupFileNameForVersion(opts.version) : null);
-    if (!fileName || !versionFromSetupName(fileName)) return { ok: false, message: "安装包文件名不符合 Inkborne-Setup-x.y.z.exe 或 FantaWriter-Setup-x.y.z.exe" };
-    const destDir = path.join(app.getPath("temp"), "Inkborne-Updates");
+    if (!fileName || !versionFromSetupName(fileName)) return { ok: false, message: "安装包文件名不符合 Lightbound-Setup-x.y.z.exe / Inkborne-Setup-x.y.z.exe / FantaWriter-Setup-x.y.z.exe / Fantasy-Writer-Setup-x.y.z.exe" };
+    const destDir = path.join(app.getPath("temp"), "Lightbound-Updates");
     ensureDir(destDir);
     const dest = path.join(destDir, fileName);
     await downloadFile(url, dest, githubAssetHeaders(token));

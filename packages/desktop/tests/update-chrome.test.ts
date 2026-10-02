@@ -68,6 +68,7 @@ describe("desktop update chrome", () => {
     expect(yml).not.toMatch(/first-run\.html/);
     expect(main).not.toMatch(/first-run\.html/);
     expect(existsSync(join(desktopDir, "first-run.html"))).toBe(false);
-    expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Inkborne");
+    // PR-1：默认更新仓库改为 qingyou0420/Lightbound；「选择墨生万象安装包」文案留到 PR-2
+    expect(DEFAULT_GITHUB_REPO).toBe("qingyou0420/Lightbound");
   });
 });
