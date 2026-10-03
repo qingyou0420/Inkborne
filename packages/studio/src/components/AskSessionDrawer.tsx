@@ -1,5 +1,5 @@
 /**
- * Existing Ask conversations, reachable from the secondary navigation.
+ * Existing Ask conversations, reachable from the Ask workspace.
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -11,8 +11,8 @@ import { startFreshBookCreateSession } from "../pages/chat-page-state";
 import { useChatStore } from "../store/chat";
 import { bookKey } from "../store/chat/slices/message/runtime";
 import type { SessionRuntime } from "../store/chat/types";
-import type { AppMoreNav } from "./AppMoreMenu";
 import { Dialog, DialogClose, DialogTitle } from "./ui/dialog";
+import { initialAskHistoryScope, navigateAskSession, type AskSessionNav } from "./ask-session-navigation";
 
 interface BookSummary {
   readonly id: string;
@@ -39,7 +39,7 @@ export function AskSessionDrawer({
   readonly booksError: string | null;
   readonly onReloadBooks: () => void;
   readonly currentBookId?: string;
-  readonly nav: Pick<AppMoreNav, "toAsk" | "toBookCreate">;
+  readonly nav: AskSessionNav;
   readonly t: TFunction;
   readonly isZh: boolean;
 }) {
@@ -62,7 +62,7 @@ export function AskSessionDrawer({
   const operationBusy = useRef(false);
   const selectedBookId = scope.startsWith("book:") ? scope.slice(5) : null;
   const selectedBook = books.find((book) => book.id === selectedBookId);
-  const bookLabel = selectedBook?.title ?? (isZh ? "尚未建书" : "Before creating a book");
+  const bookLabel = selectedBook?.title ?? (selectedBookId ? (isZh ? "正在读取作品" : "Loading work") : (isZh ? "尚未建书" : "Before creating a book"));
   const rows = (sessionIdsByBook[bookKey(selectedBookId)] ?? [])
     .map((id) => sessions[id])
     .filter((session): session is SessionRuntime => Boolean(session)
@@ -73,7 +73,7 @@ export function AskSessionDrawer({
 
   useEffect(() => {
     if (!open) return;
-    setScope(currentBookId && books.some((book) => book.id === currentBookId) ? `book:${currentBookId}` : "new");
+    setScope(initialAskHistoryScope(currentBookId));
     setTarget(null);
     setError(null);
     setNotice(null);
@@ -137,11 +137,11 @@ export function AskSessionDrawer({
     if (!session || session.bookId !== selectedBookId || (selectedBookId === null && session.sessionKind !== "book-create")) {
       throw new Error(isZh ? "这条记录所属作品已改变，请刷新列表。" : "This conversation has moved. Refresh the list.");
     }
-    store.setInput("");
-    store.activateSession(sessionId);
-    if (selectedBookId === null) nav.toBookCreate(sessionId);
-    else nav.toAsk(selectedBookId, sessionId);
     onClose();
+    navigateAskSession(nav, selectedBookId, sessionId, () => {
+      store.setInput("");
+      store.activateSession(sessionId);
+    });
   }, isZh ? "无法打开问心记录" : "Could not open conversation");
 
   const confirmEdit = () => {
@@ -174,15 +174,12 @@ export function AskSessionDrawer({
 
   const newSession = () => {
     const store = useChatStore.getState();
-    store.setInput("");
-    if (selectedBookId === null) {
-      startFreshBookCreateSession(store.createDraftSession);
-      nav.toBookCreate();
-    } else {
-      const sessionId = store.createDraftSession(selectedBookId, "book");
-      nav.toAsk(selectedBookId, sessionId);
-    }
     onClose();
+    navigateAskSession(nav, selectedBookId, undefined, () => {
+      store.setInput("");
+      if (selectedBookId === null) startFreshBookCreateSession(store.createDraftSession);
+      else store.createDraftSession(selectedBookId, "book");
+    });
   };
 
   return (

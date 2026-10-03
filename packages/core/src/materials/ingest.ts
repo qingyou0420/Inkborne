@@ -162,7 +162,7 @@ async function extractBufferMaterial(
       totalPages: extracted.totalPages,
     };
   }
-  const raw = buffer.toString("utf-8");
+  const raw = decodeMaterialText(buffer, meta.filename);
   if (isHtml(meta.filename, mimeType)) {
     return {
       kind: "webpage",
@@ -182,6 +182,20 @@ async function extractBufferMaterial(
     };
   }
   throw new Error(`Unsupported material type: ${mimeType || meta.filename}`);
+}
+
+/** Decode known Unicode encodings without replacing unreadable bytes with invented text. */
+function decodeMaterialText(buffer: Buffer, filename: string): string {
+  const encoding = buffer[0] === 0xff && buffer[1] === 0xfe ? "utf-16le"
+    : buffer[0] === 0xfe && buffer[1] === 0xff ? "utf-16be"
+      : "utf-8";
+  try {
+    const text = new TextDecoder(encoding, { fatal: true }).decode(buffer);
+    if (text.includes("\0")) throw new Error("Unexpected NUL in text material");
+    return text;
+  } catch {
+    throw new Error(`无法完整解码资料「${filename}」。支持 UTF-8 或带 BOM 的 UTF-16LE/BE；请将文件另存为 UTF-8 后重新导入。未用乱码替代原文。`);
+  }
 }
 
 function renderMaterialMarkdown(input: {

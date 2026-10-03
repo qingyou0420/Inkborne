@@ -29,13 +29,12 @@ function getPreferenceStorage(): PreferenceStorageLike | null {
 }
 
 /**
- * Default is `true` (keep today's behavior: result details start expanded).
- * Only an explicitly stored "false" turns the preference off.
+ * Result details start collapsed unless the user previously chose otherwise.
  */
 export function readStoredToolDetailsDefaultOpen(
   storage: Pick<PreferenceStorageLike, "getItem"> | null | undefined,
 ): boolean {
-  return storage?.getItem(TOOL_DETAILS_STORAGE_KEY) !== "false";
+  return storage?.getItem(TOOL_DETAILS_STORAGE_KEY) === "true";
 }
 
 function persistAppearance(prefs: AppearancePrefs): void {

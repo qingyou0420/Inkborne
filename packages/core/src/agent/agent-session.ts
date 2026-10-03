@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Agent } from "@mariozechner/pi-agent-core";
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { getModel, getEnvApiKey, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type {
   Model,
@@ -156,6 +156,8 @@ export interface AgentSessionConfig {
    * Changing this value evicts the cached Agent so the tool table stays current.
    */
   suppressProductionTools?: boolean;
+  /** Host-specific product surface. Keep the callback stable to reuse cached agents. */
+  transformTools?: (tools: AgentTool<any>[]) => AgentTool<any>[];
 }
 
 export interface AgentSessionResult {
@@ -205,6 +207,7 @@ interface CachedAgent {
   extraSystemPrompt: string | undefined;
   backgroundTaskContext: string | undefined;
   suppressProductionTools: boolean;
+  transformTools: AgentSessionConfig["transformTools"];
   currentAttachmentPaths: string[];
   lastCommittedSeq: number;
   lastActive: number;
@@ -1180,6 +1183,7 @@ async function runAgentSessionUnlocked(
       extraSystemPromptChanged ||
       backgroundTaskContextChanged ||
       suppressProductionToolsChanged ||
+      cached.transformTools !== config.transformTools ||
       transcriptChanged
     ) {
       agentCache.delete(cacheKey);
@@ -1265,6 +1269,9 @@ async function runAgentSessionUnlocked(
       productionSkills,
       redirectNewChapters: config.redirectNewChapters === true && sessionKind === "book",
     });
+    const visibleTools = suppressProductionTools
+      ? agentTools.filter((tool) => !PRODUCTION_MUTATION_TOOL_NAMES.has(tool.name))
+      : agentTools;
     const agent = new Agent({
       initialState: {
         model,
@@ -1273,9 +1280,7 @@ async function runAgentSessionUnlocked(
           config.extraSystemPrompt,
           config.backgroundTaskContext,
         ].filter(Boolean).join("\n\n"),
-        tools: suppressProductionTools
-          ? agentTools.filter((tool) => !PRODUCTION_MUTATION_TOOL_NAMES.has(tool.name))
-          : agentTools,
+        tools: config.transformTools ? config.transformTools(visibleTools) : visibleTools,
         messages: initialAgentMessages,
       },
       transformContext: authoringStage === "ask" && bookId
@@ -1331,6 +1336,7 @@ async function runAgentSessionUnlocked(
       extraSystemPrompt: config.extraSystemPrompt,
       backgroundTaskContext: config.backgroundTaskContext,
       suppressProductionTools,
+      transformTools: config.transformTools,
       currentAttachmentPaths: (config.attachments ?? [])
         .map((attachment) => attachment.storedPath?.trim())
         .filter((path): path is string => Boolean(path)),

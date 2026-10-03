@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStudioServer } from "../api/server.js";
-import { createAndPersistBookSession, loadStoryGraph } from "@actalk/inkos-core";
+import { createAndPersistBookSession, loadBookSession, loadStoryGraph } from "@actalk/inkos-core";
 
 // Studio 会把缺 service 的旧配置收成 service "custom"。custom 没有预置
 // baseUrl，解析模型时就会抛 "no baseUrl available"。这里写成带地址的命名
@@ -28,7 +28,7 @@ const INKOS_CONFIG = JSON.stringify({
   notify: [],
 });
 
-describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
+describe("retired interactive-film-authoring confirmations", () => {
   let root: string;
   const prev = process.env.INKOS_AGENT_LLM_STUB;
   beforeAll(() => { process.env.INKOS_AGENT_LLM_STUB = "1"; });
@@ -49,15 +49,15 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-  it("free-text proposes draft_structure, confirm creates the graph", async () => {
+  it("rejects free-text and saved confirmations without producing a graph or changing history", async () => {
     const app = createStudioServer({} as never, root);
     const sessionId = "1000000000-test";
     const bookId = "p";
 
-    // Pre-create the session so the agent endpoint can load it
+    // Historical sessions remain readable even though new production is retired.
     await createAndPersistBookSession(root, bookId, sessionId, "interactive-film-authoring");
+    const originalSession = await loadBookSession(root, sessionId);
 
-    // Step 1: free-text instruction → stubbed agent proposes draft_structure via propose_action
     const propose = await app.request("/api/v1/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -69,10 +69,10 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(propose.status, await propose.clone().text()).toBe(200);
+    expect(propose.status).toBe(410);
+    await expect(propose.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
 
-    // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
-    // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"
+    // A confirmation card saved before retirement cannot restart the old task.
     const confirm = await app.request("/api/v1/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -86,10 +86,13 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(confirm.status, await confirm.clone().text()).toBe(200);
+    expect(confirm.status).toBe(410);
+    await expect(confirm.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
 
-    // Assert the story graph was created with at least 4 nodes
-    const graph = await loadStoryGraph(root, bookId);
-    expect(graph?.nodes.length).toBeGreaterThanOrEqual(4);
+    expect(await loadStoryGraph(root, bookId)).toBeNull();
+    expect(await loadBookSession(root, sessionId)).toEqual(originalSession);
+    const history = await app.request(`/api/v1/sessions/${sessionId}`);
+    expect(history.status).toBe(200);
+    await expect(history.json()).resolves.toMatchObject({ session: { sessionId, bookId, sessionKind: "interactive-film-authoring" } });
   });
 });

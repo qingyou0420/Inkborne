@@ -11,7 +11,7 @@ describe("hash route", () => {
       { page: "analytics" as const, bookId: "潮声未寄" },
       { page: "truth" as const, bookId: "潮声未寄" },
       { page: "chapter" as const, bookId: "潮声未寄", chapterNumber: 3 },
-      { page: "genres" as const }, { page: "style" as const }, { page: "radar" as const }, { page: "doctor" as const },
+      { page: "new-work" as const }, { page: "materials" as const }, { page: "maintenance" as const, bookId: "潮声未寄" }, { page: "doctor" as const },
     ];
     for (const route of routes) expect(parseHash(routeToHash(route))).toEqual(route);
     expect(() => parseHash("#/book/%bad/ask")).not.toThrow();
@@ -23,9 +23,22 @@ describe("hash route", () => {
     expect(parseHash(routeToHash(draftRoute))).toEqual(draftRoute);
     expect(parseHash("#/book/new?session=")).toEqual({ page: "book-create" });
   });
-  it("gives advanced settings a distinct reloadable location", () => {
+  it("redirects the retired advanced settings location to maintenance", () => {
     expect(parseHash(routeToHash({ page: "project-settings", section: "advanced" })))
-      .toEqual({ page: "project-settings", section: "advanced" });
+      .toEqual({ page: "maintenance" });
+    expect(parseHash("#/settings/advanced")).toEqual({ page: "maintenance" });
+  });
+  it("keeps imported materials scoped to the chosen Ask and survives refresh", () => {
+    for (const route of [
+      { page: "book-ask" as const, bookId: "潮声未寄", sessionId: "abc/?", importSources: true },
+      { page: "book-create" as const, importSources: true },
+    ]) expect(parseHash(routeToHash(route))).toEqual(route);
+  });
+  it("does not reopen retired creation screens through saved links", () => {
+    for (const path of ["translation", "radar", "daemon", "film/a", "flow/a", "film-author/a", "studio/film/a"])
+      expect(parseHash(`#/${path}`)).toEqual({ page: "maintenance" });
+    for (const path of ["import", "import/chapters", "import/canon", "import/fanfic", "import/spinoff", "import/imitation", "style", "genres"])
+      expect(parseHash(`#/${path}`)).toEqual({ page: "materials" });
   });
   describe("parseHash", () => {
     it("parses empty hash as dashboard", () => {
@@ -84,11 +97,11 @@ describe("hash route", () => {
     });
 
     it("parses import tab routes", () => {
-      expect(parseHash("#/import/fanfic")).toEqual({ page: "import", tab: "fanfic" });
+      expect(parseHash("#/import/fanfic")).toEqual({ page: "materials" });
     });
 
     it("parses #/translation", () => {
-      expect(parseHash("#/translation")).toEqual({ page: "translation" });
+      expect(parseHash("#/translation")).toEqual({ page: "maintenance" });
     });
 
     it("parses #/update as the in-app update page", () => {
@@ -170,11 +183,11 @@ describe("hash route", () => {
     });
 
     it("import tab -> #/import/{tab}", () => {
-      expect(routeToHash({ page: "import", tab: "chapters" })).toBe("#/import/chapters");
+      expect(routeToHash({ page: "import", tab: "chapters" })).toBe("#/materials");
     });
 
     it("translation -> #/translation", () => {
-      expect(routeToHash({ page: "translation" })).toBe("#/translation");
+      expect(routeToHash({ page: "translation" })).toBe("#/maintenance");
     });
 
     it("update -> #/update", () => {
@@ -198,7 +211,7 @@ describe("hash route", () => {
 
     it("logs and daemon have stable hashes", () => {
       expect(routeToHash({ page: "logs" })).toBe("#/logs");
-      expect(routeToHash({ page: "daemon" })).toBe("#/daemon");
+      expect(routeToHash({ page: "daemon" })).toBe("#/maintenance");
     });
 
     it("keeps chapter, analytics, and truth pages after refresh", () => {

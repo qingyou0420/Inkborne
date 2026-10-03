@@ -80,6 +80,32 @@ function formatUserMessageForDisplay(text: string, attachments: ReadonlyArray<Ch
 }
 
 export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions> = (set, get) => {
+  const pendingSessionWrites = new Map<string, Promise<void>>();
+  const ensureSessionPersisted: MessageActions["ensureSessionPersisted"] = async (sessionId, options) => {
+    const pending = pendingSessionWrites.get(sessionId);
+    if (pending) return pending;
+    const session = get().sessions[sessionId];
+    if (!session) throw new Error(tr("找不到当前问心记录，请重新打开。", "Conversation missing. Reopen it."));
+    if (!session.isDraft) return;
+    const sessionKind = options?.sessionKind ?? session.sessionKind;
+    const playMode = options?.playMode ?? session.playMode;
+    const write = (async () => {
+      await fetchJson<SessionResponse>("/sessions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode }),
+      });
+      set((state) => ({
+        sessions: updateSession(state.sessions, sessionId, () => ({ isDraft: false, sessionKind, playMode })),
+        sessionIdsByBook: {
+          ...state.sessionIdsByBook,
+          [bookKey(session.bookId)]: mergeSessionIds(state.sessionIdsByBook[bookKey(session.bookId)], [sessionId]),
+        },
+      }));
+    })();
+    pendingSessionWrites.set(sessionId, write);
+    try { await write; }
+    finally { if (pendingSessionWrites.get(sessionId) === write) pendingSessionWrites.delete(sessionId); }
+  };
   const abortPreviousChatRound = (nextSessionId: string | null): void => {
     const previousSessionId = get().activeSessionId;
     if (!previousSessionId || previousSessionId === nextSessionId) return;
@@ -88,6 +114,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
   };
 
   return {
+    ensureSessionPersisted,
     activateSession: (sessionId) => {
       abortPreviousChatRound(sessionId);
       set({ activeSessionId: sessionId });
@@ -511,23 +538,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     // 前端 store 里的 runtime 不用 remount，只需要把 isDraft 翻成 false。
     if (session.isDraft) {
       try {
-        await fetchJson<SessionResponse>("/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode }),
-        });
-        // 落盘成功：把 isDraft 翻成 false，同时把 sessionId 追加进 sessionIdsByBook
-        // 让侧边栏现在才看到这条会话。
-        set((state) => ({
-          sessions: updateSession(state.sessions, sessionId, () => ({ isDraft: false, sessionKind, playMode })),
-          sessionIdsByBook: {
-            ...state.sessionIdsByBook,
-            [bookKey(session.bookId)]: mergeSessionIds(
-              state.sessionIdsByBook[bookKey(session.bookId)],
-              [sessionId],
-            ),
-          },
-        }));
+        await ensureSessionPersisted(sessionId, { sessionKind, playMode });
       } catch (err) {
         get().addErrorMessage(sessionId, err instanceof Error ? err.message : String(err));
         rememberFailedSend();

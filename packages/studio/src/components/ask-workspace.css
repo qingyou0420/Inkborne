@@ -1,6 +1,23 @@
 /* 问心 / manuscript-first ink workspace. SPDX-License-Identifier: AGPL-3.0-only */
 .ask-workspace { position: relative; padding: 16px 40px 90px; overflow: hidden; }
 .ask-workspace .ask-chat { min-height: 0; }
+.ask-workspace-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; flex: none; margin-bottom: 12px; }
+.ask-workspace-tools button, .ask-source-select { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; color: var(--muted-foreground); font-size: 13px; border-radius: 4px; }
+.ask-workspace-tools button:hover, .ask-source-select:hover:not(:disabled) { background: var(--secondary); color: var(--foreground); }
+.ask-workspace-tools button[aria-expanded="true"] { color: var(--foreground); background: var(--secondary); }
+.ask-source-panel { flex: none; max-height: min(310px, 36vh); overflow-y: auto; scrollbar-gutter: stable; padding: 4px 12px 14px 0; margin-bottom: 14px; border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.8; }
+.ask-source-panel p + p { margin-top: 8px; }
+.ask-source-hint { color: var(--muted-foreground); }
+.ask-source-select { margin-top: 12px; border: 1px solid var(--control-border, var(--border)); color: var(--foreground); }
+.ask-source-select:disabled, .ask-source-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.ask-source-panel ul { list-style: none; margin: 12px 0; padding: 0; }
+.ask-source-panel li { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.ask-source-panel li > div { min-width: 0; overflow-wrap: anywhere; }
+.ask-source-panel li strong { font-weight: 500; }
+.ask-source-panel li span, .ask-source-panel li small { display: block; color: var(--muted-foreground); font-size: 12px; }
+.ask-source-panel li button { flex: none; padding: 6px; }
+.ask-source-error { color: var(--destructive); overflow-wrap: anywhere; margin-top: 10px; }
+.ask-source-error button { padding: 6px 0; text-decoration: underline; text-underline-offset: 3px; }
 .ask-workspace .canon-sheet { padding-bottom: 0; }
 .ask-canon-editor { height: 100%; min-height: 0; }
 .ask-canon-heading { padding: 4px 0 15px; flex: none; }

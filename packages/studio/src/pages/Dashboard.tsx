@@ -10,7 +10,7 @@ import { removeBookFromCollection, removeShortFromCollection, shouldRefetchBookC
 import { deleteStudioShortWork } from "../lib/short-api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DefaultCover } from "../components/DefaultCover";
-import { NewBookIntro } from "../components/NewBookIntro";
+import { NewWorkPage } from "./NewWorkPage";
 import { BookSettingsDrawer } from "../components/BookSettingsDrawer";
 import { CorruptBookCard } from "../components/CorruptBookCard";
 import { selectWorksListShorts, type StudioShortSummary } from "../shared/short-works";
@@ -42,6 +42,8 @@ interface Nav {
   toBookSettings: (id: string) => void;
   toAnalytics: (id: string) => void;
   toBookIntro: () => void;
+  toNewWork: () => void;
+  toShortCreate: () => void;
   toBookCreate: (sessionId?: string) => void;
   toServices: () => void;
   toAuthor: () => void;
@@ -166,7 +168,7 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
   if (!data && (loading || !error) || !shortsData && shortsLoading) return <div className="ink-home-loading" role="status">{t("common.loading")}</div>;
   if (!data && error) return <div className="ink-home-error" role="alert"><h1>{isZh ? "书架暂时未能打开" : "Could not open the bookshelf"}</h1><p>{error}</p><button type="button" className="btn-secondary" onClick={reload}>{isZh ? "重新读取" : "Retry"}</button></div>;
   const hasWorks = books.length + shorts.length > 0;
-  if (!hasWorks && !shortsError) return <NewBookIntro isZh={isZh} onEnterAsk={nav.toBookCreate} />;
+  if (!hasWorks && !shortsError) return <NewWorkPage isZh={isZh} onNovel={nav.toBookIntro} onShort={nav.toShortCreate} />;
   const avatar = author?.hasAvatar ? `/api/v1/author/avatar?v=${encodeURIComponent(author.updatedAt ?? "")}` : "";
   return <section className="ink-bookshelf" data-testid="home-page">
     <div className="ink-shelf-heading">
@@ -174,7 +176,7 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
         <span className="ink-author-avatar">{avatar ? <img src={avatar} alt="" /> : <UserRound size={22} strokeWidth={1.2} />}</span>
         <span>{author?.name?.trim() || t("nav.signYourName")}</span>
       </button>
-      <button type="button" className="btn-primary" onClick={nav.toBookIntro} data-testid="shelf-new-book"><Plus size={15} />{isZh ? "新书" : "New book"}</button>
+      <button type="button" className="btn-primary" onClick={nav.toNewWork} data-testid="shelf-new-book"><Plus size={15} />{isZh ? "新建作品" : "New work"}</button>
     </div>
     {operationError ? <p role="alert" className="text-sm text-destructive">{operationError}</p> : null}
     {shortsError ? <p role="alert" className="text-sm text-destructive">{isZh ? "短篇列表未能读取。" : "Could not load short works."}<button type="button" onClick={() => void refetchShorts()}>{isZh ? "重试" : "Retry"}</button></p> : null}
@@ -229,7 +231,7 @@ export function Dashboard({ nav, sse, t }: { nav: Nav; sse: { messages: Readonly
       </article>)}
     </div>
     <ConfirmDialog open={Boolean(deleteTarget)} title={isZh ? "删除作品" : "Delete work"} message={isZh ? `删除《${deleteTarget?.title ?? ""}》及其全部内容？此操作无法撤销。` : `Delete ${deleteTarget?.title ?? ""} and its contents? This cannot be undone.`} confirmLabel={pending ? (isZh ? "正在删除…" : "Deleting…") : t("common.delete")} cancelLabel={t("common.cancel")} variant="danger" onConfirm={() => void deleteWork()} onCancel={() => { if (!pending) setDeleteTarget(null); }} />
-    {settingsBookId ? <BookSettingsDrawer bookId={settingsBookId} open onClose={() => { setSettingsBookId(null); reload(); }} t={t} isZh={isZh} onDeleted={() => { setSettingsBookId(null); bumpBookDataVersion(); reload(); }} /> : null}
+    {settingsBookId ? <BookSettingsDrawer bookId={settingsBookId} open onClose={() => { setSettingsBookId(null); reload(); }} t={t} isZh={isZh} onEditLength={() => { nav.toAsk(settingsBookId); setSettingsBookId(null); }} onDeleted={() => { setSettingsBookId(null); bumpBookDataVersion(); reload(); }} /> : null}
     <input ref={coverFileRef} type="file" accept={BOOK_COVER_ACCEPT} className="sr-only" tabIndex={-1} data-testid="home-book-cover-file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCover(file); event.target.value = ""; }} />
   </section>;
 }

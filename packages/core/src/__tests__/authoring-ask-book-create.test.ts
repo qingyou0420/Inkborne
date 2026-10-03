@@ -8,6 +8,7 @@ import { CANON_LENGTH_REQUIRED } from "../authoring/book-create.js";
 import { parseCanon } from "../authoring/canon.js";
 import { isLightweightAuthoringBook } from "../authoring/context.js";
 import { ensureAuthoringDraft } from "../authoring/drafts.js";
+import { importAskSource, listAskSources, readAskSourceContext } from "../authoring/ask-sources.js";
 import { adoptAskCanon, generateAskCanon } from "../authoring/stages/ask.js";
 import { listArtifacts, listRuns, loadArtifact, loadManifest, loadRun } from "../authoring/store.js";
 import { ProjectConfigSchema } from "../models/project.js";
@@ -92,6 +93,21 @@ describe("Ask confirmation creates only an unadopted canon candidate", () => {
     await expect(access(join(result.bookDir, "story", "canon.md"))).rejects.toThrow();
     expect(await readFile(join(result.bookDir, "chapters", "index.json"), "utf-8")).toBe("[]\n");
     expect(await readdir(join(projectRoot, ".inkos", "authoring-drafts"))).toEqual([]);
+  });
+
+  it("retains the upload-only session sources when its confirmation card creates a book candidate", async () => {
+    const sessionId = "1788325716279-source";
+    const draft = await ensureAuthoringDraft({ projectRoot, sessionId });
+    const source = await importAskSource({ projectRoot, draftId: draft.draftId }, { filename: "母本.txt", bytes: Buffer.from(`开头。${"篇幅".repeat(20000)}独有结尾：无人离开港口。`) });
+    let prompt = "";
+    const result = await createAskBookCandidate({ ...input(), sourceSessionId: sessionId, llm: async (call) => { prompt = call.messages.map((message) => message.content).join("\n"); return JSON.stringify(generated); } });
+    expect(prompt).toContain("独有结尾：无人离开港口。");
+    const root = { projectRoot, bookId: result.bookId };
+    expect((await listAskSources(root)).map((item) => item.id)).toEqual([source.id]);
+    expect((await readAskSourceContext(root))[0].text).toContain("独有结尾：无人离开港口。");
+    expect((await loadManifest(root)).adopted.ask).toBeUndefined();
+    expect(await readFile(join(projectRoot, source.originalPath), "utf-8")).toContain("独有结尾：无人离开港口。");
+    expect(await readFile(join(result.bookDir, "chapters", "index.json"), "utf-8")).toBe("[]\n");
   });
 
   it("rejects an existing same-title book under another id before spending a model call", async () => {

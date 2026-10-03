@@ -118,6 +118,7 @@ export {
   parseCanon,
   serializeCanon,
   ensureAuthoringDraft,
+  findDraftBySession,
   loadDraft,
   bindDraftToBook,
   reviseGroundEntry,
@@ -901,6 +902,7 @@ export {
   type ChapterVersionSource,
 } from "./state/chapter-workspace.js";
 export { loadChaptersFromPath, compareChapterSourceNames } from "./agent/chapter-import-source.js";
+export { importAskSource, listAskSources, inspectAskSources, removeAskSource, readAskSourceContext, ASK_SOURCE_MAX_BYTES, ASK_SOURCE_MAX_CHARS, type AskSource } from "./authoring/ask-sources.js";
 export { bootstrapStructuredStateFromMarkdown } from "./state/state-bootstrap.js";
 export { renderCurrentStateProjection, renderHooksProjection, renderChapterSummariesProjection } from "./state/state-projections.js";
 export { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state/state-reducer.js";

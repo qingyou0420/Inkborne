@@ -23,6 +23,10 @@ import {
   ensureAuthoringDraft,
   fillMissingAuthoringRoles,
   generateAskCanon,
+  importAskSource,
+  inspectAskSources,
+  removeAskSource,
+  ASK_SOURCE_MAX_CHARS,
   formatBookWriteLockCopy,
   isBackgroundSaveDeferredError,
   generateChapterDraft,
@@ -703,6 +707,34 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const body = await c.req.json<{ bookId?: string; draftId?: string }>();
     const result = await prepareAskCanon({ root: storeRoot(deps.root, body) });
     return c.json(result);
+  });
+
+  app.get("/api/v1/authoring/ask/sources", async (c) => {
+    const root = storeRoot(deps.root, { bookId: c.req.query("bookId"), draftId: c.req.query("draftId") });
+    if (!root.bookId && !root.draftId) return c.json({ error: "请先打开一条问心。" }, 400);
+    return c.json({ sources: await inspectAskSources(root), maxChars: ASK_SOURCE_MAX_CHARS });
+  });
+
+  app.post("/api/v1/authoring/ask/sources", async (c) => {
+    const body = await c.req.parseBody();
+    const root = storeRoot(deps.root, {
+      bookId: typeof body.bookId === "string" ? body.bookId : undefined,
+      draftId: typeof body.draftId === "string" ? body.draftId : undefined,
+    });
+    if (!(body.file instanceof File)) return c.json({ error: "请选择要导入的资料。" }, 400);
+    try {
+      const source = await importAskSource(root, { filename: body.file.name, bytes: new Uint8Array(await body.file.arrayBuffer()) });
+      return c.json({ source, maxChars: ASK_SOURCE_MAX_CHARS });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.delete("/api/v1/authoring/ask/sources/:id", async (c) => {
+    const root = storeRoot(deps.root, { bookId: c.req.query("bookId"), draftId: c.req.query("draftId") });
+    if (!root.bookId && !root.draftId) return c.json({ error: "请先打开一条问心。" }, 400);
+    await removeAskSource(root, c.req.param("id"));
+    return c.json({ ok: true, originalsRetained: true });
   });
 
   app.post("/api/v1/authoring/ask/generate", async (c) => {

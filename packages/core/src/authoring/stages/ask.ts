@@ -12,6 +12,7 @@ import { beginAuthoringRun, endAuthoringRun, isAuthoringRunAbort } from "../run-
 import { parseCanon, serializeCanon } from "../canon.js";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { loadCanonDocument } from "../context.js";
+import { readAskSourceContext } from "../ask-sources.js";
 import { asNumber, extractJsonObject } from "../json.js";
 import { completeRoleObserved } from "../llm.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
@@ -148,6 +149,9 @@ async function askAuthorContext(root: AuthoringStoreRoot, conversation?: string,
     }
   }
   sourceRoots.push(root);
+  for (const { source, text } of await readAskSourceContext(root)) {
+    include(`导入资料：${source.filename}（完整读取 ${source.charCount} 字符，原文件 ${source.originalPath}）`, text, source.id, "imported-source");
+  }
   const savedOriginal = await readAskSource(sourcePath);
   if (savedOriginal.trim()) originalConversation = savedOriginal;
   include("保存的原始问心对话", savedOriginal, "source-conversation.md");
@@ -191,6 +195,7 @@ async function askAuthorContext(root: AuthoringStoreRoot, conversation?: string,
       "作者依据规则：持久原文与当前对话共同构成依据。较新对话中作者明确作出的修改优先于旧约定，其余已确认人物、关键事件、因果和结局继续保留。",
       "对话及材料可能同时包含作者发言与助手整理；模型提案、助手建议和审查意见不等于作者定案。只有作者明确确认的故事事实与要求才能覆盖原意；有疑问则列待确认，不自行改写既定核心。",
       "本次整理/审查的格式、校验与防虚构指令属于工作要求，不能自动变成小说的故事边界或新增题材禁令。",
+      "导入的旧作或母本是待作者确认的参考依据。可以据此整理候选正典并标明待确认项；不得把本次整理描述成正式章节导入或已经采用。",
       ...sections,
     ].join("\n\n"),
     inputRefs,
@@ -426,7 +431,7 @@ export async function generateAskCanon(input: AskRuntime & {
         source: "generate",
         status: "candidate",
         bodyPath: `artifacts/${artifactId}/body.md`,
-        inputRefs: [],
+        inputRefs: authorContext.inputRefs,
         createdAt: new Date().toISOString(),
         runId,
         label: `正典 v${version}`,
@@ -638,7 +643,7 @@ export async function reviseAskCanon(input: AskRuntime & {
         source: "revise",
         status: "candidate",
         bodyPath: `artifacts/${artifactId}/body.md`,
-        inputRefs: [{ kind: "report", id: report.reportId }],
+        inputRefs: [...authorContext.inputRefs, { kind: "report", id: report.reportId }],
         createdAt: new Date().toISOString(),
         label: `正典 v${version}`,
       }, body);

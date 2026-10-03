@@ -10,6 +10,8 @@ import type { ProjectConfig } from "../models/project.js";
 import { deriveBookIdFromTitle } from "../utils/book-id.js";
 import { serializeCanon } from "./canon.js";
 import { generateAskCanon } from "./stages/ask.js";
+import { findDraftBySession } from "./drafts.js";
+import { listAskSources } from "./ask-sources.js";
 import { loadArtifact, loadManifest, loadRun, saveArtifact, saveManifest, saveRun } from "./store.js";
 import type { AuthoringLlmFn } from "./types.js";
 
@@ -18,6 +20,7 @@ export interface AskBookCreateInput {
   readonly project: ProjectConfig;
   readonly conversation: string;
   readonly requirements?: string;
+  readonly sourceSessionId?: string;
   readonly book: {
     readonly title: string;
     readonly genre?: string;
@@ -104,6 +107,15 @@ export async function createAskBookCandidate(input: AskBookCreateInput): Promise
     await mkdir(stagingParent, { recursive: true });
     stagingDir = await mkdtemp(join(stagingParent, "ask-create-"));
     const root = { projectRoot, draftId: basename(stagingDir) };
+    const sourceDraft = input.sourceSessionId ? await findDraftBySession(projectRoot, input.sourceSessionId) : undefined;
+    if (sourceDraft) {
+      const sources = await listAskSources({ projectRoot, draftId: sourceDraft.draftId });
+      if (sources.length) {
+        const directory = join(stagingDir, "workflow", "source-materials");
+        await mkdir(directory, { recursive: true });
+        for (const source of sources) await writeFile(join(directory, `${source.id}.json`), `${JSON.stringify(source, null, 2)}\n`, { flag: "wx" });
+      }
+    }
     const constraints = [
       `作者已确认书名：${title}。不得自行更改。`,
       input.book.genre ? `作者已确认题材：${input.book.genre}。` : "",

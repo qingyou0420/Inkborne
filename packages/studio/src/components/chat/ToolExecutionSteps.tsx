@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { buildApiUrl } from "../../hooks/use-api";
 import { tr } from "../../lib/app-language";
+import { isRetiredStudioIntent, isRetiredStudioSessionKind } from "../../shared/feature-policy";
 import { displayProgressLabel } from "../../lib/progress-label";
 import { formatReviewIssueCopy, humanizeReviewDescription, mapAuditSeverity } from "../../lib/copy-map";
 import { chatSelectors, useChatStore } from "../../store/chat";
@@ -643,16 +644,6 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
               ? tr("分镜已生成", "Storyboard generated")
               : tr("互动影游已生成", "Interactive film generated")}
         </div>
-        {details.kind === "interactive_film_created" && details.projectId && onOpenFilmStudio && (
-          <button
-            type="button"
-            data-testid="open-film-studio"
-            onClick={() => onOpenFilmStudio(details.projectId!)}
-            className="shrink-0 rounded-lg bg-primary px-3 py-1 text-[13px] font-semibold text-primary-foreground hover:opacity-90 transition-opacity"
-          >
-            {tr("打开创作向导 →", "Open creation wizard →")}
-          </button>
-        )}
       </div>
       {rows.length > 0 && (
         <div className="mt-2 space-y-1.5">
@@ -1070,6 +1061,7 @@ function ProposedActionPreview({
   const streaming = isActiveSessionStreaming;
   const locked = resolution !== undefined;
   const contractRows = getProposedActionContractRows(details);
+  const retired = details.action === "write_next" || isRetiredStudioIntent(details.action) || isRetiredStudioSessionKind(details.targetSessionKind);
   return (
     <div className="mx-3 mb-3 mt-1 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3.5">
       <div className="text-[17px] leading-6 font-semibold text-foreground">{details.title ?? tr("确认执行", "Confirm action")}</div>
@@ -1089,7 +1081,11 @@ function ProposedActionPreview({
           ))}
         </div>
       )}
-      {resolution === "confirmed" ? (
+      {retired ? (
+        <p className="mt-3 text-sm text-muted-foreground" data-testid="retired-action">{details.action === "write_next"
+          ? tr("旧写作入口已移除。这条历史记录仍保留，请到落笔继续写作。", "This old writing action has been removed. The history is retained; continue writing in Write.")
+          : tr("此功能已移除。这条历史记录仍保留，资料可在问心重新整理。", "This feature has been removed. The history is retained; materials can be organized in Ask.")}</p>
+      ) : resolution === "confirmed" ? (
         <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-primary">
           <Check size={15} className="shrink-0" />
           {tr("已执行", "Executed")}

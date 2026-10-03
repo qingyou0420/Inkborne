@@ -14,6 +14,29 @@ const makeExec = (overrides: Partial<ToolExecution> & { id: string; tool: string
 });
 
 describe("groupChronologically", () => {
+  it("keeps retired proposal history visible without an execution button", () => {
+    const exec = makeExec({ id: "retired-film", tool: "propose_action", details: {
+      kind: "proposed_action", action: "interactive_film_create", targetSessionKind: "interactive-film",
+      title: "旧影视提案", instruction: "制作一个分支故事",
+    } });
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, {
+      executions: [exec], onProposedAction: () => { throw new Error("must not run"); },
+    }));
+    expect(html).toContain("旧影视提案");
+    expect(html).toContain('data-testid="retired-action"');
+    expect(html).not.toContain('data-testid="confirm-action"');
+  });
+  it("directs old writing proposals to Write without offering the retired action", () => {
+    const exec = makeExec({ id: "retired-writing", tool: "propose_action", details: {
+      kind: "proposed_action", action: "write_next", targetSessionKind: "book",
+      title: "旧写作提案", instruction: "连续写四章",
+    } });
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, {
+      executions: [exec], onProposedAction: () => { throw new Error("must not run"); },
+    }));
+    expect(html).toContain("请到落笔继续写作");
+    expect(html).not.toContain('data-testid="confirm-action"');
+  });
   it("keeps read before pipeline when read happened first", () => {
     const execs: ToolExecution[] = [
       makeExec({ id: "1", tool: "read", label: "读取文件" }),
@@ -648,14 +671,15 @@ describe("groupChronologically", () => {
 
 describe("tool details default-open preference", () => {
   beforeEach(() => {
-    usePreferencesStore.setState({ toolDetailsDefaultOpen: true });
+    usePreferencesStore.setState({ toolDetailsDefaultOpen: false });
   });
 
-  it("the preferences store defaults to expanded, keeping today's behavior", () => {
+  it("preserves an explicitly enabled expanded preference", () => {
+    usePreferencesStore.setState({ toolDetailsDefaultOpen: true });
     expect(usePreferencesStore.getState().toolDetailsDefaultOpen).toBe(true);
   });
 
-  it("renders the pipeline result details expanded when the preference is on (default)", () => {
+  it("renders pipeline result details collapsed on the initial render", () => {
     const exec = makeExec({
       id: "writer-1",
       tool: "sub_agent",
@@ -667,7 +691,7 @@ describe("tool details default-open preference", () => {
     const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
 
     expect(html).toContain("查看操作结果");
-    expect(html).toContain("<details open");
+    expect(html).not.toContain("<details open");
   });
 
   it("renders the pipeline result details collapsed when the preference is off", () => {

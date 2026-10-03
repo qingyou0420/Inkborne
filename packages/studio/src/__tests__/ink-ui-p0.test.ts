@@ -50,16 +50,12 @@ describe("P0-E radius tokens", () => {
 });
 
 describe("P0-B authoring chrome close", () => {
-  it("hides 作品工具 for four-stage books and keeps the drawer for legacy", () => {
+  it("keeps book operations out of the five-entry configuration menu", () => {
     const menu = read("src/components/AppMoreMenu.tsx");
-    expect(menu).toMatch(/authoring\/workspace/);
-    expect(menu).toMatch(/showWorkTools/);
-    expect(menu).toMatch(/authoring\?\.authoringBook === false/);
-    expect(menu).toMatch(/showWorkTools && currentBookId/);
-    expect(menu).toMatch(/BookToolsDrawer/);
+    expect(menu).not.toMatch(/BookToolsDrawer|BookSettingsDrawer|AskSessionDrawer/);
     expect(menu).not.toMatch(/dash\.stats/);
     expect(menu).not.toMatch(/导出正文/);
-    expect(menu).toMatch(/原始资料/);
+    expect(read("src/pages/SystemMaintenance.tsx")).toMatch(/打开原始资料/);
   });
 
   it("gives ChapterReader and TruthFiles a readOnly branch", () => {

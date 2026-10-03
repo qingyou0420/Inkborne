@@ -44,9 +44,9 @@ describe("authoring four-agent IA", () => {
     expect(routes).toMatch(/\/api\/v1\/authoring\/roles\/:roleId\/test/);
     expect(routes).toMatch(/saveHandEditedArtifact/);
     expect(settings).toMatch(/AuthoringRolesPanel/);
-    expect(read("src/pages/ProjectSettings.tsx")).toMatch(/模型配置页/);
-    expect(read("src/pages/ProjectSettings.tsx")).toMatch(/高级：八个角色/);
-    expect(read("src/pages/ServiceListPage.tsx")).toMatch(/SimpleModelSettings/);
+    expect(read("src/pages/ProjectSettings.tsx")).not.toMatch(/project\/model-overrides/);
+    expect(read("src/pages/ProjectSettings.tsx")).toMatch(/外观设置/);
+    expect(read("src/pages/ServiceListPage.tsx")).not.toMatch(/SimpleModelSettings/);
     expect(read("src/components/BookWorkspaceNav.tsx")).toMatch(/设定档案/);
     expect(read("src/components/BookBusyCard.tsx")).toMatch(/这本书正在被写入/);
     expect(read("src/components/BookBusyCard.tsx")).toMatch(/等它写完/);

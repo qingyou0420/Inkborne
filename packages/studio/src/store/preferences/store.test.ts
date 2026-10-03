@@ -9,19 +9,19 @@ function fakeStorage(entries: Record<string, string>) {
 }
 
 describe("readStoredToolDetailsDefaultOpen", () => {
-  it("defaults to true when no storage is available", () => {
-    expect(readStoredToolDetailsDefaultOpen(null)).toBe(true);
-    expect(readStoredToolDetailsDefaultOpen(undefined)).toBe(true);
+  it("defaults to collapsed when no storage is available", () => {
+    expect(readStoredToolDetailsDefaultOpen(null)).toBe(false);
+    expect(readStoredToolDetailsDefaultOpen(undefined)).toBe(false);
   });
 
-  it("defaults to true when nothing is stored", () => {
-    expect(readStoredToolDetailsDefaultOpen(fakeStorage({}))).toBe(true);
+  it("defaults to collapsed when nothing is stored", () => {
+    expect(readStoredToolDetailsDefaultOpen(fakeStorage({}))).toBe(false);
   });
 
-  it("returns false only for an explicitly stored \"false\"", () => {
+  it("preserves only an explicitly stored expanded preference", () => {
     expect(readStoredToolDetailsDefaultOpen(fakeStorage({ [TOOL_DETAILS_STORAGE_KEY]: "false" }))).toBe(false);
     expect(readStoredToolDetailsDefaultOpen(fakeStorage({ [TOOL_DETAILS_STORAGE_KEY]: "true" }))).toBe(true);
-    expect(readStoredToolDetailsDefaultOpen(fakeStorage({ [TOOL_DETAILS_STORAGE_KEY]: "garbage" }))).toBe(true);
+    expect(readStoredToolDetailsDefaultOpen(fakeStorage({ [TOOL_DETAILS_STORAGE_KEY]: "garbage" }))).toBe(false);
   });
 });
 
@@ -70,7 +70,7 @@ describe("usePreferencesStore", () => {
     });
   });
 
-  it("starts with details expanded by default", () => {
+  it("preserves an explicitly enabled expanded preference", () => {
     expect(usePreferencesStore.getState().toolDetailsDefaultOpen).toBe(true);
   });
 

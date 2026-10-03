@@ -8,7 +8,6 @@ import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { ServiceConfigSourceCard } from "../components/ServiceConfigSourceCard";
 import { AuthoringRolesPanel } from "../components/AuthoringRolesPanel";
-import { SimpleModelSettings } from "../components/SimpleModelSettings";
 import { SettingsTabs } from "../components/SettingsTabs";
 import { useI18n } from "../hooks/use-i18n";
 
@@ -176,8 +175,8 @@ function CoverConfigCard() {
           <h2 className="text-sm font-medium text-foreground">{tr("封面生成", "Cover generation")}</h2>
           <p className="mt-1 text-xs text-muted-foreground/70">
             {tr(
-              "只配置封面通道和模型；封面尺寸由短篇封面提示词和内部默认处理。",
-              "Only configures the cover provider and model; cover size is handled by the short-story cover prompt and internal defaults.",
+              "用于短篇创作的封面生成。长篇书籍的封面请在书架上传。",
+              "Used for short-fiction covers. Upload novel covers from the bookshelf.",
             )}
           </p>
         </div>
@@ -244,6 +243,7 @@ function CoverConfigCard() {
           />
           <button
             type="button"
+            aria-label={showKey ? tr("隐藏密钥", "Hide API key") : tr("显示密钥", "Show API key")}
             onClick={() => {
               if (!showKey && !apiKey && keyConfigured) {
                 void fetchJson<{ apiKey?: string; last4?: string }>(`/cover/secret/${encodeURIComponent(service)}?reveal=1`)
@@ -367,19 +367,14 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         t={t}
         onModels={() => undefined}
         onAppearance={() => nav.toProjectSettings?.()}
-        onAdvanced={() => nav.toProjectSettings?.("advanced")}
       />
       <div className="space-y-8 min-w-0">
-      <h1 className="text-[32px] font-medium leading-10">{t("settings.title")}</h1>
-      <SimpleModelSettings />
+      <h1 className="text-[32px] font-medium leading-10">{t("settings.modelsTab")}</h1>
       <AuthoringRolesPanel isZh={isZh} />
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[20px] font-medium">{t("settings.servicesHeading")}</h2>
-      </div>
-
+      <details className="border-t border-border pt-5" data-testid="model-connections">
+        <summary className="cursor-pointer text-[20px] font-medium">{tr("连接管理", "Connections")}</summary>
+        <div className="mt-5 space-y-5">
       <ServiceConfigSourceCard onChange={() => { void refreshServices(); }} />
-
-      <CoverConfigCard />
 
       <div className="relative">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
@@ -388,6 +383,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={tr("搜索服务商", "Search providers")}
+          aria-label={tr("搜索服务商", "Search providers")}
           className="w-full rounded-lg border border-border/60 bg-background py-2 pl-9 pr-9 text-sm outline-none focus:border-primary/50"
         />
         {query && (
@@ -517,6 +513,12 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           {tr("没有匹配的服务商", "No matching providers")}
         </div>
       )}
+        </div>
+      </details>
+      <details className="border-t border-border pt-5" data-testid="short-cover-settings">
+        <summary className="cursor-pointer text-base font-medium">{tr("短篇封面生成", "Short-fiction covers")}</summary>
+        <div className="mt-4"><CoverConfigCard /></div>
+      </details>
       </div>
     </div>
   );

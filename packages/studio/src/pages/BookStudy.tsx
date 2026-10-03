@@ -13,6 +13,7 @@ import { findImpactTriageRun, isCanonImpactWatch, studyImpactAttention } from ".
 import { showToast } from "../lib/toast";
 import { useEffect, useMemo, useState } from "react";
 import { BookCoverEditor } from "../components/BookCoverEditor";
+import { BookSettingsDrawer } from "../components/BookSettingsDrawer";
 import type { BookWorkspaceNavTarget } from "../components/BookWorkspaceNav";
 import { stageStateLabel } from "../components/StageDot";
 import type { WritePreflightEvaluation } from "../components/SerialCockpitStrip";
@@ -112,7 +113,7 @@ export function BookStudy({
   sse: { messages: ReadonlyArray<SSEMessage> };
 }) {
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
-  const { data: authoring, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
+  const { data: authoring, loading: authoringLoading, error: authoringError, refetch: refetchAuthoring } = useApi<AuthoringWorkspace>(`/authoring/workspace?${workspaceQuery(bookId, undefined, { summary: true })}`);
   const { data: serviceConfig } = useApi<{ services?: ReadonlyArray<{ service?: string; name?: string; pricePerMillion?: number }> }>("/services/config");
   const bumpBookDataVersion = useChatStore((s) => s.bumpBookDataVersion);
   const [preflight, setPreflight] = useState<WritePreflightEvaluation | null>(null);
@@ -123,6 +124,7 @@ export function BookStudy({
   const stage = useBookStage(bookId);
   const [volumeExpanded, setVolumeExpanded] = useState(false);
   const [canonOpen, setCanonOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [roleCount, setRoleCount] = useState(0);
 
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
@@ -272,6 +274,7 @@ export function BookStudy({
     askDone: stage?.steps.ask === "done",
     grounded: Boolean(stage?.workflow?.groundConfirmedAt),
     roleCount,
+    authoring: authoring ?? undefined,
     lockedVolumes,
     outlineDone,
     plannedChapters: planned,
@@ -314,7 +317,11 @@ export function BookStudy({
             </p>
           ) : null}
         </div>
+        <button type="button" className="btn-secondary" onClick={() => setSettingsOpen(true)} data-testid="study-work-settings">{isZh ? "作品设置" : "Work settings"}</button>
       </header>
+      <BookSettingsDrawer key={bookId} bookId={bookId} open={settingsOpen} onClose={() => { setSettingsOpen(false); void refetch(); }} t={t} isZh={isZh}
+        onEditLength={() => { setSettingsOpen(false); nav.toAsk(bookId); }}
+        onDeleted={() => { setSettingsOpen(false); bumpBookDataVersion(); nav.toDashboard(); }} />
 
       {snapshot?.volume && (
         <section className="space-y-2" data-testid="cockpit-volume-okr">
@@ -445,9 +452,11 @@ export function BookStudy({
             state={stage?.steps.ground}
             label={isZh ? "研墨" : "Ground"}
             status={
-              authoring?.manifest?.coverage?.settingsTarget
-                ? `${stepCopy.ground} · ${isZh ? "已采用" : "adopted"} ${authoring.manifest.coverage.settingsAdopted ?? 0}/${authoring.manifest.coverage.settingsTarget}`
-                : stepCopy.ground
+              authoringLoading
+                ? (isZh ? "正在读取设定…" : "Loading settings…")
+                : authoringError || !authoring
+                  ? (isZh ? "暂时无法读取设定状态" : "Settings status unavailable")
+                  : stepCopy.ground
             }
             onClick={() => goStage(nav, bookId, "ground")}
             testId="study-step-ground"

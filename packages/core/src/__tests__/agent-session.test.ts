@@ -1525,6 +1525,24 @@ describe("runAgentSession cache — bookId switch", () => {
     ]);
   });
 
+  it("applies host tool policy and rebuilds cached tools when that policy changes", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    const config = { sessionId: "s1", bookId: "book-a", language: "zh", pipeline: {} as any, projectRoot, model };
+    await runAgentSession(config, "hi");
+    expect(agentInstances[0].state.tools.some((tool: any) => tool.name === "sub_agent")).toBe(true);
+
+    const readOnly = (tools: any[]) => tools.filter((tool) => tool.name === "read");
+    await runAgentSession({ ...config, transformTools: readOnly }, "hi2");
+    expect(agentInstances).toHaveLength(2);
+    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual(["read"]);
+
+    await runAgentSession({ ...config, transformTools: readOnly }, "hi3");
+    expect(agentInstances).toHaveLength(2);
+    await runAgentSession(config, "hi4");
+    expect(agentInstances).toHaveLength(3);
+    expect(agentInstances[2].state.tools.some((tool: any) => tool.name === "sub_agent")).toBe(true);
+  });
+
   it("exposes only deterministic edit tools in edit mode", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;

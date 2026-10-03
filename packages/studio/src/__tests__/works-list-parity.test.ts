@@ -188,7 +188,7 @@ describe("works list delete refresh", () => {
   it("drops a deleted book from the home shelf immediately", () => {
     const dashboard = read("src/pages/Dashboard.tsx");
     const settings = read("src/components/BookSettingsDrawer.tsx");
-    const nav = read("src/components/AppMoreMenu.tsx");
+    const nav = read("src/pages/BookStudy.tsx");
 
     expect(dashboard).toMatch(/removeBookFromCollection/);
     expect(dashboard).toMatch(/bumpBookDataVersion/);

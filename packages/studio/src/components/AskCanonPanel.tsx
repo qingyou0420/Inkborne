@@ -16,6 +16,7 @@ import { askRetryAction, selectScopedAuthoringRun, shouldAutoTakeoverAuthoringRu
 import { invalidateBookStage } from "../hooks/use-book-stage";
 import { goBookAuthoringStage } from "../lib/authoring-nav";
 import { showToast } from "../lib/toast";
+import { ensureAskDraft } from "../lib/ensure-ask-draft";
 import { findImpactTriageRun, impactCompleteCopy, isImpactTriageRun } from "../lib/impact-view";
 import { registerNavigationGuard } from "../lib/edit-navigation";
 import { chatSelectors, useChatStore } from "../store/chat";
@@ -58,6 +59,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
       ? workspaceQuery(undefined, draftId, { stage: "ask" })
       : "";
   const { data, loading, error, refetch } = useApi<AuthoringWorkspace>(query ? `/authoring/workspace?${query}` : "");
+  const importedSources = useApi<{ sources: ReadonlyArray<{ id: string }> }>(query ? `/authoring/ask/sources?${query}` : "");
   const adoptedOnlyId = !data?.candidateAsk ? data?.adoptedAskId : undefined;
   const adoptedCopy = useApi<CanonVersion>(adoptedOnlyId ? `/authoring/artifacts/${encodeURIComponent(adoptedOnlyId)}?${query}` : "");
   const candidate = data?.candidateAsk ?? (adoptedCopy.data && adoptedCopy.data.meta.artifactId === adoptedOnlyId
@@ -110,7 +112,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
     if (bookId || !session) return;
     setDraftError(undefined);
     try {
-      const draft = await postApi<{ draftId: string }>("/authoring/drafts/ensure", { sessionId: session.sessionId });
+      const draft = await ensureAskDraft(session.sessionId);
       if (mounted.current) setDraftId(draft.draftId);
     } catch (failure) { if (mounted.current) setDraftError(failure instanceof Error ? failure.message : String(failure)); }
   };
@@ -417,7 +419,7 @@ function CanonEditor({ bookId, isZh, onAdopted, session }: AskCanonProps & { rea
             <DropdownMenuItem disabled={!artifacts.length} onClick={() => openHistory(currentArtifactId)}>{isZh ? "历史版本" : "Version history"}</DropdownMenuItem>
             <DropdownMenuItem disabled={!data?.adoptedAskId} onClick={() => openHistory(data?.adoptedAskId)}>{isZh ? "查看已采用" : "View adopted"}</DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
-        </> : <button type="button" className="ask-canon-primary" disabled={locked || !ready || !conversation.trim() || session?.isChatStreaming} title={!conversation.trim() ? (isZh ? "先在问心对话中描述故事" : "Describe your story first") : undefined} onClick={() => void regenerate("")}><PencilLine size={15} />{isZh ? "整理正典" : "Create canon"}</button>}</div>
+        </> : <button type="button" className="ask-canon-primary" disabled={locked || !ready || (!conversation.trim() && !importedSources.data?.sources.length) || session?.isChatStreaming} title={!conversation.trim() && !importedSources.data?.sources.length ? (isZh ? "先描述故事，或导入旧作与设定资料" : "Describe your story or import source material first") : undefined} onClick={() => void regenerate("")}><PencilLine size={15} />{isZh ? "整理正典" : "Create canon"}</button>}</div>
       </footer>
       <Drawer open={historyOpen} title={isZh ? "正典版本" : "Canon versions"} onClose={() => setHistoryOpen(false)}>
         <div className="ask-version-list">{artifacts.map((item) => <button type="button" key={item.artifactId} aria-pressed={historyItem?.meta.artifactId === item.artifactId} onClick={() => void loadVersion(item.artifactId)}><span>v{item.version}</span><span>{item.artifactId === data?.adoptedAskId ? (isZh ? "已采用" : "Adopted") : item.artifactId === candidate?.artifactId ? (isZh ? "当前候选" : "Current candidate") : (isZh ? "历史稿" : "Historical")}</span></button>)}</div>

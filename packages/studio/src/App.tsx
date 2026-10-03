@@ -1,11 +1,15 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
-import { useHashRoute } from "./hooks/use-hash-route";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { parseHash, routeToHash, useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { BookWorkspaceNav, type BookWorkspaceTab } from "./components/BookWorkspaceNav";
 import { BrandMark } from "./components/BrandMark";
 import { StudioHeader } from "./components/StudioHeader";
 import { Dashboard, type HomeBookSummary } from "./pages/Dashboard";
 import { NewBookIntro } from "./components/NewBookIntro";
+import { NewWorkPage } from "./pages/NewWorkPage";
+import { ImportMaterialsPage } from "./pages/ImportMaterialsPage";
+import { SystemMaintenance } from "./pages/SystemMaintenance";
+import { setProjectChatSessionId, startFreshBookCreateSession } from "./pages/chat-page-state";
 import { isStartupHomeHash, startupBookRoute } from "./lib/home-navigation";
 import "./ink-home.css";
 import { ChatPage } from "./pages/ChatPage";
@@ -23,21 +27,12 @@ import { ServiceListPage } from "./pages/ServiceListPage";
 import { ServiceDetailPage } from "./pages/ServiceDetailPage";
 import { ProjectSettings } from "./pages/ProjectSettings";
 import { TruthFiles } from "./pages/TruthFiles";
-import { DaemonControl } from "./pages/DaemonControl";
 import { LogViewer } from "./pages/LogViewer";
-import { GenreManager } from "./pages/GenreManager";
-import { StyleManager } from "./pages/StyleManager";
-import { TranslationManager } from "./pages/TranslationManager";
-import { ImportManager } from "./pages/ImportManager";
-import { RadarView } from "./pages/RadarView";
 import { DoctorView } from "./pages/DoctorView";
 import { CheckUpdate } from "./pages/CheckUpdate";
 import { ShortReader } from "./pages/ShortReader";
 import { ShortSettings } from "./pages/ShortSettings";
 import { StoryPlayer } from "./pages/StoryPlayer";
-import { StoryGraphTree } from "./pages/StoryGraphTree";
-const FlowView = lazy(() => import("./pages/FlowView"));
-const FilmWizard = lazy(() => import("./pages/FilmWizard"));
 import { LanguageSelector } from "./pages/LanguageSelector";
 import { BookBusyCard } from "./components/BookBusyCard";
 import { useNewSSEMessages, useSSE } from "./hooks/use-sse";
@@ -45,7 +40,7 @@ import { invalidateBookStage, shouldInvalidateBookStageEvent } from "./hooks/use
 import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
-import { setAppLanguage, tr } from "./lib/app-language";
+import { setAppLanguage } from "./lib/app-language";
 import { invalidateApiPaths, invalidationPathsForAuthoringRunSse, invalidationPathsForChapterMutationSse, postApi, useApi } from "./hooks/use-api";
 import { emitEngineConnection } from "./lib/engine-connection";
 import { X } from "lucide-react";
@@ -105,7 +100,7 @@ export function App() {
     // Explicit navigation wins, including a return to the bookshelf while loading.
     startupResumeAllowed.current = false;
     setStartupResumePending(false);
-    setHashRoute(nextRoute, onAccepted);
+    setHashRoute(parseHash(routeToHash(nextRoute)), onAccepted);
   }, [setHashRoute]);
   const sse = useSSE();
   const { theme, setTheme } = useTheme();
@@ -196,14 +191,33 @@ export function App() {
     toAuthor: () => setRoute({ page: "author" }),
     toChat: (onAccepted?: () => void) => setRoute({ page: "chat" }, onAccepted),
     toBook: (bookId: string) => setRoute({ page: "book", bookId }),
-    toAsk: (bookId: string, sessionId?: string) => setRoute({ page: "book-ask", bookId, ...(sessionId ? { sessionId } : {}) }),
+    toAsk: (bookId: string, sessionId?: string, onAccepted?: () => void) => setRoute({ page: "book-ask", bookId, ...(sessionId ? { sessionId } : {}) }, onAccepted),
     toGround: (bookId: string) => setRoute({ page: "book-ground", bookId }),
     toWeave: (bookId: string) => setRoute({ page: "book-weave", bookId }),
     toWrite: (bookId: string) => setRoute({ page: "book-write", bookId }),
     toOutline: (bookId: string) => setRoute({ page: "book-weave", bookId }),
     toBookSettings: (bookId: string) => setRoute({ page: "book-write", bookId }),
-    toBookCreate: (sessionId?: string) => setRoute({ page: "book-create", ...(sessionId ? { sessionId } : {}) }),
+    toBookCreate: (sessionId?: string, onAccepted?: () => void) => setRoute({ page: "book-create", ...(sessionId ? { sessionId } : {}) }, onAccepted),
     toBookIntro: () => setRoute({ page: "book-intro" }),
+    toNewWork: () => setRoute({ page: "new-work" }),
+    toShortCreate: () => setRoute({ page: "chat" }, () => {
+      const store = useChatStore.getState();
+      const sessionId = store.createDraftSession(null, "short");
+      setProjectChatSessionId(sessionId);
+      store.setInput("");
+    }),
+    toMaterials: (bookId?: string) => setRoute(bookId
+      ? { page: "book-ask", bookId, importSources: true }
+      : { page: "materials" }),
+    toAskMaterials: (bookId?: string) => {
+      if (bookId) { setRoute({ page: "book-ask", bookId, importSources: true }); return; }
+      setRoute({ page: "book-create", importSources: true }, () => {
+        const store = useChatStore.getState();
+        startFreshBookCreateSession(store.createDraftSession);
+        store.setInput("");
+      });
+    },
+    toMaintenance: (bookId?: string) => setRoute({ page: "maintenance", ...(bookId ? { bookId } : {}) }),
     toChapter: (bookId: string, chapterNumber: number) =>
       setRoute({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId: string) => setRoute({ page: "analytics", bookId }),
@@ -216,7 +230,7 @@ export function App() {
     toGenres: () => setRoute({ page: "genres" }),
     toStyle: () => setRoute({ page: "style" }),
     toTranslation: () => setRoute({ page: "translation" }),
-    toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRoute({ page: "import", ...(tab ? { tab } : {}) }),
+    toImport: (_tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRoute({ page: "materials" }),
     toRadar: () => setRoute({ page: "radar" }),
     toDoctor: () => setRoute({ page: "doctor" }),
     toCheckUpdate: () => setRoute({ page: "update" }),
@@ -376,6 +390,9 @@ export function App() {
             </div>
           )}
           {route.page === "book-intro" && <div className="one-page fade-in"><NewBookIntro isZh={currentLang !== "en"} onEnterAsk={nav.toBookCreate} /></div>}
+          {route.page === "new-work" && <NewWorkPage isZh={currentLang !== "en"} onNovel={nav.toBookIntro} onShort={nav.toShortCreate} />}
+          {route.page === "materials" && <div className={PAGE_SHELL}><ImportMaterialsPage isZh={currentLang !== "en"} onOpenAsk={nav.toAskMaterials} /></div>}
+          {route.page === "maintenance" && <div className={PAGE_SHELL}><SystemMaintenance key={route.bookId ?? "global"} isZh={currentLang !== "en"} bookId={route.bookId} nav={nav} /></div>}
           {route.page === "author" && (
             <div className={PAGE_SHELL}>
               <AuthorPage nav={nav} t={t} isZh={currentLang !== "en"} />
@@ -401,6 +418,7 @@ export function App() {
               <ChatPage
                 mode="book-create"
                 resumeSessionId={route.page === "book-create" ? route.sessionId : undefined}
+                importSources={route.page === "book-create" ? route.importSources : undefined}
                 nav={nav}
                 theme={theme}
                 t={t}
@@ -430,6 +448,7 @@ export function App() {
               <BookAskPage
                 bookId={route.bookId}
                 resumeSessionId={route.sessionId}
+                importSources={route.importSources}
                 nav={nav}
                 theme={theme}
                 t={t}
@@ -482,82 +501,25 @@ export function App() {
               <TruthFiles bookId={route.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "daemon" && (
-            <div className={PAGE_SHELL}>
-              <DaemonControl nav={nav} theme={theme} t={t} sse={sse} />
-            </div>
-          )}
           {route.page === "logs" && (
             <div className={PAGE_SHELL}>
-              <LogViewer nav={nav} theme={theme} t={t} sse={sse} />
-            </div>
-          )}
-          {route.page === "genres" && (
-            <div className={PAGE_SHELL}>
-              <GenreManager nav={nav} theme={theme} t={t} />
-            </div>
-          )}
-          {route.page === "style" && (
-            <div className={PAGE_SHELL}>
-              <StyleManager nav={nav} theme={theme} t={t} />
-            </div>
-          )}
-          {route.page === "translation" && (
-            <div className={PAGE_SHELL_WIDE}>
-              <TranslationManager nav={nav} theme={theme} t={t} />
-            </div>
-          )}
-          {route.page === "import" && (
-            <div className={PAGE_SHELL}>
-              <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} />
-            </div>
-          )}
-          {route.page === "radar" && (
-            <div className={PAGE_SHELL}>
-              <RadarView nav={nav} theme={theme} t={t} />
+              <LogViewer nav={{ ...nav, toDashboard: () => nav.toMaintenance() }} theme={theme} t={t} sse={sse} />
             </div>
           )}
           {route.page === "doctor" && (
             <div className={PAGE_SHELL}>
-              <DoctorView nav={nav} theme={theme} t={t} />
+              <DoctorView nav={{ ...nav, toDashboard: () => nav.toMaintenance() }} theme={theme} t={t} />
             </div>
           )}
           {route.page === "update" && (
             <div className={PAGE_SHELL}>
-              <CheckUpdate nav={nav} theme={theme} t={t} />
+              <CheckUpdate nav={{ ...nav, toDashboard: () => nav.toMaintenance() }} theme={theme} t={t} />
             </div>
           )}
           {route.page === "play" && (
             <div className={PAGE_SHELL}>
               <StoryPlayer projectId={route.projectId} nav={nav} theme={theme} t={t} />
             </div>
-          )}
-          {route.page === "film" && (
-            <div className={PAGE_SHELL}>
-              <StoryGraphTree projectId={route.projectId} nav={nav} theme={theme} t={t} />
-            </div>
-          )}
-          {route.page === "film-author" && (
-            <div className="absolute inset-0 flex min-w-0">
-              <ChatPage
-                activeBookId={route.projectId}
-                mode="interactive-film-authoring"
-                nav={nav}
-                theme={theme}
-                t={t}
-                sse={sse}
-              />
-            </div>
-          )}
-          {route.page === "film-studio" && (
-            <Suspense fallback={<div className="p-6 text-sm">{tr("加载创作向导…", "Loading creation wizard…")}</div>}>
-              <FilmWizard projectId={route.projectId} nav={nav} theme={theme} t={t} sse={sse} />
-            </Suspense>
-          )}
-          {route.page === "flow" && (
-            <Suspense fallback={<div className="p-6 text-sm">{tr("加载流程图…", "Loading flow view…")}</div>}>
-              <FlowView projectId={route.projectId} nav={nav} theme={theme} t={t} />
-            </Suspense>
           )}
         </main>
       </div>

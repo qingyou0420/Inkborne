@@ -6,6 +6,7 @@ import { fetchJson, invalidateApiPaths, postApi, putApi, useApi } from "../hooks
 import type { ChatAttachmentPayload } from "../store/chat/types";
 import { chatSelectors, useChatStore } from "../store/chat";
 import { isAskSession } from "../components/ask-canon-state";
+import { AskWorkspaceTools } from "../components/AskWorkspaceTools";
 import "../components/ask-workspace.css";
 import type { ChatSessionKind } from "../store/chat";
 import { useServiceStore } from "../store/service";
@@ -85,6 +86,8 @@ interface Nav {
   toServices: () => void;
   toFilm: (projectId: string) => void;
   toFilmStudio: (projectId: string) => void;
+  toAsk?: (id: string, sessionId?: string, onAccepted?: () => void) => void;
+  toBookCreate?: (sessionId?: string, onAccepted?: () => void) => void;
 }
 
 export interface ChatPageProps {
@@ -92,6 +95,7 @@ export interface ChatPageProps {
   readonly resumeSessionId?: string;
   readonly mode?: "book" | "book-create" | "project-chat" | "interactive-film-authoring";
   readonly authoringStage?: "ask";
+  readonly importSources?: boolean;
   readonly nav: Nav;
   readonly theme: Theme;
   readonly t: TFunction;
@@ -305,7 +309,7 @@ function SkillPickerPanel({
 
 // -- Component --
 
-export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? "book" : "book-create", authoringStage, nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? "book" : "book-create", authoringStage, importSources, nav, theme, t, sse: _sse }: ChatPageProps) {
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -942,6 +946,7 @@ export function ChatPage({ activeBookId, resumeSessionId, mode = activeBookId ? 
 
   return (
     <div className={`flex flex-col h-full flex-1 min-w-0 relative ${askLayout ? "ask-chat" : ""}`}>
+      {askLayout && nav.toAsk && nav.toBookCreate ? <AskWorkspaceTools key={activeBookId ?? "new-book"} bookId={activeBookId} sessionId={!sessionLoading && !sessionLoadError && isAskSession(activeSession, activeBookId) ? activeSessionId ?? undefined : undefined} importSources={importSources} nav={{ toAsk: nav.toAsk, toBookCreate: nav.toBookCreate }} t={t} isZh={isZh} /> : null}
       {sessionLoadError ? <div role="alert" className="ask-canon-error"><p>{sessionLoadError}</p><button type="button" onClick={() => setSessionRetry((value) => value + 1)}>{isZh ? "重试加载对话" : "Retry conversation"}</button></div> : null}
       {/* Message scroll area */}
       <div

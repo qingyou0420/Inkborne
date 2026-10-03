@@ -159,6 +159,10 @@ it("saves a running record before a wait=false core throw and then records failu
   await vi.waitFor(async () => {
     const run = await loadRun({ projectRoot: root, bookId: "b" }, started.runId);
     expect(run).toMatchObject({ status: "failed", error: "模型在首个 await 前就失败了" });
+    expect(events).toContainEqual({
+      event: "authoring:run",
+      data: expect.objectContaining({ runId: started.runId, status: "failed" }),
+    });
   });
   expect(events.some((entry) => entry.event === "authoring:run" && (entry.data as { status?: string }).status === "failed")).toBe(true);
   await rm(root, { recursive: true, force: true });
@@ -180,6 +184,11 @@ it("redacts a secret from the failed run file and the authoring:run event", asyn
   await vi.waitFor(async () => {
     const run = await loadRun({ projectRoot: root, bookId: "b" }, started.runId);
     expect(run?.status).toBe("failed");
+    // saveRun becomes visible before recordRunFailure broadcasts the terminal event.
+    expect(events).toContainEqual({
+      event: "authoring:run",
+      data: expect.objectContaining({ runId: started.runId, status: "failed" }),
+    });
   });
   const run = await loadRun({ projectRoot: root, bookId: "b" }, started.runId);
   expect(run?.error).toContain("已隐藏");

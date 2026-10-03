@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promptOverridePath } from "@actalk/inkos-core";
 import { createStudioServer } from "../api/server.js";
@@ -43,7 +43,11 @@ describe("Studio prompt pack endpoints", () => {
       .toContain("scene renderer");
   });
 
-  it("saves and resets project prompt overrides", async () => {
+  it("retires save/reset while preserving existing override bytes and GET visibility", async () => {
+    const overridePath = promptOverridePath(root, "play.renderer");
+    const original = "Original project renderer.\r\nKeep historical instructions.\r\n";
+    await mkdir(dirname(overridePath), { recursive: true });
+    await writeFile(overridePath, original, "utf-8");
     const app = createStudioServer({} as never, root);
 
     const saveRes = await app.request("/api/v1/prompt-packs/play.renderer", {
@@ -51,27 +55,18 @@ describe("Studio prompt pack endpoints", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: "Render slowly and preserve discovered evidence." }),
     });
-    expect(saveRes.status).toBe(200);
-    const saved = await saveRes.json() as { prompt: { id: string; source: string; overridden: boolean; path: string } };
-    expect(saved.prompt).toMatchObject({
-      id: "play.renderer",
-      source: "project",
-      overridden: true,
-      path: "prompt/play/renderer.md",
-    });
-    await expect(readFile(promptOverridePath(root, "play.renderer"), "utf-8"))
-      .resolves
-      .toContain("preserve discovered evidence");
+    expect(saveRes.status).toBe(410);
+    await expect(saveRes.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
+    expect(await readFile(overridePath, "utf-8")).toBe(original);
 
     const resetRes = await app.request("/api/v1/prompt-packs/play.renderer", { method: "DELETE" });
-    expect(resetRes.status).toBe(200);
-    const reset = await resetRes.json() as { prompt: { id: string; source: string; overridden: boolean; content: string } };
-    expect(reset.prompt).toMatchObject({
-      id: "play.renderer",
-      source: "builtin",
-      overridden: false,
-    });
-    expect(reset.prompt.content).toContain("scene renderer");
+    expect(resetRes.status).toBe(410);
+    await expect(resetRes.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
+    expect(await readFile(overridePath, "utf-8")).toBe(original);
+    const history = await app.request("/api/v1/prompt-packs");
+    expect(history.status).toBe(200);
+    const data = await history.json() as { prompts: Array<{ id: string; content: string; source: string; overridden: boolean }> };
+    expect(data.prompts).toContainEqual(expect.objectContaining({ id: "play.renderer", source: "project", overridden: true, content: original }));
   });
 
   it("rejects unknown prompt ids instead of writing arbitrary files", async () => {

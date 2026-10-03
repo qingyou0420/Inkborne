@@ -18,11 +18,14 @@ interface Nav {
   readonly toServices: () => void;
   readonly toFilm: (projectId: string) => void;
   readonly toFilmStudio: (projectId: string) => void;
+  readonly toAsk: (id: string, sessionId?: string, onAccepted?: () => void) => void;
+  readonly toBookCreate: (sessionId?: string, onAccepted?: () => void) => void;
 }
 
 export function BookAskPage({
   bookId,
   resumeSessionId,
+  importSources,
   nav,
   theme,
   t,
@@ -30,6 +33,7 @@ export function BookAskPage({
 }: {
   readonly bookId: string;
   readonly resumeSessionId?: string;
+  readonly importSources?: boolean;
   readonly nav: Nav;
   readonly theme: Theme;
   readonly t: TFunction;
@@ -46,6 +50,7 @@ export function BookAskPage({
       <ChatPage
         activeBookId={bookId}
         resumeSessionId={resumeSessionId}
+        importSources={importSources}
         mode="book"
         authoringStage="ask"
         nav={nav}

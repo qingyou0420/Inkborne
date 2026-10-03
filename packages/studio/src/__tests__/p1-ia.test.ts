@@ -40,7 +40,8 @@ describe("P1-1 sidebar + author", () => {
     expect(intro).toMatch(/署上你的名字/);
     expect(intro).toMatch(/\/author\/avatar/);
     expect(home).toMatch(/ink-shelf-author/);
-    expect(read("src/components/AppMoreMenu.tsx")).toMatch(/onClick=\{nav.toAuthor\}/);
+    // The five-entry menu's destination callbacks are exercised by configuration-scope.test.ts.
+    expect(read("src/components/AppMoreMenu.tsx")).toMatch(/run: nav.toAuthor/);
     const author = read("src/pages/AuthorPage.tsx");
     expect(author).not.toMatch(/useApi.*\/books/);
     expect(author).not.toMatch(/author\.myBooks/);

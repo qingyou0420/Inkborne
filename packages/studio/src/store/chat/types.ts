@@ -228,6 +228,7 @@ export interface MessageActions {
   loadSessionList: (bookId: string | null, strict?: boolean) => Promise<ReadonlyArray<SessionSummary>>;
   createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => Promise<string>;
   createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => string;
+  ensureSessionPersisted: (sessionId: string, options?: { sessionKind?: ChatSessionKind; playMode?: PlayMode }) => Promise<void>;
   setSessionPlayMode: (sessionId: string, playMode: PlayMode) => void;
   renameSession: (sessionId: string, title: string, strict?: boolean) => Promise<void>;
   deleteSession: (sessionId: string, strict?: boolean) => Promise<void>;

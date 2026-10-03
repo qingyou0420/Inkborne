@@ -64,6 +64,24 @@ describe("chat message actions", () => {
     (globalThis as any).EventSource = originalEventSource;
   });
 
+  it("persists an upload-only Ask session once and exposes it in history without sending a message", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "book-create");
+    store.getState().setInput("还没发出的取材要求");
+    let finish!: (value: unknown) => void;
+    fetchJson.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const upload = store.getState().ensureSessionPersisted(sessionId);
+    const parallel = store.getState().ensureSessionPersisted(sessionId);
+    expect(fetchJson).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetchJson.mock.calls[0][1].body)).toEqual({ sessionId, bookId: null, sessionKind: "book-create" });
+    finish({ session: { sessionId, bookId: null, sessionKind: "book-create" } });
+    await Promise.all([upload, parallel]);
+    expect(store.getState().sessions[sessionId]).toMatchObject({ isDraft: false, messages: [] });
+    expect(Object.values(store.getState().sessionIdsByBook).flat()).toContain(sessionId);
+    expect(store.getState().input).toBe("还没发出的取材要求");
+    expect(fetchJson.mock.calls.some(([path]) => path === "/agent")).toBe(false);
+  });
+
   it("aborts only the previous chat round when activating another session", async () => {
     const store = createTestStore();
     const previousId = store.getState().createDraftSession(null, "chat");

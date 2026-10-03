@@ -7,13 +7,16 @@ export type HashRoute =
   | { page: "book"; bookId: string }
   | { page: "book-outline"; bookId: string }
   | { page: "book-settings"; bookId: string }
-  | { page: "book-ask"; bookId: string; sessionId?: string }
+  | { page: "book-ask"; bookId: string; sessionId?: string; importSources?: boolean }
   | { page: "book-ground"; bookId: string }
   | { page: "book-weave"; bookId: string }
   | { page: "book-write"; bookId: string }
   | { page: "author" }
   | { page: "book-intro" }
-  | { page: "book-create"; sessionId?: string }
+  | { page: "new-work" }
+  | { page: "materials" }
+  | { page: "maintenance"; bookId?: string }
+  | { page: "book-create"; sessionId?: string; importSources?: boolean }
   | { page: "services" }
   | { page: "project-settings"; section?: "advanced" }
   | { page: "service-detail"; serviceId: string }
@@ -45,33 +48,38 @@ function decodePart(value: string): string {
 function parseHash(hash: string): HashRoute {
   const [path, query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
   const sessionId = new URLSearchParams(query).get("session") || undefined;
+  const importSources = new URLSearchParams(query).get("import") === "1";
+  const askQuery = { ...(sessionId ? { sessionId } : {}), ...(importSources ? { importSources: true } : {}) };
 
   if (!path || path === "/") return { page: "dashboard" };
   if (path === "author") return { page: "author" };
   if (path === "chat") return { page: "chat" };
+  if (path === "new") return { page: "new-work" };
+  if (path === "materials") return { page: "materials" };
+  if (path === "maintenance") {
+    const bookId = new URLSearchParams(query).get("book") || undefined;
+    return { page: "maintenance", ...(bookId ? { bookId } : {}) };
+  }
   if (path === "config" || path === "services") return { page: "services" };
   if (path === "settings") return { page: "project-settings" };
-  if (path === "settings/advanced") return { page: "project-settings", section: "advanced" };
-  if (path === "import") return { page: "import" };
-  if (path === "translation") return { page: "translation" };
+  if (path === "settings/advanced") return { page: "maintenance" };
+  if (path === "import") return { page: "materials" };
+  if (path === "translation" || path === "radar" || path === "daemon") return { page: "maintenance" };
   if (path === "update") return { page: "update" };
-  if (path === "genres") return { page: "genres" };
-  if (path === "style") return { page: "style" };
-  if (path === "radar") return { page: "radar" };
+  if (path === "genres" || path === "style") return { page: "materials" };
   if (path === "doctor") return { page: "doctor" };
   const importMatch = path.match(/^import\/(chapters|canon|fanfic|spinoff|imitation)$/);
-  if (importMatch) return { page: "import", tab: importMatch[1] as "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" };
-  if (path === "book/new") return sessionId ? { page: "book-create", sessionId } : { page: "book-create" };
+  if (importMatch) return { page: "materials" };
+  if (path === "book/new") return { page: "book-create", ...askQuery };
   if (path === "book/intro") return { page: "book-intro" };
 
   const serviceMatch = path.match(/^services\/([^/]+)$/);
   if (serviceMatch) return { page: "service-detail", serviceId: decodePart(serviceMatch[1]) };
 
   if (path === "logs") return { page: "logs" };
-  if (path === "daemon") return { page: "daemon" };
 
   const bookAskMatch = path.match(/^book\/([^/]+)\/ask$/);
-  if (bookAskMatch) return { page: "book-ask", bookId: decodePart(bookAskMatch[1]), ...(sessionId ? { sessionId } : {}) };
+  if (bookAskMatch) return { page: "book-ask", bookId: decodePart(bookAskMatch[1]), ...askQuery };
 
   const bookGroundMatch = path.match(/^book\/([^/]+)\/ground$/);
   if (bookGroundMatch) return { page: "book-ground", bookId: decodePart(bookGroundMatch[1]) };
@@ -99,16 +107,16 @@ function parseHash(hash: string): HashRoute {
   if (playMatch) return { page: "play", projectId: decodePart(playMatch[1]) };
 
   const filmMatch = path.match(/^film\/([^/]+)$/);
-  if (filmMatch) return { page: "film", projectId: decodePart(filmMatch[1]) };
+  if (filmMatch) return { page: "maintenance" };
 
   const flowMatch = path.match(/^flow\/([^/]+)$/);
-  if (flowMatch) return { page: "flow", projectId: decodePart(flowMatch[1]) };
+  if (flowMatch) return { page: "maintenance" };
 
   const filmAuthorMatch = path.match(/^film-author\/([^/]+)$/);
-  if (filmAuthorMatch) return { page: "film-author", projectId: decodePart(filmAuthorMatch[1]) };
+  if (filmAuthorMatch) return { page: "maintenance" };
 
   const studioFilmMatch = path.match(/^studio\/film\/([^/]+)$/);
-  if (studioFilmMatch) return { page: "film-studio", projectId: decodePart(studioFilmMatch[1]) };
+  if (studioFilmMatch) return { page: "maintenance" };
 
   const shortSettingsMatch = path.match(/^short\/([^/]+)\/settings$/);
   if (shortSettingsMatch) return { page: "short-settings", storyId: decodePart(shortSettingsMatch[1]) };
@@ -127,6 +135,9 @@ function routeToHash(route: HashRoute): string {
     case "dashboard": return "#/";
     case "author": return "#/author";
     case "book-intro": return "#/book/intro";
+    case "new-work": return "#/new";
+    case "materials": return "#/materials";
+    case "maintenance": return `#/maintenance${route.bookId ? `?book=${encodeURIComponent(route.bookId)}` : ""}`;
     case "chat": return "#/chat";
     case "book": return `#/book/${encodeURIComponent(route.bookId)}`;
     case "book-outline":
@@ -134,33 +145,40 @@ function routeToHash(route: HashRoute): string {
     case "book-settings":
     case "book-write": return `#/book/${encodeURIComponent(route.bookId)}/write`;
     case "logs": return "#/logs";
-    case "daemon": return "#/daemon";
-    case "genres": return "#/genres";
-    case "style": return "#/style";
-    case "radar": return "#/radar";
+    case "daemon": return "#/maintenance";
+    case "genres": return "#/materials";
+    case "style": return "#/materials";
+    case "radar": return "#/maintenance";
     case "doctor": return "#/doctor";
     case "chapter": return `#/book/${encodeURIComponent(route.bookId)}/chapter/${route.chapterNumber}`;
     case "analytics": return `#/book/${encodeURIComponent(route.bookId)}/analytics`;
     case "truth": return `#/book/${encodeURIComponent(route.bookId)}/truth`;
-    case "book-ask": return `#/book/${encodeURIComponent(route.bookId)}/ask${route.sessionId ? `?session=${encodeURIComponent(route.sessionId)}` : ""}`;
+    case "book-ask": return `#/book/${encodeURIComponent(route.bookId)}/ask${askRouteQuery(route)}`;
     case "book-ground": return `#/book/${encodeURIComponent(route.bookId)}/ground`;
-    case "book-create": return `#/book/new${route.sessionId ? `?session=${encodeURIComponent(route.sessionId)}` : ""}`;
+    case "book-create": return `#/book/new${askRouteQuery(route)}`;
     case "services": return "#/services";
-    case "project-settings": return route.section === "advanced" ? "#/settings/advanced" : "#/settings";
-    case "translation": return "#/translation";
+    case "project-settings": return route.section === "advanced" ? "#/maintenance" : "#/settings";
+    case "translation": return "#/maintenance";
     case "update": return "#/update";
-    case "import": return route.tab ? `#/import/${route.tab}` : "#/import";
+    case "import": return "#/materials";
     case "service-detail": return `#/services/${encodeURIComponent(route.serviceId)}`;
     case "play": return `#/play/${encodeURIComponent(route.projectId)}`;
-    case "film": return `#/film/${encodeURIComponent(route.projectId)}`;
-    case "flow": return `#/flow/${encodeURIComponent(route.projectId)}`;
-    case "film-author": return `#/film-author/${encodeURIComponent(route.projectId)}`;
-    case "film-studio": return `#/studio/film/${encodeURIComponent(route.projectId)}`;
+    case "film":
+    case "flow":
+    case "film-author":
+    case "film-studio": return "#/maintenance";
     case "short": return `#/short/${encodeURIComponent(route.storyId)}`;
     case "short-settings": return `#/short/${encodeURIComponent(route.storyId)}/settings`;
     case "short-analytics": return `#/short/${encodeURIComponent(route.storyId)}/analytics`;
     default: return "";
   }
+}
+
+function askRouteQuery(route: { sessionId?: string; importSources?: boolean }): string {
+  const parts: string[] = [];
+  if (route.sessionId) parts.push(`session=${encodeURIComponent(route.sessionId)}`);
+  if (route.importSources) parts.push("import=1");
+  return parts.length ? `?${parts.join("&")}` : "";
 }
 
 export { parseHash, routeToHash }; // for testing

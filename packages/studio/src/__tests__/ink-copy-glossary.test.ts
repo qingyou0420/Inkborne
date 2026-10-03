@@ -52,6 +52,6 @@ describe("P0-A ink copy glossary", () => {
     expect(i18n).toMatch(/"cockpit\.writeNext": \{ zh: "写下一章（旧管线）", en: "Write next \(legacy\)"/);
     expect(i18n).toMatch(/"cockpit\.weave": \{ zh: "织卷", en: "Weave"/);
     expect(read("src/components/StudioHeader.tsx")).toMatch(/回到书架/);
-    expect(read("src/pages/ServiceListPage.tsx")).toMatch(/t\("settings\.title"\)/);
+    expect(read("src/pages/ServiceListPage.tsx")).toMatch(/t\("settings\.modelsTab"\)/);
   });
 });

@@ -28,7 +28,13 @@ The desired interface is quiet Chinese ink: calligraphic stage names, Song-style
 
 Ask is conversation-first with a collapsible canon. Ground and Weave have no conversation area; manuscripts and catalogs lead. Write uses a collapsible chapter list. All manuscripts are read-only until Edit. Review occupies a collapsible right panel. Edit, Review and Adopt remain direct actions; regeneration and versions are secondary actions.
 
-Zero books opens author/name and the first-book invitation; one book resumes its last stage; multiple books opens the cover bookshelf. Author identity persists across books. Global import, model configuration, theme and previous extra tools converge under one configuration entry. Existing capabilities remain reachable without duplicate prominent entries.
+Zero books opens New work, with novel and short-story choices; novels then open the author/name invitation. One book resumes its last stage; multiple books opens the cover bookshelf. Author identity persists across books.
+
+The configuration menu contains exactly five entries: 外观设置、模型配置、作者信息、导入资料、系统维护. Eight independent authoring roles lead model configuration; connection management and short-story cover settings are secondary. Appearance includes language. System maintenance collects activity/logs, diagnostics, local folders, source-file inspection and updates. Work settings live on the bookshelf and book overview; authoring-book length changes belong to Ask canon. Ask conversation history lives in Ask.
+
+Material imports go into Ask as persistent source documents, for discussion and candidate canon generation/review/revision. Original files are preserved. TXT, Markdown, text PDF and HTML are supported, with explicit extraction/coverage errors and a combined 120,000-character active-source limit; no silent truncation or automatic chapter import. Text supports UTF-8 and BOM-marked UTF-16LE/BE; unreadable encodings and damaged extracted copies stop processing with a reimport message. Authors must still adopt candidate canon. Style references and genre choices belong to Ask rather than separate legacy managers.
+
+Retired from the desktop product: market radar, AIGC detection/automatic anti-detection rewriting, external notifications, translation production, film/script/storyboard production, automatic chapter writing, old model-routing and prompt-pack editors, old chapter/canon import production, fanfiction/spinoff/imitation creation. Old links no longer open their editors, and old Studio production requests cannot restart them. Preserve existing files and necessary core/CLI compatibility; reading/exporting historical artifacts and cancellation are not destructive cleanup targets.
 
 ## Platform and boundaries
 

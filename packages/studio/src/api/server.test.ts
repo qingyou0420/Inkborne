@@ -371,6 +371,14 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     defaultChapterLength: actual.defaultChapterLength,
     inferLanguage: actual.inferLanguage,
     ingestMaterial: actual.ingestMaterial,
+    importAskSource: actual.importAskSource,
+    listAskSources: actual.listAskSources,
+    inspectAskSources: actual.inspectAskSources,
+    removeAskSource: actual.removeAskSource,
+    readAskSourceContext: actual.readAskSourceContext,
+    ASK_SOURCE_MAX_CHARS: actual.ASK_SOURCE_MAX_CHARS,
+    findDraftBySession: actual.findDraftBySession,
+    ensureAuthoringDraft: actual.ensureAuthoringDraft,
     chatCompletion: chatCompletionMock,
     runWorkerAgent: runWorkerAgentMock,
     loadProjectConfig: loadProjectConfigMock,
@@ -858,34 +866,19 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(isSafeBookId("demo/book")).toBe(false);
   }, 60_000);
 
-  it("returns from /api/daemon/start before the first write cycle finishes", async () => {
-    let resolveStart: (() => void) | undefined;
-    schedulerStartMock.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveStart = resolve;
-        }),
-    );
-
+  it("retires automatic writing while preserving daemon status and stop", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-
-    const responseOrTimeout = await Promise.race([
-      app.request("http://localhost/api/v1/daemon/start", { method: "POST" }),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 30)),
-    ]);
-
-    expect(responseOrTimeout).not.toBe("timeout");
-
-    const response = responseOrTimeout as Response;
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ ok: true, running: true });
-
+    const response = await app.request("http://localhost/api/v1/daemon/start", { method: "POST" });
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
+    expect(schedulerStartMock).not.toHaveBeenCalled();
     const status = await app.request("http://localhost/api/v1/daemon");
-    await expect(status.json()).resolves.toEqual({ running: true });
-
-    resolveStart?.();
-  }, 60_000);
+    await expect(status.json()).resolves.toEqual({ running: false });
+    const stopped = await app.request("http://localhost/api/v1/daemon/stop", { method: "POST" });
+    expect(stopped.status).toBe(400);
+    await expect(stopped.json()).resolves.toEqual({ error: "Daemon not running" });
+  });
 
   it("rejects book routes with path traversal ids", async () => {
     const { createStudioServer } = await import("./server.js");
@@ -1109,71 +1102,29 @@ describe("createStudioServer daemon lifecycle", () => {
     }));
   });
 
-  it("reloads latest llm config for radar scans without restarting the studio server", async () => {
-    const startupConfig = {
-      ...cloneProjectConfig(),
-      llm: {
-        ...cloneProjectConfig().llm,
-        model: "stale-model",
-        baseUrl: "https://stale.example.com/v1",
-      },
-    };
-
-    const freshConfig = {
-      ...cloneProjectConfig(),
-      llm: {
-        ...cloneProjectConfig().llm,
-        model: "fresh-model",
-        baseUrl: "https://fresh.example.com/v1",
-      },
-    };
-    loadProjectConfigMock.mockResolvedValue(freshConfig);
-
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(startupConfig as never, root);
-
-    const response = await app.request("http://localhost/api/v1/radar/scan", {
-      method: "POST",
-    });
-
-    expect(response.status).toBe(200);
-    expect(runRadarMock).toHaveBeenCalledTimes(1);
-    expect(pipelineConfigs.at(-1)).toMatchObject({
-      model: "fresh-model",
-      defaultLLMConfig: expect.objectContaining({
-        model: "fresh-model",
-        baseUrl: "https://fresh.example.com/v1",
-      }),
-    });
-  });
-
-  it("persists Studio radar scans and exposes scan history", async () => {
-    runRadarMock.mockResolvedValueOnce({
-      timestamp: "2026-05-14T12:00:00.000Z",
-      marketSummary: "女频短篇复仇继续强势",
-      recommendations: [],
-    });
-
+  it("rejects retired radar scans before invoking a model", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/radar/scan", { method: "POST" });
+    expect(response.status).toBe(410);
+    expect(runRadarMock).not.toHaveBeenCalled();
+    expect(createLLMClientMock).not.toHaveBeenCalled();
+  });
 
+  it("keeps historical radar scans readable after retiring new scans", async () => {
+    const result = { timestamp: "2026-05-14T12:00:00.000Z", marketSummary: "旧市场报告", recommendations: [] };
+    await mkdir(join(root, "radar"), { recursive: true });
+    const path = join(root, "radar", "scan-2026-05-14T12-00-00-000Z.json");
+    const bytes = JSON.stringify(result);
+    await writeFile(path, bytes, "utf-8");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
     const scan = await app.request("http://localhost/api/v1/radar/scan", { method: "POST" });
-    expect(scan.status).toBe(200);
-
+    expect(scan.status).toBe(410);
     const history = await app.request("http://localhost/api/v1/radar/history");
     expect(history.status).toBe(200);
-    await expect(history.json()).resolves.toMatchObject({
-      items: [
-        {
-          file: "scan-2026-05-14T12-00-00-000Z.json",
-          timestamp: "2026-05-14T12:00:00.000Z",
-          summaryPreview: "女频短篇复仇继续强势",
-          result: {
-            marketSummary: "女频短篇复仇继续强势",
-          },
-        },
-      ],
-    });
+    await expect(history.json()).resolves.toMatchObject({ items: [{ result: { marketSummary: "旧市场报告" } }] });
+    expect(await readFile(path, "utf-8")).toBe(bytes);
   });
 
   it("updates the first-run language immediately after the language selector saves", async () => {
@@ -3176,6 +3127,30 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(reviseDraftMock).toHaveBeenCalledWith("demo-book", 3, "rewrite");
   });
 
+  it("retires legacy anti-detect revision before model calls or manuscript writes", async () => {
+    const chapterPath = join(root, "books", "demo-book", "chapters", "0003_Demo.md");
+    const configPath = join(root, "inkos.json");
+    const originalChapter = await readFile(chapterPath);
+    const originalConfig = await readFile(configPath);
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/revise/3", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "anti-detect", brief: "降低检测分数" }),
+    });
+
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
+    expect(createLLMClientMock).not.toHaveBeenCalled();
+    expect(reviseDraftMock).not.toHaveBeenCalled();
+    expect(pipelineConfigs).toHaveLength(0);
+    expect(await readFile(chapterPath)).toEqual(originalChapter);
+    expect(await readFile(configPath)).toEqual(originalConfig);
+    await expect(access(join(root, "books", "demo-book", "chapters", ".versions"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("exposes editable chapter briefs, generated plans, and archived versions", async () => {
     const bookDir = join(root, "books", "demo-book");
     const runtimeDir = join(bookDir, "story", "runtime");
@@ -3945,132 +3920,43 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(access(join(root, "books", "取消样本"))).rejects.toThrow();
   });
 
-  it("executes confirmed derivative works as typed tools and binds their real book artifacts", async () => {
-    const session = {
-      sessionId: "derivative-session",
-      bookId: null,
-      sessionKind: "chat",
-      title: null,
-      messages: [],
-      events: [],
-      draftRounds: [],
-      createdAt: 1,
-      updatedAt: 1,
-    };
-    loadBookSessionMock.mockResolvedValue(session);
+  it("rejects saved derivative and retired film/translation confirmations before execution", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-    const cases = [
-      {
-        intent: "fanfic_init",
-        payload: { fanficCreate: { title: "霜港来信", sourceText: "正典片段", sourceName: "霜港" } },
-        factory: createFanficBookToolMock,
-        tool: "fanfic_create",
-        bookId: "霜港来信",
-      },
-      {
-        intent: "continuation_import",
-        payload: { continuationImport: { title: "雾港续章", sourcePath: ".inkos/uploads/novel.txt" } },
-        factory: createContinuationImportToolMock,
-        tool: "continuation_import",
-        bookId: "雾港续章",
-      },
-      {
-        intent: "spinoff_create",
-        payload: { spinoffCreate: { title: "雨夜旧账", parentBookId: "harbor", direction: "老船工视角" } },
-        factory: createSpinoffBookToolMock,
-        tool: "spinoff_create",
-        bookId: "雨夜旧账",
-      },
-      {
-        intent: "style_imitation",
-        payload: { imitationCreate: { title: "纸灯新案", referenceText: "参考片段", storyIdea: "原创县城悬疑" } },
-        factory: createImitationBookToolMock,
-        tool: "imitation_create",
-        bookId: "纸灯新案",
-      },
-    ] as const;
-
-    for (const [index, item] of cases.entries()) {
-      loadBookSessionMock.mockResolvedValue({ ...session, sessionId: `derivative-session-${index}` });
+    for (const intent of ["fanfic_init", "continuation_import", "spinoff_create", "style_imitation", "script_create", "storyboard_create", "interactive_film_create", "translation_create", "draft_structure", "connect_choice", "remove_node"]) {
       const response = await app.request("http://localhost/api/v1/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instruction: `确认执行 ${item.intent}`,
-          sessionId: `derivative-session-${index}`,
-          sessionKind: "chat",
-          actionSource: "button",
-          requestedIntent: item.intent,
-          actionPayload: item.payload,
-        }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: "重新执行历史确认卡", sessionId: "retired-session", sessionKind: "chat", actionSource: "button", requestedIntent: intent }),
       });
-
-      const responseBody = await response.clone().json();
-      expect(response.status, `${item.intent}: ${JSON.stringify(responseBody)}`).toBe(200);
-      expect(runAgentSessionMock).not.toHaveBeenCalled();
-      expect(item.factory).toHaveBeenCalled();
-      const json = await response.json() as {
-        session: { activeBookId?: string };
-        details: { toolExecutions: Array<{ tool: string; details?: Record<string, unknown> }> };
-      };
-      expect(json.session.activeBookId).toBe(item.bookId);
-      expect(json.details.toolExecutions[0]).toMatchObject({
-        tool: item.tool,
-        details: { kind: "book_created", bookId: item.bookId },
-      });
-      expect(migrateBookSessionMock).toHaveBeenCalledWith(root, `derivative-session-${index}`, item.bookId);
+      expect(response.status, intent).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
     }
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+    expect(createFanficBookToolMock).not.toHaveBeenCalled();
+    expect(createSpinoffBookToolMock).not.toHaveBeenCalled();
+    expect(createImitationBookToolMock).not.toHaveBeenCalled();
+    expect(createContinuationImportToolMock).not.toHaveBeenCalled();
+    expect(migrateBookSessionMock).not.toHaveBeenCalled();
+    expect(createLLMClientMock).not.toHaveBeenCalled();
   });
 
-  it("does not bind a confirmed derivative result when its book artifact is missing", async () => {
-    loadBookSessionMock.mockResolvedValue({
-      sessionId: "missing-derivative-session",
-      bookId: null,
-      sessionKind: "chat",
-      title: null,
-      messages: [],
-      events: [],
-      draftRounds: [],
-      createdAt: 1,
-      updatedAt: 1,
-    });
-    createFanficBookToolMock.mockImplementationOnce(() => ({
-      name: "fanfic_create",
-      execute: vi.fn(async () => ({
-        content: [{ type: "text", text: "Claimed success without files." }],
-        details: {
-          kind: "book_created",
-          creationKind: "fanfic",
-          bookId: "不存在的同人",
-          title: "不存在的同人",
-          params: { sourceText: "正典片段" },
-        },
-      })),
-    }));
+  it("rejects retired film sessions on creation and resume without deleting history", async () => {
+    loadBookSessionMock.mockResolvedValue({ sessionId: "film-history", bookId: null, sessionKind: "interactive-film", messages: [], events: [], title: "历史影视", createdAt: 1, updatedAt: 1 });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-
-    const response = await app.request("http://localhost/api/v1/agent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        instruction: "确认创建不存在的同人",
-        sessionId: "missing-derivative-session",
-        sessionKind: "chat",
-        actionSource: "button",
-        requestedIntent: "fanfic_init",
-        actionPayload: {
-          fanficCreate: { title: "不存在的同人", sourceText: "正典片段" },
-        },
-      }),
+    for (const kind of ["script", "storyboard", "interactive-film", "interactive-film-authoring"]) {
+      const response = await app.request("http://localhost/api/v1/sessions", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionKind: kind }),
+      });
+      expect(response.status, kind).toBe(410);
+    }
+    const resume = await app.request("http://localhost/api/v1/agent", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "film-history", instruction: "继续旧影视项目" }),
     });
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: "BOOK_CREATION_INCOMPLETE" },
-    });
-    expect(migrateBookSessionMock).not.toHaveBeenCalled();
+    expect(resume.status).toBe(410);
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+    expect(deleteBookSessionMock).not.toHaveBeenCalled();
+    expect((await app.request("http://localhost/api/v1/sessions/film-history")).status).toBe(200);
   });
 
   it("infers English before directly executing a confirmed short action", async () => {
@@ -6457,6 +6343,59 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(agentConfig.apiKey).toBe("");
   });
 
+  it("restores an upload-only Ask session, draft, and source list after reopening the server", async () => {
+    const core = await vi.importActual<typeof import("@actalk/inkos-core")>("@actalk/inkos-core");
+    const sessionId = "1788325716279-sources";
+    createAndPersistBookSessionMock.mockImplementationOnce(core.createAndPersistBookSession);
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const persisted = await app.request("/api/v1/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, bookId: null, sessionKind: "book-create" }),
+    });
+    expect(persisted.status).toBe(200);
+    const ensured = await app.request("/api/v1/authoring/drafts/ensure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId }) });
+    const draft = await ensured.json() as { draftId: string };
+    const body = new FormData(); body.append("draftId", draft.draftId); body.append("file", new File(["只有上传，没有首条对话。结尾仍然存在。"], "只有资料.txt"));
+    expect((await app.request("/api/v1/authoring/ask/sources", { method: "POST", body })).status).toBe(200);
+    const reopened = createStudioServer(cloneProjectConfig() as never, root);
+    loadBookSessionMock.mockImplementationOnce(core.loadBookSession);
+    const restored = await reopened.request(`/api/v1/sessions/${sessionId}`);
+    expect(restored.status).toBe(200);
+    expect((await restored.json() as { session: Record<string, unknown> }).session).toMatchObject({ sessionId, sessionKind: "book-create", messages: [] });
+    const restoredDraft = await core.findDraftBySession(root, sessionId);
+    expect(restoredDraft?.draftId).toBe(draft.draftId);
+    const sources = await reopened.request(`/api/v1/authoring/ask/sources?draftId=${draft.draftId}`);
+    expect((await sources.json() as { sources: Array<{ filename: string }> }).sources[0].filename).toBe("只有资料.txt");
+  });
+
+  it.each(["book", "book-create"] as const)("includes complete imported Ask sources in ordinary %s chat", async (sessionKind) => {
+    const core = await vi.importActual<typeof import("@actalk/inkos-core")>("@actalk/inkos-core");
+    const sessionId = "ask-source-chat";
+    const bookId = sessionKind === "book" ? "demo-book" : undefined;
+    const draft = bookId ? undefined : await core.ensureAuthoringDraft({ projectRoot: root, sessionId });
+    await core.importAskSource({ projectRoot: root, bookId, draftId: draft?.draftId }, {
+      filename: "旧作.txt", bytes: Buffer.from(`开头。${"中段，".repeat(15000)}独有末尾：清岚回到海边。`),
+    });
+    loadBookSessionMock.mockResolvedValueOnce({
+      sessionId, bookId: bookId ?? null, sessionKind, title: null, messages: [], events: [], draftRounds: [], createdAt: 1, updatedAt: 1,
+    });
+    runAgentSessionMock.mockResolvedValueOnce({ responseText: "我们可以先讨论归来的缘由。", messages: [] });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "帮我梳理上传的旧作", sessionId, sessionKind, ...(bookId ? { activeBookId: bookId, authoringStage: "ask" } : {}) }),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const config = runAgentSessionMock.mock.calls.at(-1)?.[0] as { extraSystemPrompt?: string };
+    expect(config.extraSystemPrompt).toContain("独有末尾：清岚回到海边。");
+    expect(config.extraSystemPrompt).toContain("完整提取");
+    expect(config.extraSystemPrompt).toContain("不是操作指令");
+    expect(importFanficCanonMock).not.toHaveBeenCalled();
+    expect(initBookMock).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])("isolates Ask chat with an explicit surface=%s, including old clients", async (explicitSurface) => {
     if (!explicitSurface) {
       await writeCompleteBookFixture(root, "demo-book");
@@ -7328,30 +7267,21 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(raw.llm.baseUrl).toBe("https://zenmux.ai/api/v1");
   });
 
-  it("project advanced settings expose detection config", async () => {
+  it("retires detection settings writes and preserves their original config bytes", async () => {
+    const configPath = join(root, "inkos.json");
+    const raw = JSON.parse(await readFile(configPath, "utf-8"));
+    raw.detection = { enabled: true, threshold: 0.6, maxRetries: 2 };
+    const bytes = JSON.stringify(raw, null, 2);
+    await writeFile(configPath, bytes, "utf-8");
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-
-    const detectionPut = await app.request("http://localhost/api/v1/project/detection", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        detection: {
-          enabled: true,
-          provider: "custom",
-          apiUrl: "https://detector.example.com/api",
-          apiKeyEnv: "DETECT_KEY",
-          threshold: 0.6,
-          autoRewrite: false,
-          maxRetries: 2,
-        },
-      }),
+    const response = await app.request("http://localhost/api/v1/project/detection", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ detection: null }),
     });
-    await expect(detectionPut.json()).resolves.toMatchObject({ ok: true });
-
-    const detectionAfter = await app.request("http://localhost/api/v1/project/detection");
-    await expect(detectionAfter.json()).resolves.toMatchObject({
-      detection: { enabled: true, threshold: 0.6, maxRetries: 2 },
-    });
+    expect(response.status).toBe(410);
+    expect(await readFile(configPath, "utf-8")).toBe(bytes);
+    const original = await app.request("http://localhost/api/v1/project/detection");
+    await expect(original.json()).resolves.toMatchObject({ detection: { enabled: true, threshold: 0.6 } });
   });
 
   it("exposes CLI-parity book actions through Studio endpoints", async () => {
@@ -7392,265 +7322,53 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(reviseFoundationMock).toHaveBeenCalledWith("demo-book", "make the protagonist colder");
   });
 
-  it("uploads an external motherbook and imports its extracted text as canon", async () => {
-    loadBookConfigMock.mockResolvedValue({ id: "demo-book", fanficMode: "canon" });
+  it("returns 410 from retired feature entry points without modifying old files", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-    const source = "# 第一章\n\n林舟在旧码头发现了母本中的关键规则。";
-
-    const upload = await app.request("http://localhost/api/v1/import/canon/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: "motherbook.md",
-        dataUrl: `data:text/markdown;base64,${Buffer.from(source).toString("base64")}`,
-      }),
-    });
-    expect(upload.status).toBe(200);
-    const uploaded = await upload.json() as { storedPath: string };
-
-    const imported = await app.request("http://localhost/api/v1/books/demo-book/import/canon-file", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: uploaded.storedPath, filename: "motherbook.md" }),
-    });
-    expect(imported.status).toBe(200);
-    const body = await imported.json() as { material: { id: string; markdownPath: string } };
-    await expect(access(join(root, body.material.markdownPath))).resolves.toBeUndefined();
-    expect(importFanficCanonMock).toHaveBeenCalledWith(
-      "demo-book",
-      expect.stringContaining("林舟在旧码头发现了母本中的关键规则"),
-      "motherbook",
-      "canon",
-    );
-  });
-
-  it("spinoff/init validates input, 404s a missing parent, and otherwise runs initSpinoffBook", async () => {
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(cloneProjectConfig() as never, root);
-
-    const missing = await app.request("http://localhost/api/v1/spinoff/init", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "番外·林深往事" }),
-    });
-    expect(missing.status).toBe(400);
+    const preserved = join(root, "books", "demo-book", "story", "fanfic_canon.md");
+    await mkdir(join(root, "books", "demo-book", "story"), { recursive: true });
+    await writeFile(preserved, "旧同人资料，继续保留", "utf-8");
+    for (const [method, path] of [
+      ["POST", "/fanfic/init"], ["POST", "/books/demo-book/fanfic/refresh"], ["POST", "/spinoff/init"], ["POST", "/imitation/init"],
+      ["POST", "/translations/upload"], ["POST", "/translations/create"], ["POST", "/translations/old/run"],
+      ["POST", "/import/canon/upload"], ["POST", "/books/demo-book/import/canon-file"], ["POST", "/books/demo-book/import/chapters"],
+      ["POST", "/books/demo-book/detect/1"], ["POST", "/books/demo-book/detect-all"], ["PUT", "/project/notify"],
+      ["PUT", "/project/model-overrides"], ["PUT", "/prompt-packs/legacy"],
+      ["POST", "/projects/old/story-graph/delta"], ["POST", "/projects/old/nodes/node/image"],
+    ]) {
+      const response = await app.request(`http://localhost/api/v1${path}`, { method });
+      expect(response.status, path).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
+    }
+    expect(await readFile(preserved, "utf-8")).toBe("旧同人资料，继续保留");
+    expect((await app.request("http://localhost/api/v1/books/demo-book/fanfic")).status).toBe(200);
+    expect(importFanficCanonMock).not.toHaveBeenCalled();
     expect(initSpinoffBookMock).not.toHaveBeenCalled();
-
-    loadBookConfigMock.mockRejectedValueOnce(new Error("not found"));
-    const noParent = await app.request("http://localhost/api/v1/spinoff/init", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "番外·林深往事", parentBookId: "ghost-book" }),
-    });
-    expect(noParent.status).toBe(404);
-    expect(initSpinoffBookMock).not.toHaveBeenCalled();
-
-    loadBookConfigMock.mockResolvedValueOnce({ genre: "urban", language: "zh", platform: "tomato" });
-    const ok = await app.request("http://localhost/api/v1/spinoff/init", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "番外·林深往事", parentBookId: "memory-clinic", direction: "学生时代" }),
-    });
-    await expect(ok.json()).resolves.toMatchObject({ status: "creating", bookId: "番外-林深往事" });
-    await vi.waitFor(() => expect(initSpinoffBookMock).toHaveBeenCalledTimes(1));
-    expect(initSpinoffBookMock.mock.calls[0]?.[1]).toBe("memory-clinic");
-    expect(initSpinoffBookMock.mock.calls[0]?.[2]).toBe("学生时代");
-  });
-
-  it("spinoff/init rejects a duplicate target book id before running the pipeline", async () => {
-    await mkdir(join(root, "books", "existing-book", "story"), { recursive: true });
-    await writeFile(join(root, "books", "existing-book", "book.json"), JSON.stringify({ id: "existing-book" }), "utf-8");
-    await writeFile(join(root, "books", "existing-book", "story", "story_bible.md"), "# existing", "utf-8");
-
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(cloneProjectConfig() as never, root);
-    loadBookConfigMock.mockResolvedValueOnce({ genre: "urban", language: "zh", platform: "tomato" });
-
-    const response = await app.request("http://localhost/api/v1/spinoff/init", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Existing Book", parentBookId: "parent-book" }),
-    });
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining('Book "existing-book" already exists'),
-    });
-    expect(initSpinoffBookMock).not.toHaveBeenCalled();
-  });
-
-  it("imitation/init requires title+reference+idea and otherwise runs initImitationBook", async () => {
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(cloneProjectConfig() as never, root);
-
-    const missing = await app.request("http://localhost/api/v1/imitation/init", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "仿写新书", storyIdea: "一个原创故事" }),
-    });
-    expect(missing.status).toBe(400);
     expect(initImitationBookMock).not.toHaveBeenCalled();
-
-    const ok = await app.request("http://localhost/api/v1/imitation/init", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "仿写新书", referenceText: "参考文本片段……", storyIdea: "一个原创故事", sourceName: "范本" }),
-    });
-    await expect(ok.json()).resolves.toMatchObject({ status: "creating", bookId: "仿写新书" });
-    await vi.waitFor(() => expect(initImitationBookMock).toHaveBeenCalledTimes(1));
-    expect(initImitationBookMock.mock.calls[0]?.[2]).toBe("一个原创故事");
+    expect(createLLMTranslationModelMock).not.toHaveBeenCalled();
   });
 
-  it("uploads a translation source, creates a translation project, lists it, and exports markdown", async () => {
+  it("lists, reads and exports a historical translation without permitting a new run", async () => {
+    const actual = await vi.importActual<typeof import("@actalk/inkos-core")>("@actalk/inkos-core");
+    const sourcePath = join(root, "old-translation.md");
+    await writeFile(sourcePath, "# 第一章 雨夜\n\n雨水落在旧码头。\n", "utf-8");
+    const created = await actual.createTranslationProjectFromFile(root, {
+      filePath: "old-translation.md", sourceLanguage: "zh", targetLanguage: "en", title: "历史译稿",
+    });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-    const source = "# 第一章 雨夜\n\n雨水落在旧码头。\n";
-    const dataUrl = `data:text/markdown;base64,${Buffer.from(source, "utf-8").toString("base64")}`;
-
-    const upload = await app.request("http://localhost/api/v1/translations/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "source.md", dataUrl }),
-    });
-    expect(upload.status).toBe(200);
-    const uploaded = await upload.json() as { storedPath: string };
-    expect(uploaded.storedPath).toMatch(/^\.inkos\/uploads\/translation\//);
-
-    const create = await app.request("http://localhost/api/v1/translations/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filePath: uploaded.storedPath,
-        sourceLanguage: "zh",
-        targetLanguage: "en",
-        title: "Rain Translation",
-      }),
-    });
-    expect(create.status).toBe(200);
-    const created = await create.json() as { projectId: string; title: string; projectDir: string; manifest: { id: string; chapters: unknown[] } };
-    expect(created.projectId).toBe(created.manifest.id);
-    expect(created.title).toBe("Rain Translation");
-    expect(created.manifest.chapters).toHaveLength(1);
-
     const list = await app.request("http://localhost/api/v1/translations");
-    await expect(list.json()).resolves.toMatchObject({
-      translations: [expect.objectContaining({ projectId: created.manifest.id, title: "Rain Translation" })],
-    });
-
+    await expect(list.json()).resolves.toMatchObject({ translations: [{ projectId: created.manifest.id, title: "历史译稿" }] });
+    expect((await app.request(`http://localhost/api/v1/translations/${created.manifest.id}`)).status).toBe(200);
     const exported = await app.request(`http://localhost/api/v1/translations/${created.manifest.id}/export`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ format: "md" }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ format: "md" }),
     });
     expect(exported.status).toBe(200);
-    const exportedBody = await exported.json() as { outputPath: string; chaptersExported: number };
-    expect(exportedBody.chaptersExported).toBe(1);
-    await expect(access(exportedBody.outputPath)).resolves.toBeUndefined();
-  });
-
-  it("surfaces translation model failures without masking upstream provider errors", async () => {
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(cloneProjectConfig() as never, root);
-    const source = "# 第一章 雨夜\n\n雨水落在旧码头。\n";
-    const dataUrl = `data:text/markdown;base64,${Buffer.from(source, "utf-8").toString("base64")}`;
-
-    const upload = await app.request("http://localhost/api/v1/translations/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "source.md", dataUrl }),
-    });
-    const uploaded = await upload.json() as { storedPath: string };
-
-    const create = await app.request("http://localhost/api/v1/translations/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filePath: uploaded.storedPath,
-        sourceLanguage: "自动识别",
-        targetLanguage: "英语",
-        title: "Rain Translation",
-      }),
-    });
-    const created = await create.json() as { projectId: string };
-    createLLMTranslationModelMock.mockReturnValueOnce({
-      translateSegments: vi.fn(async () => {
-        throw new Error("503 The model provider is temporarily unavailable.");
-      }),
-      reviewChapter: vi.fn(async () => ({
-        passed: true,
-        summary: "OK",
-        issues: [],
-      })),
-    });
-
-    const run = await app.request(`http://localhost/api/v1/translations/${created.projectId}/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ batchSize: 8 }),
-    });
-
-    const body = await run.json();
-    expect({ status: run.status, body }).toMatchObject({
-      status: 502,
-      body: {
-      error: {
-        code: "TRANSLATION_RUN_FAILED",
-        message: expect.stringContaining("503 The model provider is temporarily unavailable."),
-      },
-      },
-    });
-  });
-
-  it("returns translated chapter text in translation detail for in-page review", async () => {
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(cloneProjectConfig() as never, root);
-    const source = "# 第一章 雨夜\n\n雨水落在旧码头。\n\n她把账本压进怀里。\n";
-    const dataUrl = `data:text/markdown;base64,${Buffer.from(source, "utf-8").toString("base64")}`;
-
-    const upload = await app.request("http://localhost/api/v1/translations/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "source.md", dataUrl }),
-    });
-    const uploaded = await upload.json() as { storedPath: string };
-
-    const create = await app.request("http://localhost/api/v1/translations/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filePath: uploaded.storedPath,
-        sourceLanguage: "自动识别",
-        targetLanguage: "英语",
-        title: "Rain Translation",
-      }),
-    });
-    const created = await create.json() as { projectId: string };
-
-    const run = await app.request(`http://localhost/api/v1/translations/${created.projectId}/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ batchSize: 8 }),
-    });
-    expect(run.status).toBe(200);
-
-    const detail = await app.request(`http://localhost/api/v1/translations/${created.projectId}`);
-    expect(detail.status).toBe(200);
-    await expect(detail.json()).resolves.toMatchObject({
-      chapters: [
-        {
-          number: 1,
-          title: "雨夜",
-          status: "reviewed",
-          segments: [
-            {
-              index: 1,
-              source: "雨水落在旧码头。",
-              target: "Translated: 雨水落在旧码头。",
-            },
-            {
-              index: 2,
-              source: "她把账本压进怀里。",
-              target: "Translated: 她把账本压进怀里。",
-            },
-          ],
-        },
-      ],
-    });
+    const output = await exported.json() as { outputPath: string; chaptersExported: number };
+    expect(output.chaptersExported).toBe(1);
+    await expect(access(output.outputPath)).resolves.toBeUndefined();
+    expect((await app.request(`http://localhost/api/v1/translations/${created.manifest.id}/run`, { method: "POST" })).status).toBe(410);
+    expect(createLLMTranslationModelMock).not.toHaveBeenCalled();
   });
 
 });

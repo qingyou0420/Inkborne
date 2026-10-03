@@ -5,6 +5,8 @@
  */
 
 import type { BookStageId } from "./book-stage";
+import type { AuthoringCatalogEntry, AuthoringWorkspace } from "./authoring-workspace";
+import { roleFromPath } from "./truth-display";
 
 export interface StageGuideCopy {
   readonly title: string;
@@ -101,12 +103,47 @@ export interface FourStepCopyInput {
   readonly askDone: boolean;
   readonly grounded: boolean;
   readonly roleCount: number;
+  readonly authoring?: AuthoringWorkspace;
   readonly lockedVolumes: number;
   readonly outlineDone: boolean;
   readonly plannedChapters: number;
   readonly writtenChapters: number;
   readonly targetChapters: number;
   readonly weaveReady: boolean;
+}
+
+function isPersonEntry(entry: AuthoringCatalogEntry): boolean {
+  const path = entry.file.replace(/\\/g, "/").replace(/^story\//, "");
+  if (roleFromPath(path)) return true;
+  // Catalog categories are author/model supplied. A relationship chart is
+  // a setting entry, not one person, even when its category mentions people.
+  const category = entry.category.trim();
+  if (/关系|關係|relationships?|relations?\b/i.test(category)) return false;
+  return /人物|角色|主角|配角|\b(characters?|people|cast)\b/i.test(category);
+}
+
+function studyGroundCopy(input: FourStepCopyInput, isZh: boolean): string {
+  const workspace = input.authoring;
+  const entries = workspace?.catalog?.entries ?? [];
+  if (workspace?.authoringBook || entries.length) {
+    const visible = entries.filter((entry) => !entry.archived);
+    const adopted = visible.filter((entry) => Boolean(entry.adoptedArtifactId));
+    const people = adopted.filter(isPersonEntry).length;
+    const progress = `${adopted.length}/${visible.length}`;
+    if (!visible.length) return isZh ? "尚未拟定设定目录" : "No settings catalog yet";
+    if (!adopted.length) {
+      return isZh
+        ? `设定尚未采用 ${progress} · 0 位已采用人物`
+        : `No settings adopted ${progress} · 0 adopted people`;
+    }
+    const allAdopted = adopted.length === visible.length;
+    return isZh
+      ? `${allAdopted ? "设定全部采用" : "设定部分采用"} ${progress} · ${people} 位已采用人物`
+      : `${allAdopted ? "All settings adopted" : "Settings partly adopted"} ${progress} · ${people} adopted people`;
+  }
+  return input.grounded
+    ? (isZh ? `设定已定稿 · ${input.roleCount} 位人物` : `Grounded · ${input.roleCount} people`)
+    : (isZh ? `设定未定稿 · ${input.roleCount} 位人物` : `Not grounded · ${input.roleCount} people`);
 }
 
 export function fourStepCopy(
@@ -116,9 +153,7 @@ export function fourStepCopy(
   const ask = input.askDone
     ? (isZh ? "故事正典已完成" : "Canon settled")
     : (isZh ? "故事正典未完成" : "Canon not settled");
-  const ground = input.grounded
-    ? (isZh ? `设定已定稿 · ${input.roleCount} 位人物` : `Grounded · ${input.roleCount} people`)
-    : (isZh ? `设定未定稿 · ${input.roleCount} 位人物` : `Not grounded · ${input.roleCount} people`);
+  const ground = studyGroundCopy(input, isZh);
   const planned = input.targetChapters > 0
     ? `${input.plannedChapters}/${input.targetChapters}`
     : String(input.plannedChapters);

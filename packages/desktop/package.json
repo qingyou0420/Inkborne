@@ -1,6 +1,6 @@
 {
   "name": "@fantawriter/desktop",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Lightbound / 轻光之集 desktop shell around the InkOS Studio engine",

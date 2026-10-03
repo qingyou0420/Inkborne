@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, mkdir } from "node:fs/promises";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { access, mkdtemp, rm, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStudioServer } from "../api/server.js";
@@ -16,18 +16,29 @@ describe("POST /api/v1/projects/:id/nodes/:nodeId/image", () => {
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-  it("generates (stubbed) and writes assetRef back", async () => {
-    const app = createStudioServer({} as never, root, { nodeImageGenerator: { generateImage: async () => ({ buffer: PNG, extension: "png" }) } });
+  it("returns 410 without generating an image or altering the historical graph", async () => {
+    const graphPath = join(root, "interactive-films", "p", "story-graph.json");
+    const original = await readFile(graphPath, "utf-8");
+    const generateImage = vi.fn(async () => ({ buffer: PNG, extension: "png" }));
+    const app = createStudioServer({} as never, root, { nodeImageGenerator: { generateImage } });
     const res = await app.request("/api/v1/projects/p/nodes/s/image", { method: "POST" });
-    expect(res.status).toBe(200);
-    const body = await res.json() as { assetRef: string; rev: number };
-    expect(body.assetRef).toBe("interactive-films/p/assets/nodes/s.png");
-    expect((await loadStoryGraph(root, "p"))?.nodes.find(n => n.id === "s")?.imageSlot?.assetRef).toBe(body.assetRef);
+    expect(res.status).toBe(410);
+    await expect(res.json()).resolves.toMatchObject({ error: { code: "FEATURE_RETIRED" } });
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(await readFile(graphPath, "utf-8")).toBe(original);
+    await expect(access(join(root, "interactive-films", "p", "assets"))).rejects.toMatchObject({ code: "ENOENT" });
+    const history = await app.request("/api/v1/projects/p/story-graph");
+    expect(history.status).toBe(200);
+    await expect(history.json()).resolves.toEqual(JSON.parse(original));
   });
 
-  it("404 for a missing node; 400 for an unsafe id", async () => {
-    const app = createStudioServer({} as never, root, { nodeImageGenerator: { generateImage: async () => ({ buffer: PNG, extension: "png" }) } });
-    expect((await app.request("/api/v1/projects/p/nodes/ghost/image", { method: "POST" })).status).toBe(404);
-    expect((await app.request("/api/v1/projects/..%2Fx/nodes/s/image", { method: "POST" })).status).toBe(400);
+  it("rejects missing-node and stale-path writes before resolving or modifying projects", async () => {
+    const original = await loadStoryGraph(root, "p");
+    const generateImage = vi.fn(async () => ({ buffer: PNG, extension: "png" }));
+    const app = createStudioServer({} as never, root, { nodeImageGenerator: { generateImage } });
+    expect((await app.request("/api/v1/projects/p/nodes/ghost/image", { method: "POST" })).status).toBe(410);
+    expect((await app.request("/api/v1/projects/..%2Fx/nodes/s/image", { method: "POST" })).status).toBe(410);
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(await loadStoryGraph(root, "p")).toEqual(original);
   });
 });

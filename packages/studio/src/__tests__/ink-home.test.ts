@@ -9,9 +9,7 @@ import type { TFunction } from "../hooks/use-i18n";
 const noop = () => {};
 const nav: StudioHeaderNav = {
   toDashboard: noop, toServices: noop, toProjectSettings: noop, toAuthor: noop,
-  toChat: noop, toAsk: noop, toBookCreate: noop, toDaemon: noop, toLogs: noop,
-  toGenres: noop, toStyle: noop, toTranslation: noop, toImport: noop, toRadar: noop,
-  toDoctor: noop, toCheckUpdate: noop, toAnalytics: noop, toFilmStudio: noop,
+  toMaterials: noop, toMaintenance: noop,
 };
 const t = ((key: string) => key) as TFunction;
 describe("ink home rendered hierarchy", () => {
