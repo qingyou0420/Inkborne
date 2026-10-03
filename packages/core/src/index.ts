@@ -847,7 +847,12 @@ export {
 } from "./utils/hook-governance.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 export { analyzeHookHealth } from "./utils/hook-health.js";
-export { atomicWritesInFlight } from "./utils/atomic-file-set.js";
+export {
+  atomicWritesInFlight,
+  recoverAtomicFileSetsIn,
+  recoverAtomicTransactionDir,
+  recoverProjectAtomicFileSets,
+} from "./utils/atomic-file-set.js";
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type WriteChapterGateOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";

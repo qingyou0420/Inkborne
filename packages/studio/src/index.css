@@ -415,8 +415,8 @@ h3 { font-size: 18px; }
 .stagger-5 { animation-delay: 0.25s; opacity: 0; }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes inkBreath {
@@ -1044,7 +1044,7 @@ input, select, textarea {
   width: 100%;
   text-align: left;
   padding: 9px 10px 9px 0;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
   color: var(--muted-foreground);
   border-bottom: 1px solid transparent;
@@ -1057,9 +1057,13 @@ input, select, textarea {
 }
 .one-directory button.dir-item small {
   display: block;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 400;
   margin-top: 2px;
+}
+.one-directory button.dir-item small.dir-meta {
+  font-size: 10px;
+  color: var(--muted-foreground);
 }
 .impact-dot {
   display: inline-block;

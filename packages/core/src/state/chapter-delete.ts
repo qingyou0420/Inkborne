@@ -1,5 +1,9 @@
 import { access, mkdir, readdir, rename, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { isLightweightAuthoringBook } from "../authoring/context.js";
+import { loadSerialLedger, SerialLedgerSchema } from "../authoring/serial-ledger.js";
+import { loadManifest, renderManifest, type AuthoringStoreRoot } from "../authoring/store.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { toPosixPath } from "../utils/posix-path.js";
 
@@ -54,18 +58,21 @@ export async function deleteLatestChapter(
 
   const bookDir = deps.bookDir(bookId);
   const rollbackTarget = latest - 1;
+  const lightweight = await isLightweightAuthoringBook(bookDir);
 
-  // Verify the rollback snapshot is usable BEFORE touching any file, so a
-  // failed restore cannot leave the book half-deleted.
-  for (const required of ["current_state.md", "pending_hooks.md"]) {
-    const snapshotFile = join(bookDir, "story", "snapshots", String(rollbackTarget), required);
-    try {
-      await stat(snapshotFile);
-    } catch {
-      throw new Error(
-        `Cannot delete chapter ${latest}: the state snapshot for chapter ${rollbackTarget} is missing `
-        + `(story/snapshots/${rollbackTarget}/${required}). Nothing was changed.`,
-      );
+  if (!lightweight) {
+    // Verify the rollback snapshot is usable BEFORE touching any file, so a
+    // failed restore cannot leave the book half-deleted.
+    for (const required of ["current_state.md", "pending_hooks.md"]) {
+      const snapshotFile = join(bookDir, "story", "snapshots", String(rollbackTarget), required);
+      try {
+        await stat(snapshotFile);
+      } catch {
+        throw new Error(
+          `Cannot delete chapter ${latest}: the state snapshot for chapter ${rollbackTarget} is missing `
+          + `(story/snapshots/${rollbackTarget}/${required}). Nothing was changed.`,
+        );
+      }
     }
   }
 
@@ -87,7 +94,9 @@ export async function deleteLatestChapter(
     trashedFiles.push(toPosixPath(join("chapters", ".trash", trashedName)));
   }
 
-  const discarded = await deps.rollbackToChapter(bookId, rollbackTarget);
+  const discarded = lightweight
+    ? await deleteLightweightChapterMemory(bookDir, bookId, latest, index)
+    : await deps.rollbackToChapter(bookId, rollbackTarget);
   const entry = index.find((chapter) => chapter.number === latest);
 
   return {
@@ -98,6 +107,65 @@ export async function deleteLatestChapter(
     rolledBackTo: rollbackTarget,
     discarded,
   };
+}
+
+async function deleteLightweightChapterMemory(
+  bookDir: string,
+  bookId: string,
+  chapterNumber: number,
+  index: ReadonlyArray<ChapterMeta>,
+): Promise<ReadonlyArray<number>> {
+  const nextIndex = index.filter((chapter) => chapter.number !== chapterNumber);
+  const root: AuthoringStoreRoot = { projectRoot: dirname(dirname(bookDir)), bookId };
+  const writes: AtomicFileWrite[] = [{
+    relativePath: "chapters/index.json",
+    content: `${JSON.stringify(nextIndex, null, 2)}\n`,
+  }];
+  try {
+    const manifest = await loadManifest(root);
+    const adoptedWrite = { ...manifest.adopted.write };
+    const candidateWrite = { ...manifest.candidates.write };
+    delete adoptedWrite[String(chapterNumber)];
+    delete candidateWrite[String(chapterNumber)];
+    writes.push({
+      relativePath: "story/workflow/manifest.json",
+      content: renderManifest({
+        ...manifest,
+        adopted: { ...manifest.adopted, write: adoptedWrite },
+        candidates: { ...manifest.candidates, write: candidateWrite },
+        coverage: {
+          ...manifest.coverage,
+          chaptersWrittenAdopted: Object.keys(adoptedWrite).length,
+        },
+      }),
+    });
+  } catch {
+    /* books without a workflow manifest still drop the chapter file and index */
+  }
+  try {
+    const ledger = await loadSerialLedger(bookDir);
+    if (ledger) {
+      writes.push({
+        relativePath: "story/state/serial-ledger.json",
+        content: `${JSON.stringify(SerialLedgerSchema.parse({
+          ...ledger,
+          updatedAt: new Date().toISOString(),
+          chapters: ledger.chapters.filter((chapter) => chapter.chapter !== chapterNumber),
+        }), null, 2)}\n`,
+      });
+    }
+  } catch {
+    /* corrupt ledger keeps its bytes; index and adopted pointers still drop this chapter */
+  }
+  await commitAtomicFileSet({
+    rootDir: bookDir,
+    writes,
+    deletes: [
+      `story/state/chapter-${chapterNumber}.md`,
+      `story/state/chapter-${chapterNumber}.ref.json`,
+    ],
+  });
+  return [chapterNumber];
 }
 
 async function pickAvailableName(dir: string, fileName: string): Promise<string> {

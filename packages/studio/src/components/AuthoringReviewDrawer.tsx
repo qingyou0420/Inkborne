@@ -24,6 +24,7 @@ export function AuthoringReviewDrawer({
   error,
   onRetry,
   reviseDisabled,
+  onLocateEvidence,
 }: {
   readonly open: boolean;
   readonly title: string;
@@ -38,6 +39,7 @@ export function AuthoringReviewDrawer({
   readonly error?: string | null;
   readonly onRetry?: () => void;
   readonly reviseDisabled?: boolean;
+  readonly onLocateEvidence?: (evidence: string) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [reuseStale, setReuseStale] = useState(false);
@@ -50,8 +52,36 @@ export function AuthoringReviewDrawer({
   const blocked = Boolean(report?.incomplete || ((report?.stale || historical) && !reuseStale));
   const stopping = Boolean(busy && onStop);
 
+  const actionFooter = issues.length > 0 || stopping ? (
+    <>
+      <span className="mr-auto text-sm text-muted-foreground">{isZh ? `已选 ${selected.length} 条` : `${selected.length} selected`}</span>
+      <button
+        type="button"
+        className="rounded-lg border border-border px-3 py-2 text-sm"
+        disabled={busy}
+        onClick={() => setSelected(issues.map((issue) => issue.issueId))}
+      >
+        {isZh ? "全选" : "Select all"}
+      </button>
+      <button
+        type="button"
+        className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
+        disabled={stopping ? false : busy || reviseDisabled || selected.length === 0 || blocked}
+        onClick={() => {
+          if (stopping) onStop?.();
+          else onRevise(selected, reuseStale);
+        }}
+        data-testid={stopping ? "write-stop" : "write-revise"}
+      >
+        {stopping
+          ? (isZh ? "停止" : "Stop")
+          : (isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`)}
+      </button>
+    </>
+  ) : null;
+
   return (
-    <ReadingSidePanel open={open} title={title} onClose={onClose} testId="authoring-review-drawer">
+    <ReadingSidePanel open={open} title={title} onClose={onClose} testId="authoring-review-drawer" footer={actionFooter}>
       {busy ? <p role="status" className="mb-4 text-sm text-muted-foreground">{isZh ? "正在审查，可继续对照文稿…" : "Reviewing. You can keep reading the manuscript…"}</p> : null}
       {error ? <p role="alert" className="mb-4 text-sm text-destructive">{error}</p> : null}
       {onRetry && (report || error) ? <button type="button" className="btn-ghost mb-4" disabled={busy || reviseDisabled} onClick={onRetry}>{isZh ? "重新审查" : "Retry review"}</button> : null}
@@ -93,6 +123,7 @@ export function AuthoringReviewDrawer({
                     issue={issue}
                     isZh={isZh}
                     checked={selected.includes(issue.issueId)}
+                    onLocateEvidence={onLocateEvidence}
                     onToggle={(checked) => {
                       setSelected((prev) => checked
                         ? [...prev, issue.issueId]
@@ -104,32 +135,6 @@ export function AuthoringReviewDrawer({
             ))
           )}
           {busy && progressLabel ? <p className="text-sm text-muted-foreground">{progressLabel}</p> : null}
-          {issues.length > 0 || stopping ? (
-            <div className="flex gap-2 pt-2">
-              <button
-                type="button"
-                className="rounded-lg border border-border px-3 py-2 text-sm"
-                disabled={busy}
-                onClick={() => setSelected(issues.map((issue) => issue.issueId))}
-              >
-                {isZh ? "全选" : "Select all"}
-              </button>
-              <button
-                type="button"
-                className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40"
-                disabled={stopping ? false : busy || reviseDisabled || selected.length === 0 || blocked}
-                onClick={() => {
-                  if (stopping) onStop?.();
-                  else onRevise(selected, reuseStale);
-                }}
-                data-testid={stopping ? "write-stop" : "write-revise"}
-              >
-                {stopping
-                  ? (isZh ? "停止" : "Stop")
-                  : (isZh ? `按 ${selected.length} 条意见修改` : `Revise ${selected.length} issues`)}
-              </button>
-            </div>
-          ) : null}
         </div>
       )}
     </ReadingSidePanel>
@@ -141,13 +146,16 @@ function IssueRow({
   isZh,
   checked,
   onToggle,
+  onLocateEvidence,
 }: {
   readonly issue: AuthoringIssue;
   readonly isZh: boolean;
   readonly checked: boolean;
   readonly onToggle: (checked: boolean) => void;
+  readonly onLocateEvidence?: (evidence: string) => void;
 }) {
   const automatic = issue.sources?.includes("自动检查");
+  const evidence = issue.evidence?.trim();
   return (
     <label className="flex gap-2 rounded-lg border border-border p-2 text-sm">
       <input
@@ -162,9 +170,35 @@ function IssueRow({
           <strong>{issue.title}</strong>
         </span>
         {issue.target ? <span className="mr-2 text-xs text-muted-foreground">{issue.target}</span> : null}
-        {issue.evidence ? <span className="block text-muted-foreground">{issue.evidence}</span> : null}
+        {evidence ? <span className="block text-muted-foreground">{evidence}</span> : null}
         {issue.reason ? <span className="block text-muted-foreground">{issue.reason}</span> : null}
         {issue.suggestion ? <span className="block">{issue.suggestion}</span> : null}
+        {evidence ? (
+          <span className="flex gap-2">
+            <button
+              type="button"
+              className="btn-ghost h-7 px-2 text-xs"
+              onClick={(event) => {
+                event.preventDefault();
+                void navigator.clipboard?.writeText(evidence);
+              }}
+            >
+              {isZh ? "复制依据" : "Copy evidence"}
+            </button>
+            {onLocateEvidence ? (
+              <button
+                type="button"
+                className="btn-ghost h-7 px-2 text-xs"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onLocateEvidence(evidence);
+                }}
+              >
+                {isZh ? "定位正文" : "Find in draft"}
+              </button>
+            ) : null}
+          </span>
+        ) : null}
       </span>
     </label>
   );

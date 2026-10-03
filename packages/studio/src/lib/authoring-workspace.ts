@@ -133,6 +133,13 @@ export interface AuthoringWorkspace {
       readonly requestedStart?: number;
       readonly requestedEnd?: number;
       readonly missingChapters?: ReadonlyArray<number>;
+      readonly completedChapters?: ReadonlyArray<number>;
+      readonly requirements?: string;
+      readonly entryIds?: ReadonlyArray<string>;
+      readonly selectedIssueIds?: ReadonlyArray<string>;
+      readonly revisionIssueIds?: ReadonlyArray<string>;
+      readonly revisionReuseStale?: boolean;
+      readonly entryVersions?: Readonly<Record<string, string>>;
     };
     readonly usage?: {
       readonly promptTokens?: number;

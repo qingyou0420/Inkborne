@@ -163,6 +163,9 @@ export const AuthoringRunCheckpointSchema = z.object({
   revisionArtifactId: z.string().optional(),
   revisionIssueIds: z.array(z.string()).optional(),
   revisionReuseStale: z.boolean().optional(),
+  entryIds: z.array(z.string()).optional(),
+  selectedIssueIds: z.array(z.string()).optional(),
+  entryVersions: z.record(z.string()).optional(),
 });
 export type AuthoringRunCheckpoint = z.infer<typeof AuthoringRunCheckpointSchema>;
 

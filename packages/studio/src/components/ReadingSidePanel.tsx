@@ -6,11 +6,12 @@ import { X } from "lucide-react";
 let openPanels = 0;
 
 /** Non-modal: writers can keep reading and selecting the manuscript beside the review. */
-export function ReadingSidePanel({ open, title, onClose, children, testId }: {
+export function ReadingSidePanel({ open, title, onClose, children, footer, testId }: {
   readonly open: boolean;
   readonly title: string;
   readonly onClose: () => void;
   readonly children: ReactNode;
+  readonly footer?: ReactNode;
   readonly testId?: string;
 }) {
   const titleId = useId();
@@ -54,6 +55,7 @@ export function ReadingSidePanel({ open, title, onClose, children, testId }: {
         <button ref={closeButton} type="button" className="btn-ghost" onClick={onClose} aria-label={/[\u3400-\u9fff]/.test(title) ? "收起审查" : "Close review"}><X size={18} /></button>
       </header>
       <div className="ink-review-content">{children}</div>
+      {footer ? <div className="ink-review-actions">{footer}</div> : null}
     </aside>, document.body,
   );
 }

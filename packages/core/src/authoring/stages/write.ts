@@ -32,9 +32,15 @@ import {
   chapterLengthNote,
   chapterMemoryFromSettle,
   countChapterChars,
+  foldSerialLedger,
+  formatSettleIdentity,
+  formatSettlePriorMemory,
   loadSerialLedger,
   parseSettleNote,
+  remapSettleNoteToIdentity,
   SerialLedgerSchema,
+  type LedgerChapter,
+  type SettleNote,
 } from "../serial-ledger.js";
 import { StateManager } from "../../state/manager.js";
 import {
@@ -697,7 +703,109 @@ function auditLine(issue: ReviewIssue): string {
 const SETTLE_PROMPT = [
   "根据刚采用的正文整理人物状态与伏笔变化。不要改正文。",
   "只输出一个 JSON 对象，包含 summary（这一章的一段话）、characters（[{name, status}]）、openHooks（[{id, label, targetChapter, note}]，新埋下还没收的线）、advanceHooks（推进了但没收回的旧线 id）、resolveHooks（已经收回的线 id）。拿不准时 summary 仍要写，其余留空数组。",
+  "已有伏笔必须沿用原 id。推进填 advanceHooks，收回填 resolveHooks，只有新埋的线才新建 id。",
 ];
+
+const SETTLE_BODY_LIMIT = 12_000;
+const SETTLE_SEGMENT = 6_000;
+
+export interface SettleCoverage {
+  readonly totalChars: number;
+  readonly segments: ReadonlyArray<{ readonly start: number; readonly end: number }>;
+}
+
+export function settleBodySegments(body: string): { readonly texts: readonly string[]; readonly coverage: SettleCoverage } {
+  const total = body.length;
+  if (total <= SETTLE_BODY_LIMIT) {
+    return { texts: [body], coverage: { totalChars: total, segments: total ? [{ start: 1, end: total }] : [] } };
+  }
+  const texts: string[] = [];
+  const segments: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  while (start < total) {
+    let end = Math.min(start + SETTLE_BODY_LIMIT, total);
+    const remaining = total - end;
+    if (remaining > 0 && remaining < SETTLE_SEGMENT && (end - start) + remaining <= SETTLE_BODY_LIMIT) {
+      end = total;
+    }
+    texts.push(body.slice(start, end));
+    segments.push({ start: start + 1, end });
+    start = end;
+  }
+  return { texts, coverage: { totalChars: total, segments } };
+}
+
+export function settleCoverageComplete(coverage: SettleCoverage | undefined): boolean {
+  if (!coverage?.segments) return false;
+  if (coverage.totalChars <= 0) return coverage.segments.length === 0;
+  const ordered = [...coverage.segments].sort((a, b) => a.start - b.start);
+  let next = 1;
+  for (const segment of ordered) {
+    if (segment.end < segment.start || segment.start > next) return false;
+    next = Math.max(next, segment.end + 1);
+  }
+  return next > coverage.totalChars;
+}
+
+function mergeSettleNotes(first: SettleNote, second: SettleNote): SettleNote {
+  const characters = new Map(first.characters.map((item) => [item.name, item]));
+  for (const item of second.characters) characters.set(item.name, item);
+  const hooks = new Map(first.openHooks.map((hook) => [hook.id, hook]));
+  for (const hook of second.openHooks) hooks.set(hook.id, hook);
+  return {
+    summary: [first.summary, second.summary].filter((item) => item.trim()).join("\n"),
+    characters: [...characters.values()],
+    openHooks: [...hooks.values()],
+    advanceHookIds: [...new Set([...first.advanceHookIds, ...second.advanceHookIds])],
+    resolveHookIds: [...new Set([...first.resolveHookIds, ...second.resolveHookIds])],
+  };
+}
+
+async function priorSettleMemory(root: AuthoringStoreRoot, bookDir: string, chapterNumber: number): Promise<{
+  readonly text: string;
+  readonly identity: LedgerChapter | undefined;
+}> {
+  const manifest = await loadManifest(root).catch(() => undefined);
+  const ledger = await loadSerialLedger(bookDir);
+  const identity = ledger?.chapters.find((entry) => entry.chapter === chapterNumber);
+  const folded = foldSerialLedger(ledger, manifest?.adopted.write, chapterNumber + 1);
+  return {
+    text: [formatSettlePriorMemory(folded), formatSettleIdentity(identity)].filter(Boolean).join("\n\n"),
+    identity,
+  };
+}
+
+async function requestSettleNote(input: {
+  readonly resolved: Awaited<ReturnType<typeof resolve>>;
+  readonly llm?: AuthoringLlmFn;
+  readonly signal?: AbortSignal;
+  readonly body: string;
+  readonly priorMemory: string;
+  readonly identity?: LedgerChapter;
+  readonly voice: string;
+}): Promise<{ readonly note: SettleNote; readonly coverage: SettleCoverage }> {
+  const { texts, coverage } = settleBodySegments(input.body);
+  let merged: SettleNote | undefined;
+  for (const [index, text] of texts.entries()) {
+    const coverageLine = coverage.segments[index]
+      ? `本段覆盖正文第 ${coverage.segments[index]!.start}-${coverage.segments[index]!.end} 字，全书共 ${coverage.totalChars} 字。`
+      : "";
+    const raw = await completeRole(input.resolved, [
+      ...SETTLE_PROMPT,
+      coverageLine,
+      texts.length > 1 ? `这是第 ${index + 1}/${texts.length} 段，请与已整理结果合并，不要丢掉上一章已有 id。` : "",
+      input.priorMemory,
+      merged ? `【已整理片段】\n${JSON.stringify(merged)}` : "",
+      text,
+    ].filter(Boolean).join("\n"), input.llm, input.signal, {
+      system: composeWriteSystemPrompt(input.resolved.instructions, input.voice),
+    });
+    const next = parseSettleNote(raw);
+    merged = merged ? mergeSettleNotes(merged, next) : next;
+  }
+  const note = remapSettleNoteToIdentity(merged ?? parseSettleNote(""), input.identity);
+  return { note, coverage };
+}
 
 export async function adoptChapterDraft(input: WriteRuntime & {
   readonly artifactId: string;
@@ -739,18 +847,25 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
   const lengthNote = chapterLengthNote(countChapterChars(chapterBody), book?.chapterWordCount);
   let settled = false;
   let settleError: string | undefined;
-  let settleText = "";
+  let note: SettleNote | undefined;
+  let settleCoverage: SettleCoverage | undefined;
   if (!input.deferSettle) {
     try {
       const resolved = await resolve(input.project, "write.main", input.root.projectRoot);
       const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
-      settleText = await completeRole(resolved, [
-        ...SETTLE_PROMPT,
-        chapterBody.slice(0, 8000),
-      ].join("\n"), input.settle ?? input.llm, signal, {
-        system: composeWriteSystemPrompt(resolved.instructions, voice),
+      const prior = await priorSettleMemory(input.root, bookDir, chapterNumber);
+      const settledNote = await requestSettleNote({
+        resolved,
+        llm: input.settle ?? input.llm,
+        signal,
+        body: chapterBody,
+        priorMemory: prior.text,
+        identity: prior.identity,
+        voice,
       });
-      settled = true;
+      note = settledNote.note;
+      settleCoverage = settledNote.coverage;
+      settled = settleCoverageComplete(settledNote.coverage);
     } catch (error) {
       if (signal?.aborted) {
         throw new Error("采用已中止，正文没有写入");
@@ -761,7 +876,6 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
   if (signal?.aborted) {
     throw new Error("采用已中止，正文没有写入");
   }
-  const note = settled ? parseSettleNote(settleText) : undefined;
   const manifest = await loadManifest(input.root);
   const adoptedWrite = { ...manifest.adopted.write, [chapter]: loaded.meta.artifactId };
   const nextManifest = renderManifest({
@@ -783,7 +897,7 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
     { relativePath: `story/workflow/artifacts/${loaded.meta.artifactId}/meta.json`, content: `${JSON.stringify(meta, null, 2)}\n` },
     { relativePath: `story/workflow/artifacts/${loaded.meta.artifactId}/body.md`, content: chapterBody.endsWith("\n") ? chapterBody : `${chapterBody}\n` },
   ];
-  if (note) {
+  if (note && settled) {
     const ledger = applyChapterMemory(
       await loadSerialLedger(bookDir),
       chapterMemoryFromSettle({ chapter: chapterNumber, artifactId: loaded.meta.artifactId, title, note }),
@@ -791,7 +905,7 @@ async function adoptChapterDraftInner(input: WriteRuntime & {
     const stateBody = note.summary.endsWith("\n") ? note.summary : `${note.summary}\n`;
     extraWrites.push(
       { relativePath: `story/state/chapter-${chapterNumber}.md`, content: stateBody },
-      { relativePath: `story/state/chapter-${chapterNumber}.ref.json`, content: `${JSON.stringify({ artifactId: loaded.meta.artifactId, chapterNumber }, null, 2)}\n` },
+      { relativePath: `story/state/chapter-${chapterNumber}.ref.json`, content: `${JSON.stringify({ artifactId: loaded.meta.artifactId, chapterNumber, ...(settleCoverage ? { coverage: settleCoverage } : {}) }, null, 2)}\n` },
       { relativePath: "story/state/serial-ledger.json", content: `${JSON.stringify(SerialLedgerSchema.parse(ledger), null, 2)}\n` },
     );
   }
@@ -859,21 +973,28 @@ async function settleAdoptedChapterInner(input: WriteRuntime & {
   try {
     await throwIfRunCancelled(input.root, runId);
     const voice = await loadCanonDocument(input.root).then((doc) => doc.canon.voice).catch(() => "");
-    const settleText = await completeRole(resolved, [
-      ...SETTLE_PROMPT,
-      loaded.body.slice(0, 8000),
-    ].join("\n"), input.settle ?? input.llm, signal, {
-      system: composeWriteSystemPrompt(resolved.instructions, voice),
+    const prior = await priorSettleMemory(input.root, bookDir, chapterNumber);
+    const settledNote = await requestSettleNote({
+      resolved,
+      llm: input.settle ?? input.llm,
+      signal,
+      body: loaded.body,
+      priorMemory: prior.text,
+      identity: prior.identity,
+      voice,
     });
     await throwIfRunCancelled(input.root, runId);
-    const note = parseSettleNote(settleText);
+    const note = settledNote.note;
+    if (!settleCoverageComplete(settledNote.coverage)) {
+      throw new Error("状态整理没有覆盖全文，未写入结算。");
+    }
     if (note) {
       const title = loaded.meta.title ?? `第${chapterNumber}章`;
       const ledger = applyChapterMemory(
         await loadSerialLedger(bookDir),
         chapterMemoryFromSettle({ chapter: chapterNumber, artifactId: loaded.meta.artifactId, title, note }),
       );
-      await writeChapterState(input.root, chapterNumber, loaded.meta.artifactId, note.summary);
+      await writeChapterState(input.root, chapterNumber, loaded.meta.artifactId, note.summary, settledNote.coverage);
       await writeFileAtomic(
         join(bookDir, "story", "state", "serial-ledger.json"),
         `${JSON.stringify(SerialLedgerSchema.parse(ledger), null, 2)}\n`,

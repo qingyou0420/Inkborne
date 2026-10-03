@@ -29,6 +29,14 @@ export interface AuthoringRunView {
   readonly producedArtifactIds?: ReadonlyArray<string>;
   readonly reportId?: string;
   readonly scope?: string;
+  readonly checkpoint?: {
+    readonly requirements?: string;
+    readonly entryIds?: ReadonlyArray<string>;
+    readonly selectedIssueIds?: ReadonlyArray<string>;
+    readonly revisionIssueIds?: ReadonlyArray<string>;
+    readonly revisionReuseStale?: boolean;
+    readonly entryVersions?: Readonly<Record<string, string>>;
+  };
 }
 
 export function isAuthoringRunActive(status?: string): boolean {

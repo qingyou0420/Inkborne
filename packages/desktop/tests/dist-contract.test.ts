@@ -24,19 +24,19 @@ const { CURRENT_SETUP_PREFIX, setupNamesForVersion } = require("../../../scripts
   setupNamesForVersion: (version: string) => { primary: string; aliases: string[]; legacy: string };
 };
 
-describe("3.0.0 Windows installer contract", () => {
-  it("keeps root and desktop on the same stable 3.0.0", () => {
-    expect(rootPkg.version).toBe("3.0.0");
-    expect(desktopPkg.version).toBe("3.0.0");
+describe("3.0.1 Windows installer contract", () => {
+  it("keeps root and desktop on the same stable 3.0.1", () => {
+    expect(rootPkg.version).toBe("3.0.1");
+    expect(desktopPkg.version).toBe("3.0.1");
     expect(desktopPkg.license).toBe("AGPL-3.0-only");
     expect(desktopPkg.name).toBe("@fantawriter/desktop");
     expect(rootPkg.scripts["dist:win"]).toBe("node scripts/dist-win.mjs");
     expect(rootPkg.scripts["dist:win"]).not.toMatch(/exit 1/);
   });
 
-  it("names the NSIS artifact Lightbound-Setup-3.0.0.exe and keeps appId", () => {
+  it("names the NSIS artifact Lightbound-Setup-3.0.1.exe and keeps appId", () => {
     // PR-1：主安装包、产品名、快捷方式改为 Lightbound / 轻光之集；appId 不变
-    expect(setupFileNameForVersion(rootPkg.version)).toBe("Lightbound-Setup-3.0.0.exe");
+    expect(setupFileNameForVersion(rootPkg.version)).toBe("Lightbound-Setup-3.0.1.exe");
     const yml = readFileSync(join(desktopDir, "electron-builder.yml"), "utf8");
     expect(yml).toMatch(/appId:\s*com\.fantawriter\.app/);
     expect(yml).toMatch(/productName:\s*Lightbound/);

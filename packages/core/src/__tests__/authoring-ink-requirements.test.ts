@@ -76,7 +76,7 @@ describe("ink task requirements", () => {
     const ctx=await fixture(async (call) => {
       const prompt=call.messages.map(message=>message.content).join("\n"); prompts.push(prompt);
       if (prompt.includes("拟定本书设定目录")) return JSON.stringify({categories:["人物"],entries:[{id:"person",name:"归人",category:"人物"}]});
-      if (call.roleId === "ground.review") return JSON.stringify({summary:"需调整",coverage:"1项",issues:[{issueId:"g1",target:"person",title:"冲突",severity:"improve",suggestion:"更具体"}]});
+      if (call.roleId === "ground.review") return JSON.stringify({summary:"需调整",coverage:"1项",issues:[{issueId:"g1",target:"person",title:"冲突",severity:"improve",suggestion:"更具体",evidence:"渡口旧信不得交给外人",reason:"正典已改交信约束"}]});
       return "只属于当前候选的渡口旧信。";
     });
     await proposeSettingsCatalog(ctx);
@@ -87,6 +87,10 @@ describe("ink task requirements", () => {
     const report=await reviewGroundEntries({...ctx,entryIds:["person"]});
     const revised=await reviseGroundEntry({...ctx,entryId:"person",reportId:report.reportId,selectedIssueIds:["g1"],requirements:requirement});
     expect(prompts.at(-1)).toContain(requirement);
+    expect(prompts.at(-1)).toContain("渡口旧信不得交给外人");
+    expect(prompts.at(-1)).toContain("正典已改交信约束");
+    expect(prompts.at(-1)).toContain("只属于当前候选");
+    expect(prompts.at(-1)).toMatch(/已采用正典|【已采用正典】/);
     expect((await loadArtifact(ctx.root,revised.artifactIds[0]!))?.meta.status).toBe("candidate");
     expect((await loadManifest(ctx.root)).adopted.ground).toHaveLength(0);
   });

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { ChapterMetaSchema, type ChapterMeta, type ChapterStatus } from "../models/chapter.js";
 import { archiveChapterVersion, storeAutosaveVersion } from "../state/chapter-workspace.js";
@@ -198,15 +198,15 @@ export async function persistAdoptedChapter(input: {
     { relativePath: "chapters/index.json", content: `${JSON.stringify(index, null, 2)}\n` },
     ...(input.extraWrites ?? []).filter((item) => item.relativePath !== relativePath && item.relativePath !== "chapters/index.json"),
   ];
+  const deletes = replaced
+    .filter((file) => file !== destName)
+    .map((file) => `chapters/${file}`);
   await commitAtomicFileSet({
     rootDir: input.bookDir,
     writes,
+    ...(deletes.length > 0 ? { deletes } : {}),
     ...(input.renameFile ? { renameFile: input.renameFile } : {}),
   });
-  for (const file of replaced) {
-    if (file === destName) continue;
-    await unlink(join(chaptersDir, file)).catch(() => undefined);
-  }
   return { relativePath, index };
 }
 

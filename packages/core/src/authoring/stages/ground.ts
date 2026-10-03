@@ -29,6 +29,7 @@ import {
   loadManifest,
   loadReport,
   loadRunControl,
+  throwIfRunCancelled,
   loadSettingsCatalog,
   newArtifactId,
   newRunId,
@@ -242,6 +243,12 @@ export async function generateGroundEntries(input: GroundRuntime & {
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: generated,
       error: rawError ? redactSecrets(rawError) : undefined,
+      checkpoint: {
+        requirements: input.requirements,
+        entryIds: targets.map((entry) => entry.id),
+        missingChapters: [],
+        completedChapters: [],
+      },
       ...(usage ? { usage } : {}),
       createdAt: startedAt,
       updatedAt: new Date().toISOString(),
@@ -442,6 +449,7 @@ export async function reviseGroundEntry(input: GroundRuntime & {
   readonly reportId: string;
   readonly selectedIssueIds: readonly string[];
   readonly reuseStale?: boolean;
+  readonly runId?: string;
 }): Promise<{ artifactIds: string[]; entryIds: string[] }> {
   const catalog = await loadSettingsCatalog(input.root);
   const report = await loadReport(input.root, input.reportId);
@@ -460,9 +468,13 @@ export async function reviseGroundEntry(input: GroundRuntime & {
   }
   if (groups.size === 0) throw new Error("选中的意见没有对应设定条目。");
   const resolved = await resolve(input.project, "ground.main", input.root.projectRoot);
+  const ctx = await assembleAuthoringContext(input.root, { stage: "ground" });
+  const runId = input.runId ?? newRunId();
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   const artifactIds: string[] = [];
   const entryIds: string[] = [];
   const revised = new Map<string, string>();
+  try {
   for (const [entryId, issues] of groups) {
     const entry = catalog.entries.find((item) => item.id === entryId);
     const artifactId = entry?.candidateArtifactId ?? entry?.adoptedArtifactId;
@@ -470,12 +482,23 @@ export async function reviseGroundEntry(input: GroundRuntime & {
     const loaded = await loadArtifact(input.root, artifactId);
     if (!loaded) continue;
     assertReportReusable(report, loaded.meta.artifactId, input.reuseStale || report.targetRefs.includes(loaded.meta.artifactId));
+    await throwIfRunCancelled(input.root, runId);
+    if (signal.aborted) throw new AuthoringRunCancelledError();
     const observed = await completeRoleObserved(resolved, [
       `按意见修改设定「${entry.name}」（id:${entry.id}）。只输出该条目 Markdown。不要改其他条目。`,
-      ...issues.map((issue) => `- ${issue.title}: ${issue.suggestion ?? ""}`),
+      "必须遵守当前已采用正典和意见里的证据、原因与建议。",
+      ...issues.map((issue) => [
+        `- ${issue.title}`,
+        issue.reason ? `  原因：${issue.reason}` : "",
+        issue.evidence ? `  依据：${issue.evidence}` : "",
+        issue.suggestion ? `  建议：${issue.suggestion}` : "",
+      ].filter(Boolean).join("\n")),
       input.requirements ? `作者本次要求：\n${input.requirements}` : "",
+      ctx.text,
       loaded.body,
-    ].join("\n"), { llm: input.llm });
+    ].filter(Boolean).join("\n"), { llm: input.llm, signal });
+    await throwIfRunCancelled(input.root, runId);
+    if (signal.aborted) throw new AuthoringRunCancelledError();
     const text = observed.content;
     const nextId = newArtifactId("ground", entry.id);
     await saveArtifact(input.root, {
@@ -487,8 +510,9 @@ export async function reviseGroundEntry(input: GroundRuntime & {
       source: "revise",
       status: "candidate",
       bodyPath: entry.file,
-      inputRefs: [{ kind: "report", id: report.reportId }],
+      inputRefs: [{ kind: "report", id: report.reportId }, ...ctx.refs],
       createdAt: new Date().toISOString(),
+      runId,
       label: entry.name,
     }, text);
     artifactIds.push(nextId);
@@ -496,7 +520,12 @@ export async function reviseGroundEntry(input: GroundRuntime & {
     revised.set(entry.id, nextId);
   }
   if (revised.size === 0) return { artifactIds, entryIds };
+  await throwIfRunCancelled(input.root, runId);
+  if (signal.aborted) throw new AuthoringRunCancelledError();
   await withBackgroundBookWrite(input.root, "研墨候选", async () => {
+    if (signal.aborted || await loadRunControl(input.root, runId) === "cancel") {
+      throw new AuthoringRunCancelledError();
+    }
     const latest = await loadSettingsCatalog(input.root);
     await saveSettingsCatalog(input.root, {
       ...latest,
@@ -505,8 +534,16 @@ export async function reviseGroundEntry(input: GroundRuntime & {
         return candidate ? { ...item, candidateArtifactId: candidate } : item;
       }),
     });
-  });
+  }, { signal });
   return { artifactIds, entryIds };
+  } catch (error) {
+    if (isAuthoringRunAbort(error, signal) || error instanceof AuthoringRunCancelledError) {
+      throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
+    }
+    throw error;
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
+  }
 }
 
 export async function reviseGroundEntries(

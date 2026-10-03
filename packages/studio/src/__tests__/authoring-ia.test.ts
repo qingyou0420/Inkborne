@@ -132,6 +132,10 @@ describe("authoring four-agent IA", () => {
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/previousChapterSettleHold/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/writeRetryAction/);
     expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/整理状态/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/locateManuscriptEvidence/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).toMatch(/write-manuscript-body/);
+    expect(read("src/components/AuthoringWritePanel.tsx")).not.toMatch(/window\.find/);
+    expect(read("src/components/AuthoringReviewDrawer.tsx")).toMatch(/定位正文/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/状态未整理/);
     expect(read("src/pages/BookDetail.tsx")).toMatch(/chapter-settle-/);
     expect(read("src/api/authoring-routes.ts")).toMatch(/serverStartedAt/);

@@ -474,6 +474,7 @@ export async function writeChapterState(
   chapterNumber: number,
   artifactId: string,
   body: string,
+  coverage?: { readonly totalChars: number; readonly segments: ReadonlyArray<{ readonly start: number; readonly end: number }> },
 ): Promise<void> {
   const paths = chapterStatePaths(root, chapterNumber);
   if (!paths) return;
@@ -482,7 +483,7 @@ export async function writeChapterState(
     rootDir: paths.dir,
     writes: [
       { relativePath: `chapter-${chapterNumber}.md`, content: note },
-      { relativePath: `chapter-${chapterNumber}.ref.json`, content: `${JSON.stringify({ artifactId, chapterNumber }, null, 2)}\n` },
+      { relativePath: `chapter-${chapterNumber}.ref.json`, content: `${JSON.stringify({ artifactId, chapterNumber, ...(coverage ? { coverage } : {}) }, null, 2)}\n` },
     ],
   });
 }

@@ -45,6 +45,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ExportMenu } from "./ExportMenu";
 import { registerNavigationGuard } from "../lib/edit-navigation";
 import { generationReviewNotes, withGenerationReview } from "../lib/generation-review-notes";
+import { locateManuscriptEvidence } from "../lib/locate-manuscript-evidence";
 import "./write-workspace.css";
 
 const AUTOSAVE_MS = 1500;
@@ -157,6 +158,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
   const seenGenerate = useRef(generateNonce);
   const candidateRef = useRef(candidate);
   const chapterTitleRef = useRef(chapterTitle);
+  const manuscriptRef = useRef<HTMLDivElement>(null);
   bodyRef.current = body;
   candidateRef.current = candidate;
   chapterTitleRef.current = chapterTitle;
@@ -820,6 +822,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
           } else setFailure(AUTHORING_SUBMIT_UNKNOWN_MESSAGE);
         });
       }}>{isZh ? "核对" : "Check"}</button> : null}</div> : null}
+      <div className="write-manuscript-body" data-testid="write-manuscript-body" ref={manuscriptRef}>
       {showLiveEditor ? <textarea
         className="manuscript-editor prose-body"
         aria-label={isZh ? `第 ${chapterNumber} 章候选正文` : `Chapter ${chapterNumber} candidate text`}
@@ -841,6 +844,7 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         }}
         data-testid="write-candidate-body"
       /> : !ready ? <p role="status" className="py-12 text-muted-foreground">{isZh ? "正在打开稿件…" : "Opening manuscript…"}</p> : readingBody.trim() ? <ManuscriptView body={readingBody} className="write-manuscript-reading" /> : <p className="py-16 text-muted-foreground">{isZh ? "这一章，还在等第一句话。" : "This chapter is waiting for its first sentence."}</p>}
+      </div>
       {generateChoice ? (
         <div className="space-y-2 rounded-xl border border-border bg-background px-3 py-3" data-testid="write-generate-choice">
           <p className="text-sm">{isZh ? "这一章有手改。要基于手改继续写，还是另起一稿？" : "This chapter has hand edits. Rewrite from them, or start a fresh draft?"}</p>
@@ -933,6 +937,17 @@ export const AuthoringWritePanel = forwardRef<AuthoringWritePanelHandle, {
         progressLabel={progressLabel}
         onRetry={() => void reviewCurrent()}
         onStop={busy === "revise" ? stopWriting : undefined}
+        onLocateEvidence={(evidence) => {
+          const host = manuscriptRef.current;
+          if (!host) {
+            showToast(isZh ? "正文里没有这段依据" : "This evidence is not in the draft", "info");
+            return;
+          }
+          const located = locateManuscriptEvidence(host, evidence);
+          if (!located.found) {
+            showToast(isZh ? "正文里没有这段依据" : "This evidence is not in the draft", "info");
+          }
+        }}
         onClose={() => setReportOpen(false)}
         onRevise={(issueIds, reuseStale) => {
           if (!candidate || !activeReport) return;

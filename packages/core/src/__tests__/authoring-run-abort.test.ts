@@ -6,8 +6,8 @@ import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
 import { abortAuthoringRun, endAuthoringRun } from "../authoring/run-abort.js";
 import { generateAskCanon } from "../authoring/stages/ask.js";
-import { generateGroundEntries, proposeSettingsCatalog } from "../authoring/stages/ground.js";
-import { generateWeaveStructure } from "../authoring/stages/weave.js";
+import { generateGroundEntries, proposeSettingsCatalog, reviseGroundEntry, reviewGroundEntries } from "../authoring/stages/ground.js";
+import { generateWeaveStructure, reviewWeave } from "../authoring/stages/weave.js";
 import {
   AuthoringRunCancelledError,
   authoringRootDir,
@@ -51,7 +51,9 @@ function project() {
     authoringRoles: {
       "ask.main": { modelId: "stub-main" },
       "ground.main": { modelId: "stub-main" },
+      "ground.review": { modelId: "stub-main" },
       "weave.main": { modelId: "stub-main" },
+      "weave.review": { modelId: "stub-main" },
     },
   });
 }
@@ -191,5 +193,73 @@ describe("authoring run abort and secret redaction", () => {
     const groundFile = await readFile(join(authoringRootDir(root), "runs", `${ground.runId}.json`), "utf-8");
     expect(groundFile).toContain("已隐藏");
     expect(groundFile).not.toContain(SECRET);
+  });
+
+  it("does not replace a ground candidate when revise is cancelled after a late model return", async () => {
+    const { root, bookId } = await book();
+    const ctx = { root, project: project() };
+    const catalogLlm: AuthoringLlmFn = async (call) => {
+      const text = call.messages.map((message) => message.content).join("\n");
+      if (text.includes("拟定本书设定目录")) {
+        return JSON.stringify({ categories: ["人物"], entries: [{ id: "shen", category: "人物", name: "沈砚" }] });
+      }
+      return "沈砚，港口会计。";
+    };
+    await proposeSettingsCatalog({ ...ctx, llm: catalogLlm });
+    await generateGroundEntries({ ...ctx, llm: catalogLlm });
+    const before = (await loadSettingsCatalog(root)).entries.find((item) => item.id === "shen")?.candidateArtifactId;
+    const report = await reviewGroundEntries({
+      ...ctx,
+      entryIds: ["shen"],
+      llm: async () => JSON.stringify({
+        summary: "收紧",
+        coverage: "1",
+        issues: [{ issueId: "g1", target: "shen", title: "职业", severity: "improve", suggestion: "写明账房" }],
+      }),
+    });
+    const runId = newRunId();
+    const result = reviseGroundEntry({
+      ...ctx,
+      runId,
+      reportId: report.reportId,
+      selectedIssueIds: ["g1"],
+      llm: async () => {
+        await saveRunControl(root, runId, "cancel");
+        abortAuthoringRun(bookId, runId);
+        return "这句不该成为候选。";
+      },
+    });
+    await expect(result).rejects.toBeInstanceOf(AuthoringRunCancelledError);
+    expect((await loadSettingsCatalog(root)).entries.find((item) => item.id === "shen")?.candidateArtifactId).toBe(before);
+    endAuthoringRun(bookId, runId);
+  });
+
+  it("does not save a weave review report after cancel", async () => {
+    const { root, bookId } = await book();
+    const ctx = { root, project: project() };
+    const structured = await generateWeaveStructure({
+      ...ctx,
+      llm: async () => JSON.stringify({
+        bookOutline: "港口",
+        volumes: [{ volumeNumber: 1, title: "上", startChapter: 1, endChapter: 12, body: "上卷" }],
+      }),
+    });
+    const runId = newRunId();
+    const pending = reviewWeave({
+      ...ctx,
+      artifactId: structured.artifactId,
+      coverage: "分卷",
+      runId,
+      llm: async () => {
+        await saveRunControl(root, runId, "cancel");
+        abortAuthoringRun(bookId, runId);
+        return JSON.stringify({ summary: "不该留下", coverage: "分卷", issues: [] });
+      },
+    });
+    await expect(pending).rejects.toBeInstanceOf(AuthoringRunCancelledError);
+    expect((await loadRun(root, runId))?.status).toBe("cancelled");
+    const reports = await listRuns(root);
+    void reports;
+    endAuthoringRun(bookId, runId);
   });
 });

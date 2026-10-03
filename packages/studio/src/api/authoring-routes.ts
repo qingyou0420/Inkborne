@@ -64,6 +64,7 @@ import {
   reviewWeave,
   reviseAskCanon,
   abortAuthoringRun,
+  AuthoringRunCancelledError,
   requestWriteRunCancel,
   reviseChapterDraft,
   reviseGroundEntry,
@@ -256,10 +257,11 @@ async function recordRunFailure(root: AuthoringStoreRoot, runId: string, error: 
   try {
     const current = await loadRun(root, runId);
     if (current && (current.status === "running" || current.status === "pausing")) {
+      const cancelled = error instanceof AuthoringRunCancelledError;
       const failed = {
         ...current,
-        status: "failed" as const,
-        error: taskError,
+        status: (cancelled ? "cancelled" : "failed") as "cancelled" | "failed",
+        error: cancelled ? undefined : taskError,
         updatedAt: new Date().toISOString(),
       };
       try {
@@ -310,6 +312,7 @@ function emptyRun(input: {
   readonly progressLabel?: string;
   readonly progressTotal?: number;
   readonly reportId?: string;
+  readonly checkpoint?: AuthoringRunRecord["checkpoint"];
 }): AuthoringRunRecord {
   const now = new Date().toISOString();
   return {
@@ -325,6 +328,7 @@ function emptyRun(input: {
     progressTotal: input.progressTotal,
     progressLabel: input.progressLabel,
     reportId: input.reportId,
+    checkpoint: input.checkpoint,
     modelSnapshot: {},
     producedArtifactIds: [],
     createdAt: now,
@@ -933,22 +937,50 @@ export function registerAuthoringRoutes(app: Hono, deps: AuthoringRouteDeps): vo
     const root = storeRoot(deps.root, body);
     const runId = newRunId();
     const now = new Date().toISOString();
+    const catalog = await loadSettingsCatalog(root).catch(() => undefined);
+    const selectedIds = body.selectedIssueIds ?? [];
+    const entryVersions: Record<string, string> = {};
+    for (const entry of catalog?.entries ?? []) {
+      const artifactId = entry.candidateArtifactId ?? entry.adoptedArtifactId;
+      if (artifactId) entryVersions[entry.id] = artifactId;
+    }
     await persistStartingRun(root, emptyRun({
       runId, stage: "ground", operation: "revise", roleId: "ground.main",
       bookId: body.bookId, reportId: body.reportId, progressLabel: "正在修订设定",
+      checkpoint: {
+        requirements: body.requirements,
+        selectedIssueIds: selectedIds,
+        revisionIssueIds: selectedIds,
+        revisionReuseStale: body.reuseStale,
+        entryIds: body.entryId ? [body.entryId] : undefined,
+        entryVersions,
+        missingChapters: [],
+        completedChapters: [],
+      },
     }));
     const work = reviseGroundEntry({
       root,
       project,
       entryId: body.entryId, requirements: body.requirements,
       reportId: body.reportId,
-      selectedIssueIds: body.selectedIssueIds ?? [],
+      selectedIssueIds: selectedIds,
       reuseStale: body.reuseStale,
+      runId,
     }).then(async (result) => {
       await saveRun(root, {
         runId, stage: "ground", operation: "revise", roleId: "ground.main", status: "completed",
         bookId: body.bookId, reportId: body.reportId, progressDone: 1, progressTotal: 1,
         progressLabel: "修订完成", modelSnapshot: {}, producedArtifactIds: result.artifactIds,
+        checkpoint: {
+          requirements: body.requirements,
+          selectedIssueIds: selectedIds,
+          revisionIssueIds: selectedIds,
+          revisionReuseStale: body.reuseStale,
+          entryIds: result.entryIds,
+          entryVersions,
+          missingChapters: [],
+          completedChapters: [],
+        },
         createdAt: now, updatedAt: new Date().toISOString(),
       });
       emitAuthoringRun(deps, root, { runId, stage: "ground", status: "completed", progressDone: 1, progressTotal: 1 });

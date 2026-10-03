@@ -494,6 +494,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     resolveAuthoringRole: actual.resolveAuthoringRole,
     bindRestoredChapter: actual.bindRestoredChapter,
     bindRestoredChapterUnlocked: actual.bindRestoredChapterUnlocked,
+    recoverProjectAtomicFileSets: actual.recoverProjectAtomicFileSets,
     autosaveChapterBody: actual.autosaveChapterBody,
     loadRoleApiKeys: actual.loadRoleApiKeys,
   };

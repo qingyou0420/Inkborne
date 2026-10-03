@@ -1736,4 +1736,111 @@ describe("weave stage", () => {
     const bold = await runCase("bold-alias-label", largeBodies("### 核心约束", "**别名**：听雨客。"), "听雨客在渡口依其人物设定行事。");
     expect(bold.writePrompt).toContain(facts[0]);
   });
+
+  it("treats old summaries as fallback when regenerating a range, not as this-round completion", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-weave-regen-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "重生规划",
+        oneLine: "测",
+        proposition: "",
+        protagonist: "",
+        conflict: "",
+        voice: "",
+        boundaries: "",
+        direction: "",
+        openQuestions: [],
+        targetChapters: 8,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    await adoptCoveringStructure(ctx, 8);
+    const first = await generateWeaveRange({
+      ...ctx,
+      startChapter: 1,
+      endChapter: 8,
+      llm: async (call) => {
+        const prompt = call.messages.map((message) => message.content).join("\n");
+        const range = /规划第 (\d+)-(\d+) 章/.exec(prompt);
+        const start = Number(range?.[1] ?? 1);
+        const end = Number(range?.[2] ?? 4);
+        return JSON.stringify({
+          chapters: Array.from({ length: end - start + 1 }, (_, index) => {
+            const number = start + index;
+            return { chapterNumber: number, title: `旧${number}`, summary: `OLD_${number} 旧概要。` };
+          }),
+        });
+      },
+    });
+    expect(first.status).toBe("completed");
+    let calls = 0;
+    const regenerated = await generateWeaveRange({
+      ...ctx,
+      startChapter: 1,
+      endChapter: 8,
+      requirements: "全部重写",
+      llm: async (call) => {
+        calls += 1;
+        const prompt = call.messages.map((message) => message.content).join("\n");
+        const range = /规划第 (\d+)-(\d+) 章/.exec(prompt);
+        const start = Number(range?.[1] ?? 1);
+        const end = Number(range?.[2] ?? 4);
+        if (calls === 1) {
+          expect(start).toBe(1);
+          expect(end).toBe(4);
+          return JSON.stringify({
+            chapters: [1, 2, 3, 4].map((number) => ({
+              chapterNumber: number,
+              title: `新${number}`,
+              summary: `NEW_${number} 新概要。`,
+            })),
+          });
+        }
+        throw new Error("second batch failed");
+      },
+    });
+    expect(calls).toBe(2);
+    expect(regenerated.status).toBe("partial");
+    const run = await loadRun(ctx.root, regenerated.runId);
+    expect(run?.status).toBe("partial");
+    expect(run?.progressDone).toBe(4);
+    expect(run?.progressTotal).toBe(8);
+    expect(run?.checkpoint?.completedChapters).toEqual([1, 2, 3, 4]);
+    expect(run?.checkpoint?.missingChapters).toEqual([5, 6, 7, 8]);
+    const partialBody = (await loadArtifact(ctx.root, regenerated.artifactId))?.body ?? "";
+    expect(partialBody).toContain("NEW_1");
+    expect(partialBody).toContain("OLD_5");
+    let resumeCalls = 0;
+    const resumed = await generateWeaveRange({
+      ...ctx,
+      startChapter: 1,
+      endChapter: 8,
+      resumeRunId: regenerated.runId,
+      llm: async (call) => {
+        resumeCalls += 1;
+        const prompt = call.messages.map((message) => message.content).join("\n");
+        const range = /规划第 (\d+)-(\d+) 章/.exec(prompt);
+        const start = Number(range?.[1] ?? 5);
+        const end = Number(range?.[2] ?? 8);
+        expect(start).toBe(5);
+        expect(end).toBe(8);
+        return JSON.stringify({
+          chapters: Array.from({ length: end - start + 1 }, (_, index) => {
+            const number = start + index;
+            return { chapterNumber: number, title: `续${number}`, summary: `RESUME_${number} 续写。` };
+          }),
+        });
+      },
+    });
+    expect(resumeCalls).toBe(1);
+    expect(resumed.status).toBe("completed");
+    const finished = await loadRun(ctx.root, regenerated.runId);
+    expect(finished?.checkpoint?.missingChapters).toEqual([]);
+    expect(finished?.checkpoint?.completedChapters).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const body = (await loadArtifact(ctx.root, resumed.artifactId))?.body ?? "";
+    expect(body).toContain("NEW_1");
+    expect(body).toContain("RESUME_5");
+    expect(body).not.toContain("OLD_5");
+  });
 });

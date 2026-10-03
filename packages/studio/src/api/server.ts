@@ -109,6 +109,7 @@ import {
   loadRoleApiKeys,
   resolveAuthoringRole,
   bindRestoredChapterUnlocked,
+  recoverProjectAtomicFileSets,
   autosaveChapterBody,
   type ActionPayload,
   type ActionSource,
@@ -3954,6 +3955,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           versionSource: "manual",
         },
       );
+      if (await isLightweightAuthoringBook(state.bookDir(id))) {
+        const chapterFile = result.touchedFiles.find((file) =>
+          /^chapters[/\\]\d+_.+\.md$/i.test(file.replace(/\\/g, "/")) && !file.includes(".versions")
+        );
+        const index = await state.loadChapterIndex(id);
+        await bindRestoredChapterUnlocked({
+          root: { projectRoot: root, bookId: id },
+          chapterNumber: num,
+          title: index.find((item) => item.number === num)?.title,
+          relativePath: chapterFile?.replace(/\\/g, "/"),
+          body: content,
+        });
+      }
       return c.json({ ok: true, chapterNumber: num, result });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
@@ -8261,6 +8275,9 @@ export async function startStudioServer(
     throw new Error("INKOS_STUDIO_PORT must be an explicit TCP port; refusing a missing or default 4567.");
   }
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
+  await recoverProjectAtomicFileSets(root).catch((error) => {
+    console.error("atomic file recovery", error);
+  });
 
   const app = createStudioServer(config, root);
 

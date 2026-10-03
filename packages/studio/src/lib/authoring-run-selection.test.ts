@@ -63,7 +63,7 @@ describe("retry dispatch", () => {
     expect(groundRetryAction({ operation: "review" }, true)).toBe("review");
     expect(groundRetryAction({ operation: "generate" }, false)).toBe("catalog");
     expect(groundRetryAction({ operation: "generate" }, true)).toBe("generate");
-    expect(groundRetryAction({ operation: "revise" }, true)).toBe("generate");
+    expect(groundRetryAction({ operation: "revise" }, true)).toBe("revise");
   });
 
   it("holds the next chapter while the previous settle is still live", () => {

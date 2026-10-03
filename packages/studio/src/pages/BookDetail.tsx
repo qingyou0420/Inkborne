@@ -587,8 +587,9 @@ export function BookDetail({
                   {item.title || t("chapter.label").replace("{n}", String(item.number))}
                   <small className={tone}>
                     <StageDot state={dotState} />
-                    {" "}{statusLabel}{item.stateMissing ? (isZh ? " · 状态未整理" : " · state unset") : ""} · {(item.wordCount ?? 0).toLocaleString()} {t("book.words")}
+                    {" "}{statusLabel}{item.stateMissing ? (isZh ? " · 状态未整理" : " · state unset") : ""}
                   </small>
+                  <small className="dir-meta">{(item.wordCount ?? 0).toLocaleString()} {t("book.words")}</small>
                 </button>
                 {selected ? <DropdownMenu>
                   <DropdownMenuTrigger

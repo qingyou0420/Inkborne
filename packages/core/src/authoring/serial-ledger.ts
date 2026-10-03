@@ -149,13 +149,34 @@ export function ledgerPath(bookDir: string): string {
   return join(bookDir, "story", "state", "serial-ledger.json");
 }
 
+export class SerialLedgerCorruptError extends Error {
+  override readonly name = "SerialLedgerCorruptError";
+  readonly path: string;
+  constructor(path: string, cause?: unknown) {
+    super(
+      `连载账本损坏，已保留原文件：${path}。请从 story/snapshots 里对应章的状态快照恢复后再整理。`,
+    );
+    this.path = path;
+    if (cause !== undefined) (this as Error & { cause?: unknown }).cause = cause;
+  }
+}
+
 export async function loadSerialLedger(bookDir: string): Promise<SerialLedger | undefined> {
+  const path = ledgerPath(bookDir);
+  let text: string;
   try {
-    const raw = JSON.parse(await readFile(ledgerPath(bookDir), "utf-8")) as unknown;
-    const parsed = SerialLedgerSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
+    text = await readFile(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new SerialLedgerCorruptError(path, error);
+  }
+  try {
+    const parsed = SerialLedgerSchema.safeParse(JSON.parse(text) as unknown);
+    if (!parsed.success) throw new SerialLedgerCorruptError(path, parsed.error);
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof SerialLedgerCorruptError) throw error;
+    throw new SerialLedgerCorruptError(path, error);
   }
 }
 
@@ -252,6 +273,71 @@ function clip(text: string, max: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= max) return trimmed;
   return `${trimmed.slice(0, Math.max(0, max - 1))}…`;
+}
+
+export function formatSettlePriorMemory(memory: FoldedMemory): string {
+  const characters = memory.characters
+    .filter((item) => item.name.trim())
+    .map((item) => `${item.name}：${item.status || "情况未变"}（第 ${item.chapter} 章）`);
+  const hooks = memory.hooks.map((hook) => {
+    const when = hook.targetChapter ? `，打算第 ${hook.targetChapter} 章收回` : "";
+    const note = hook.note ? `：${hook.note}` : "";
+    return `${hook.id}\t${hook.label}\t${hook.status}${when}${note}`;
+  });
+  return [
+    characters.length ? `【已有人物】\n${characters.join("\n")}` : "",
+    hooks.length ? `【已有伏笔】id、标签、状态（推进或收回时必须沿用原 id）\n${hooks.join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+export function formatSettleIdentity(chapter: LedgerChapter | undefined): string {
+  if (!chapter) return "";
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  const remember = (id: string, label = "") => {
+    if (!id.trim() || seen.has(id)) return;
+    seen.add(id);
+    lines.push(label.trim() ? `${id}\t${label.trim()}` : id);
+  };
+  for (const hook of chapter.openHooks) remember(hook.id, hook.label);
+  for (const id of chapter.advanceHookIds) remember(id);
+  for (const id of chapter.resolveHookIds) remember(id);
+  if (lines.length === 0) return "";
+  return [
+    "【本章上次伏笔身份】只用于沿用 id，不是当前事实。正文里还在的线必须用原 id；正文已不再埋的线不要写入 openHooks，也不要为同一条线新建 id。",
+    ...lines,
+  ].join("\n");
+}
+
+export function remapSettleNoteToIdentity(note: SettleNote, chapter: LedgerChapter | undefined): SettleNote {
+  if (!chapter) return note;
+  const knownIds = new Set([
+    ...chapter.openHooks.map((hook) => hook.id),
+    ...chapter.advanceHookIds,
+    ...chapter.resolveHookIds,
+  ]);
+  const byLabel = new Map<string, string>();
+  for (const hook of chapter.openHooks) {
+    const label = hook.label.trim();
+    if (label && !byLabel.has(label)) byLabel.set(label, hook.id);
+  }
+  const remap = (id: string, label?: string) => {
+    if (knownIds.has(id)) return id;
+    const fromLabel = label?.trim() ? byLabel.get(label.trim()) : undefined;
+    return fromLabel ?? id;
+  };
+  const openHooks = new Map<string, SettleNote["openHooks"][number]>();
+  for (const hook of note.openHooks) {
+    const remapped = { ...hook, id: remap(hook.id, hook.label) };
+    openHooks.set(remapped.id, remapped);
+  }
+  return {
+    summary: note.summary,
+    characters: note.characters,
+    openHooks: [...openHooks.values()],
+    advanceHookIds: [...new Set(note.advanceHookIds.map((id) => remap(id)))],
+    resolveHookIds: [...new Set(note.resolveHookIds.map((id) => remap(id)))],
+  };
 }
 
 export function formatFoldedMemory(memory: FoldedMemory): string {

@@ -224,4 +224,88 @@ describe("deleteLatestChapter", () => {
     const trashEntries = await readdir(join(bookDir, "chapters", ".trash"));
     expect(trashEntries.sort()).toEqual(["0002_落雨.md", "0009_幽灵.md"]);
   });
+
+  it("deletes the only chapter of a lightweight book without a chapter-0 snapshot", async () => {
+    const { root, bookDir } = await setupBook({
+      bookId: "light-one",
+      chapters: [{ number: 1, title: "起风", content: "# 第1章 起风\n\n第一章正文。" }],
+      snapshotChapters: [],
+    });
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "story", "canon.md"), "# 正典\n轻量书。\n", "utf-8");
+    await mkdir(join(bookDir, "story", "workflow"), { recursive: true });
+    await writeFile(join(bookDir, "story", "workflow", "manifest.json"), JSON.stringify({
+      version: 1,
+      updatedAt: "2026-10-03T00:00:00.000Z",
+      adopted: { write: { "1": "write-ch1" } },
+      candidates: { write: { "1": "write-ch1" } },
+      coverage: { chaptersWrittenAdopted: 1 },
+    }), "utf-8");
+    await mkdir(join(bookDir, "story", "state"), { recursive: true });
+    await writeFile(join(bookDir, "story", "state", "serial-ledger.json"), JSON.stringify({
+      version: 1,
+      updatedAt: "2026-10-03T00:00:00.000Z",
+      chapters: [{ chapter: 1, artifactId: "write-ch1", title: "起风", summary: "开场", characters: [], openHooks: [], advanceHookIds: [], resolveHookIds: [] }],
+    }), "utf-8");
+    await writeFile(join(bookDir, "story", "state", "chapter-1.md"), "开场\n", "utf-8");
+    await writeFile(join(bookDir, "story", "state", "chapter-1.ref.json"), JSON.stringify({ artifactId: "write-ch1", chapterNumber: 1 }), "utf-8");
+
+    const state = new StateManager(root);
+    const result = await deleteLatestChapter(state, "light-one");
+    expect(result.deletedChapter).toBe(1);
+    const savedIndex = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as ChapterMeta[];
+    expect(savedIndex).toEqual([]);
+    await expect(readFile(join(bookDir, "chapters", ".trash", "0001_起风.md"), "utf-8")).resolves.toContain("第一章正文");
+    const manifest = JSON.parse(await readFile(join(bookDir, "story", "workflow", "manifest.json"), "utf-8")) as { adopted: { write: Record<string, string> } };
+    expect(manifest.adopted.write["1"]).toBeUndefined();
+    const ledger = JSON.parse(await readFile(join(bookDir, "story", "state", "serial-ledger.json"), "utf-8")) as { chapters: unknown[] };
+    expect(ledger.chapters).toEqual([]);
+    await expect(exists(join(bookDir, "story", "state", "chapter-1.md"))).resolves.toBe(false);
+  });
+
+  it("deletes only the latest lightweight chapter and leaves the first chapter memory", async () => {
+    const { root, bookDir } = await setupBook({
+      bookId: "light-two",
+      chapters: [
+        { number: 1, title: "起风", content: "# 第1章 起风\n\n第一章正文。" },
+        { number: 2, title: "落雨", content: "# 第2章 落雨\n\n第二章正文。" },
+      ],
+      snapshotChapters: [],
+    });
+    await writeFile(join(bookDir, "story", "canon.md"), "# 正典\n轻量书。\n", "utf-8");
+    await mkdir(join(bookDir, "story", "workflow"), { recursive: true });
+    await writeFile(join(bookDir, "story", "workflow", "manifest.json"), JSON.stringify({
+      version: 1,
+      updatedAt: "2026-10-03T00:00:00.000Z",
+      adopted: { write: { "1": "write-ch1", "2": "write-ch2" } },
+      candidates: { write: { "1": "write-ch1", "2": "write-ch2" } },
+      coverage: { chaptersWrittenAdopted: 2 },
+    }), "utf-8");
+    await mkdir(join(bookDir, "story", "state"), { recursive: true });
+    await writeFile(join(bookDir, "story", "state", "serial-ledger.json"), JSON.stringify({
+      version: 1,
+      updatedAt: "2026-10-03T00:00:00.000Z",
+      chapters: [
+        { chapter: 1, artifactId: "write-ch1", title: "起风", summary: "第一章记忆", characters: [{ name: "林", status: "在港" }], openHooks: [], advanceHookIds: [], resolveHookIds: [] },
+        { chapter: 2, artifactId: "write-ch2", title: "落雨", summary: "第二章记忆", characters: [], openHooks: [], advanceHookIds: [], resolveHookIds: [] },
+      ],
+    }), "utf-8");
+    await writeFile(join(bookDir, "story", "state", "chapter-1.md"), "第一章记忆\n", "utf-8");
+    await writeFile(join(bookDir, "story", "state", "chapter-1.ref.json"), JSON.stringify({ artifactId: "write-ch1", chapterNumber: 1 }), "utf-8");
+    await writeFile(join(bookDir, "story", "state", "chapter-2.md"), "第二章记忆\n", "utf-8");
+    await writeFile(join(bookDir, "story", "state", "chapter-2.ref.json"), JSON.stringify({ artifactId: "write-ch2", chapterNumber: 2 }), "utf-8");
+
+    const state = new StateManager(root);
+    const result = await deleteLatestChapter(state, "light-two");
+    expect(result.deletedChapter).toBe(2);
+    await expect(readFile(join(bookDir, "chapters", "0001_起风.md"), "utf-8")).resolves.toContain("第一章正文");
+    const manifest = JSON.parse(await readFile(join(bookDir, "story", "workflow", "manifest.json"), "utf-8")) as { adopted: { write: Record<string, string> }; candidates: { write: Record<string, string> } };
+    expect(manifest.adopted.write).toEqual({ "1": "write-ch1" });
+    expect(manifest.candidates.write["2"]).toBeUndefined();
+    const ledger = JSON.parse(await readFile(join(bookDir, "story", "state", "serial-ledger.json"), "utf-8")) as { chapters: Array<{ chapter: number; summary: string }> };
+    expect(ledger.chapters.map((item) => item.chapter)).toEqual([1]);
+    expect(ledger.chapters[0]?.summary).toBe("第一章记忆");
+    await expect(readFile(join(bookDir, "story", "state", "chapter-1.md"), "utf-8")).resolves.toContain("第一章记忆");
+    await expect(exists(join(bookDir, "story", "state", "chapter-2.md"))).resolves.toBe(false);
+  });
 });

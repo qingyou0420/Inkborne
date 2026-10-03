@@ -26,7 +26,7 @@ import { completeRole, completeRoleObserved } from "../llm.js";
 import { combineAuthoringUsage } from "../token-usage.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
 import { fillMissingAuthoringRoles, loadRoleApiKeys, resolveAuthoringRole } from "../model-config.js";
-import { beginAuthoringRun, endAuthoringRun } from "../run-abort.js";
+import { beginAuthoringRun, endAuthoringRun, isAuthoringRunAbort } from "../run-abort.js";
 import { assertReportReusable, parseReviewPayload, requestReviewModelText, reviewPrompt } from "../review.js";
 import {
   authoringRootDir,
@@ -37,6 +37,7 @@ import {
   loadRun,
   loadRunControl,
   saveRunControl,
+  throwIfRunCancelled,
   newArtifactId,
   newRunId,
   saveArtifact,
@@ -668,14 +669,6 @@ function rangeFilled(beats: readonly WeaveChapterBeat[], start: number, end: num
     .map((beat) => beat.chapterNumber);
 }
 
-function holesInRange(collected: ReadonlyMap<number, WeaveChapterBeat>, start: number, end: number): number[] {
-  const missing: number[] = [];
-  for (let n = start; n <= end; n += 1) {
-    if (!isFilledBeat(collected.get(n))) missing.push(n);
-  }
-  return missing;
-}
-
 export const WEAVE_LENGTH_REQUIRED = "WEAVE_LENGTH_REQUIRED";
 
 export async function resolveWeaveTargetChapters(root: { projectRoot: string; bookId?: string }): Promise<number> {
@@ -926,16 +919,22 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   if (input.resumeRunId) await saveRunControl(input.root, runId, "none");
   const requestedStart = resume?.checkpoint?.requestedStart ?? start;
   const requestedEnd = resume?.checkpoint?.requestedEnd ?? end;
+  const roundCompleted = new Set<number>(resume?.checkpoint?.completedChapters ?? []);
+  if (!input.resumeRunId && input.keepExisting) {
+    for (let n = requestedStart; n <= requestedEnd; n += 1) {
+      if (isFilledBeat(existingMap.get(n))) roundCompleted.add(n);
+    }
+  }
   let missing: number[] = [];
   if (input.missingChapters?.length) {
-    missing = input.missingChapters.filter((n) => !isFilledBeat(existingMap.get(n)));
+    missing = input.missingChapters.filter((n) => !roundCompleted.has(n));
   } else if (resume?.checkpoint?.missingChapters?.length) {
-    missing = resume.checkpoint.missingChapters.filter((n) => !isFilledBeat(existingMap.get(n)));
+    missing = resume.checkpoint.missingChapters.filter((n) => !roundCompleted.has(n));
   } else {
     for (let n = requestedStart; n <= requestedEnd; n += 1) {
+      if (roundCompleted.has(n)) continue;
       const good = isFilledBeat(existingMap.get(n));
       if (!input.resumeRunId && input.keepExisting && good) continue;
-      if (input.resumeRunId && good) continue;
       missing.push(n);
     }
   }
@@ -947,6 +946,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   const createdAt = resume?.createdAt ?? new Date().toISOString();
   let usage: AuthoringTokenUsage | undefined;
   let artifactId = resume?.producedArtifactIds.at(-1) ?? "";
+  const roundCompletedList = () => [...roundCompleted].filter((n) => n >= requestedStart && n <= requestedEnd).sort((a, b) => a - b);
   await saveRun(input.root, {
     runId,
     stage: "weave",
@@ -954,11 +954,9 @@ export async function generateWeaveRange(input: WeaveRuntime & {
     roleId: "weave.main",
     status: "running",
     bookId: input.root.bookId,
-    progressDone: holesInRange(collected, requestedStart, requestedEnd).length === 0
-      ? requestedEnd - requestedStart + 1
-      : rangeFilled([...collected.values()], requestedStart, requestedEnd).length,
+    progressDone: roundCompletedList().length,
     progressTotal: requestedEnd - requestedStart + 1,
-    progressLabel: `本次 ${rangeFilled([...collected.values()], requestedStart, requestedEnd).length}/${requestedEnd - requestedStart + 1}`,
+    progressLabel: `本次 ${roundCompletedList().length}/${requestedEnd - requestedStart + 1}`,
     modelSnapshot: resolved.snapshot,
     producedArtifactIds: artifactId ? [artifactId] : [],
     checkpoint: {
@@ -966,7 +964,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
       requestedStart,
       requestedEnd,
       missingChapters: missing,
-      completedChapters: rangeFilled([...collected.values()], requestedStart, requestedEnd),
+      completedChapters: roundCompletedList(),
       remainingStart: missing[0],
       remainingEnd: missing.at(-1),
       producedScope: `chapters:${requestedStart}-${requestedEnd}`,
@@ -984,8 +982,8 @@ export async function generateWeaveRange(input: WeaveRuntime & {
     .join("\n");
 
   const writeCheckpoint = (status: AuthoringRunRecord["status"], extra?: { error?: string; remaining?: number[] }) => {
-    const remaining = extra?.remaining ?? holesInRange(collected, requestedStart, requestedEnd);
-    const completed = rangeFilled([...collected.values()], requestedStart, requestedEnd);
+    const remaining = extra?.remaining ?? missing.filter((n) => !roundCompleted.has(n));
+    const completed = roundCompletedList();
     return {
       runId,
       stage: "weave" as const,
@@ -1077,7 +1075,9 @@ export async function generateWeaveRange(input: WeaveRuntime & {
         bookOutline && `已有全书大纲：\n${bookOutline}`,
         volumes.length ? `已有分卷：\n${volumes.map((volume) => `第${volume.volumeNumber}卷 ${volume.title}（${volume.startChapter}-${volume.endChapter}） ${volume.body}`).join("\n")}` : "",
         priorBeatsText(batchStart) && `已生成章概要：\n${priorBeatsText(batchStart)}`,
-      ].filter(Boolean).join("\n"), { llm: input.llm });
+      ].filter(Boolean).join("\n"), { llm: input.llm, signal });
+      await throwIfRunCancelled(input.root, runId);
+      if (signal.aborted) throw new AuthoringRunCancelledError();
       usage = combineAuthoringUsage(usage, observed.usage);
       raw = observed.content;
       const allowStructure = requestedStart === 1 && batchStart === 1 && !input.resumeRunId && !volumes.length;
@@ -1089,28 +1089,29 @@ export async function generateWeaveRange(input: WeaveRuntime & {
         const previous = collected.get(beat.chapterNumber);
         if (!isFilledBeat(beat) && isFilledBeat(previous)) continue;
         collected.set(beat.chapterNumber, beat);
+        if (isFilledBeat(beat) && batch.includes(beat.chapterNumber)) roundCompleted.add(beat.chapterNumber);
       }
       const beats = mergeBeats(collected, [], requestedStart, requestedEnd);
       artifactId = await writeCandidate(beats);
-      const remaining = holesInRange(collected, requestedStart, requestedEnd);
+      const remaining = missing.filter((n) => !roundCompleted.has(n));
       await saveRun(input.root, writeCheckpoint(remaining.length === 0 ? "completed" : "running", { remaining }));
     }
   } catch (error) {
-    if (error instanceof AuthoringRunCancelledError || signal.aborted) {
+    if (error instanceof AuthoringRunCancelledError || signal.aborted || isAuthoringRunAbort(error, signal)) {
       await saveRun(input.root, writeCheckpoint("cancelled"));
       throw error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError();
     }
     const beats = mergeBeats(collected, [], requestedStart, requestedEnd);
-    if (beats.some((beat) => isFilledBeat(beat))) {
+    const remaining = missing.filter((n) => !roundCompleted.has(n));
+    if (roundCompleted.size > 0) {
       artifactId = await writeCandidate(beats);
     }
-    const remaining = holesInRange(collected, requestedStart, requestedEnd);
-    await saveRun(input.root, writeCheckpoint(remaining.length && rangeFilled(beats, requestedStart, requestedEnd).length ? "partial" : remaining.length ? "failed" : "completed", {
+    await saveRun(input.root, writeCheckpoint(remaining.length && roundCompleted.size ? "partial" : remaining.length ? "failed" : "completed", {
       error: redactSecrets(error instanceof Error ? error.message : String(error)),
       remaining,
     }));
     await writeWeaveDiagnostics(input.root, runId, raw);
-    if (rangeFilled(beats, requestedStart, requestedEnd).length === 0) throw error;
+    if (roundCompleted.size === 0) throw error;
     return { beats, runId, artifactId, status: "partial" };
   }
 
@@ -1118,7 +1119,7 @@ export async function generateWeaveRange(input: WeaveRuntime & {
   if (!artifactId) {
     artifactId = await writeCandidate(beats);
   }
-  const remaining = holesInRange(collected, requestedStart, requestedEnd);
+  const remaining = missing.filter((n) => !roundCompleted.has(n));
   const complete = remaining.length === 0;
   await saveRun(input.root, writeCheckpoint(complete ? "completed" : "partial", { remaining }));
   return { beats, runId, artifactId, status: complete ? "completed" : "partial" };
@@ -1137,6 +1138,7 @@ export async function reviewWeave(input: WeaveRuntime & {
   const resolved = await resolve(input.project, "weave.review", input.root.projectRoot);
   const runId = input.runId ?? newRunId();
   const startedAt = new Date().toISOString();
+  const signal = beginAuthoringRun(input.root.bookId, runId);
   await saveRun(input.root, {
     runId,
     stage: "weave",
@@ -1151,12 +1153,16 @@ export async function reviewWeave(input: WeaveRuntime & {
     updatedAt: startedAt,
   });
   try {
+    await throwIfRunCancelled(input.root, runId);
     const ctx = await assembleAuthoringContext(input.root, { stage: "weave" });
     const reviewed = await requestReviewModelText({
       resolved,
       prompt: reviewPrompt("weave", input.coverage, loaded.body, ctx.text),
       llm: input.llm,
+      signal,
     });
+    await throwIfRunCancelled(input.root, runId);
+    if (signal.aborted) throw new AuthoringRunCancelledError();
     const report = parseReviewPayload(reviewed.text, {
       stage: "weave",
       targetRefs: [loaded.meta.artifactId],
@@ -1186,21 +1192,24 @@ export async function reviewWeave(input: WeaveRuntime & {
     });
     return report;
   } catch (error) {
+    const cancelled = error instanceof AuthoringRunCancelledError || signal.aborted || isAuthoringRunAbort(error, signal);
     await saveRun(input.root, {
       runId,
       stage: "weave",
       operation: "review",
       roleId: "weave.review",
-      status: "failed",
+      status: cancelled ? "cancelled" : "failed",
       bookId: input.root.bookId,
-      error: redactSecrets(error instanceof Error ? error.message : String(error)),
-      progressLabel: "审查失败",
+      error: cancelled ? undefined : redactSecrets(error instanceof Error ? error.message : String(error)),
+      progressLabel: cancelled ? "已放弃这次审查" : "审查失败",
       modelSnapshot: resolved.snapshot,
       producedArtifactIds: [],
       createdAt: startedAt,
       updatedAt: new Date().toISOString(),
     });
-    throw error;
+    throw cancelled ? (error instanceof AuthoringRunCancelledError ? error : new AuthoringRunCancelledError()) : error;
+  } finally {
+    endAuthoringRun(input.root.bookId, runId);
   }
 }
 

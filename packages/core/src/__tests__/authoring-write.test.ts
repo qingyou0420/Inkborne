@@ -6,18 +6,21 @@ import { ProjectConfigSchema } from "../models/project.js";
 import { createLightweightBook } from "../authoring/book-create.js";
 import {
   adoptChapterDraft,
+  bindRestoredChapterUnlocked,
   generateChapterDraft as generateChapterDraftCore,
   requestWriteRunCancel,
   SavedPartialDraftError,
   reviewChapterDraft,
   reviseChapterDraft,
   settleAdoptedChapter,
+  settleBodySegments,
+  settleCoverageComplete,
 } from "../authoring/stages/write.js";
 import { assembleAuthoringContext, listChapterStateRefs, loadOutlineText, serializeCanonBrief } from "../authoring/context.js";
 import { adoptWeave, generateWeaveRange, generateWeaveStructure, resolveWeaveTargetChapters } from "../authoring/stages/weave.js";
 import { findChapterNode, parseVolumeMapTree } from "../utils/volume-map-tree.js";
 import { persistAdoptedChapter } from "../authoring/chapter-index.js";
-import { pickSettingsByMention } from "../authoring/serial-ledger.js";
+import { foldSerialLedger, loadSerialLedger, loadWriteMemory, pickSettingsByMention } from "../authoring/serial-ledger.js";
 import { AuthoringRunCancelledError, listRuns, loadArtifact, loadManifest, loadReport, loadRun, newRunId, saveHandEditedArtifact, saveManifest, saveReport, saveRunControl } from "../authoring/store.js";
 import { listChapterVersions, readChapterVersion } from "../state/chapter-workspace.js";
 import { withBookWriteLock } from "../authoring/book-lock.js";
@@ -1485,6 +1488,274 @@ describe("write stage", () => {
     });
     expect(retried.settled).toBe(true);
     expect(await listChapterStateRefs(ctx.root)).toEqual({ "1": draft.artifactId });
+  });
+
+  it("binds a reader save to a new artifact and drops the old settle from the next chapter", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-reader-save-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港", oneLine: "会计", proposition: "", protagonist: "林", conflict: "",
+        voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 4, chapterWordCount: 3000,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    await ensureAdoptedChapterPlan(ctx.root, ctx.project, 1);
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "信封",
+      llm: async () => "# 第1章 信封\n林带着信封离开。",
+    });
+    await adoptChapterDraft({
+      ...ctx,
+      artifactId: draft.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "林带着信封离开。",
+        characters: [{ name: "林", status: "带着信封离开" }],
+        openHooks: [{ id: "hook-letter", label: "信封去向", note: "旧状态" }],
+        advanceHooks: [],
+        resolveHooks: [],
+      }),
+    });
+    expect(await loadWriteMemory(ctx.root, 2)).toContain("带着信封离开");
+    const edited = "# 第1章 信封\n林烧掉信封并留在原地。";
+    await persistAdoptedChapter({
+      bookDir: created.bookDir,
+      chapterNumber: 1,
+      title: "信封",
+      body: edited,
+    });
+    const bound = await bindRestoredChapterUnlocked({
+      root: ctx.root,
+      chapterNumber: 1,
+      title: "信封",
+      relativePath: "chapters/0001_信封.md",
+      body: edited,
+    });
+    const manifest = await loadManifest(ctx.root);
+    expect(manifest.adopted.write["1"]).toBe(bound.artifactId);
+    expect(await loadArtifact(ctx.root, bound.artifactId)).toMatchObject({ body: expect.stringContaining("林烧掉信封并留在原地") });
+    expect(await listChapterStateRefs(ctx.root)).toEqual({});
+    expect(await loadWriteMemory(ctx.root, 2)).not.toContain("带着信封离开");
+    const nextPrompt = await assembleAuthoringContext(ctx.root, { stage: "write", chapterNumber: 2 });
+    expect(nextPrompt.text).toContain("林烧掉信封并留在原地");
+    expect(nextPrompt.text).not.toContain("带着信封离开");
+    await persistAdoptedChapter({
+      bookDir: created.bookDir,
+      chapterNumber: 1,
+      title: "信封",
+      body: edited,
+    });
+    await adoptChapterDraft({
+      ...ctx,
+      artifactId: bound.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "林烧掉信封并留在原地。",
+        characters: [{ name: "林", status: "留在原地" }],
+        openHooks: [],
+        advanceHooks: [],
+        resolveHooks: ["hook-letter"],
+      }),
+    });
+    expect(await loadWriteMemory(ctx.root, 2)).toContain("留在原地");
+    expect(await loadWriteMemory(ctx.root, 2)).not.toContain("带着信封离开");
+  });
+
+  it("feeds old hook ids and the chapter ending into settle", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-settle-memory-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港", oneLine: "会计", proposition: "", protagonist: "林", conflict: "",
+        voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 4, chapterWordCount: 3000,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    await ensureAdoptedChapterPlan(ctx.root, ctx.project, 1);
+    const first = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "埋线",
+      llm: async () => "# 第1章\n林把铜牌藏进抽屉。HOOK_PLANT",
+    });
+    await adoptChapterDraft({
+      ...ctx,
+      artifactId: first.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "藏铜牌",
+        characters: [{ name: "林", status: "藏了铜牌" }],
+        openHooks: [{ id: "hook-badge", label: "抽屉里的铜牌", note: "尚未收回" }],
+        advanceHooks: [],
+        resolveHooks: [],
+      }),
+    });
+    const middle = "MIDDLE_ONLY_STATE 林把铜牌熔掉。";
+    const tail = "ENDING_TWIST 林当众打开抽屉，铜牌已经不在。";
+    const longBody = `# 第1章\n${"H".repeat(8200)}${middle}${"T".repeat(8200)}${tail}`;
+    expect(longBody.length).toBeGreaterThan(16_244);
+    const middleAt = longBody.indexOf("MIDDLE_ONLY_STATE");
+    expect(middleAt).toBeGreaterThan(6000);
+    expect(longBody.length - middleAt).toBeGreaterThan(6000);
+    expect(settleCoverageComplete({
+      totalChars: 16244,
+      segments: [{ start: 1, end: 6000 }, { start: 10245, end: 16244 }],
+    })).toBe(false);
+    const segmented = settleBodySegments(longBody);
+    expect(settleCoverageComplete(segmented.coverage)).toBe(true);
+    expect(segmented.texts.some((text) => text.includes("MIDDLE_ONLY_STATE"))).toBe(true);
+    const prompts: string[] = [];
+    const draft = await generateChapterDraft({
+      ...ctx,
+      chapterNumber: 1,
+      title: "埋线",
+      llm: async () => longBody,
+    });
+    await adoptChapterDraft({
+      ...ctx,
+      artifactId: draft.artifactId,
+      llm: async (call) => {
+        prompts.push(call.messages.map((message) => message.content).join("\n"));
+        return JSON.stringify({
+          summary: "铜牌消失",
+          characters: [{ name: "林", status: "当众打开空抽屉" }],
+          openHooks: [],
+          advanceHooks: [],
+          resolveHooks: ["hook-badge"],
+        });
+      },
+    });
+    expect(prompts.some((prompt) => prompt.includes("hook-badge"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("抽屉里的铜牌"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("ENDING_TWIST"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("MIDDLE_ONLY_STATE"))).toBe(true);
+    const ledger = await loadSerialLedger(created.bookDir);
+    expect(ledger?.chapters[0]?.resolveHookIds).toEqual(["hook-badge"]);
+    const ref = JSON.parse(await readFile(join(created.bookDir, "story", "state", "chapter-1.ref.json"), "utf-8")) as { coverage?: { totalChars: number; segments?: Array<{ start: number; end: number }> } };
+    expect(ref.coverage?.totalChars).toBeGreaterThan(16_000);
+    expect(ref.coverage && settleCoverageComplete(ref.coverage)).toBe(true);
+    expect(ref.coverage?.segments?.some((segment) => segment.end === ref.coverage?.totalChars)).toBe(true);
+  });
+
+  it("keeps origin hook ids after a reader typo fix and drops a hook the rewrite removed", async () => {
+    root = await mkdtemp(join(tmpdir(), "authoring-write-hook-identity-"));
+    const created = await createLightweightBook({
+      projectRoot: root,
+      canon: {
+        title: "夜港", oneLine: "会计", proposition: "", protagonist: "林", conflict: "",
+        voice: "", boundaries: "", direction: "", openQuestions: [], targetChapters: 4, chapterWordCount: 3000,
+      },
+    });
+    const ctx = { root: { projectRoot: root, bookId: created.bookId }, project: project() };
+    const plant = JSON.stringify({
+      summary: "藏铜牌",
+      characters: [{ name: "林", status: "藏了铜牌" }],
+      openHooks: [{ id: "hook-badge", label: "抽屉里的铜牌", note: "尚未收回" }],
+      advanceHooks: [],
+      resolveHooks: [],
+    });
+    const first = await generateChapterDraft({
+      ...ctx, chapterNumber: 1, title: "埋线",
+      llm: async () => "# 第1章\n林把铜牌藏进抽屉。",
+    });
+    await adoptChapterDraft({ ...ctx, artifactId: first.artifactId, llm: async () => plant });
+    const second = await generateChapterDraft({
+      ...ctx, chapterNumber: 2, title: "推进",
+      llm: async () => "# 第2章\n林又摸到抽屉里的铜牌。",
+    });
+    await adoptChapterDraft({
+      ...ctx, artifactId: second.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "又摸到铜牌",
+        characters: [{ name: "林", status: "仍握着铜牌" }],
+        openHooks: [],
+        advanceHooks: ["hook-badge"],
+        resolveHooks: [],
+      }),
+    });
+    const third = await generateChapterDraft({
+      ...ctx, chapterNumber: 3, title: "收回",
+      llm: async () => "# 第3章\n林把铜牌交了出去。",
+    });
+    await adoptChapterDraft({
+      ...ctx, artifactId: third.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "交还铜牌",
+        characters: [{ name: "林", status: "交还铜牌" }],
+        openHooks: [],
+        advanceHooks: [],
+        resolveHooks: ["hook-badge"],
+      }),
+    });
+    const foldedBefore = foldSerialLedger(await loadSerialLedger(created.bookDir), (await loadManifest(ctx.root)).adopted.write);
+    expect(foldedBefore.hooks.find((hook) => hook.id === "hook-badge")?.status).toBe("resolved");
+
+    const edited = "# 第1章\n林把铜牌藏进抽屉。灯花轻轻一跳。";
+    await persistAdoptedChapter({
+      bookDir: created.bookDir,
+      chapterNumber: 1,
+      title: "埋线",
+      body: edited,
+    });
+    const bound = await bindRestoredChapterUnlocked({
+      root: ctx.root,
+      chapterNumber: 1,
+      title: "埋线",
+      relativePath: "chapters/0001_埋线.md",
+      body: edited,
+    });
+    const settlePrompts: string[] = [];
+    const settled = await settleAdoptedChapter({
+      ...ctx,
+      artifactId: bound.artifactId,
+      llm: async (call) => {
+        settlePrompts.push(call.messages.map((message) => message.content).join("\n"));
+        return JSON.stringify({
+          summary: "仍把铜牌藏进抽屉。",
+          characters: [{ name: "林", status: "刚改了一个错字" }],
+          openHooks: [{ id: "hook-badge-new", label: "抽屉里的铜牌", note: "仍未收回" }],
+          advanceHooks: [],
+          resolveHooks: [],
+        });
+      },
+    });
+    expect(settled.settled).toBe(true);
+    expect(settlePrompts.join("\n")).toContain("hook-badge");
+    expect(settlePrompts.join("\n")).toContain("本章上次伏笔身份");
+    expect(settlePrompts.join("\n")).not.toContain("藏了铜牌");
+    const afterTypo = foldSerialLedger(await loadSerialLedger(created.bookDir), (await loadManifest(ctx.root)).adopted.write);
+    expect(afterTypo.hooks.find((hook) => hook.id === "hook-badge")?.status).toBe("resolved");
+    expect(afterTypo.hooks.some((hook) => hook.id === "hook-badge-new")).toBe(false);
+
+    const stripped = "# 第1章\n林只是坐在桌边改了一个错字。";
+    await persistAdoptedChapter({
+      bookDir: created.bookDir,
+      chapterNumber: 1,
+      title: "埋线",
+      body: stripped,
+    });
+    const rebound = await bindRestoredChapterUnlocked({
+      root: ctx.root,
+      chapterNumber: 1,
+      title: "埋线",
+      relativePath: "chapters/0001_埋线.md",
+      body: stripped,
+    });
+    const removed = await settleAdoptedChapter({
+      ...ctx,
+      artifactId: rebound.artifactId,
+      llm: async () => JSON.stringify({
+        summary: "这一章不再埋铜牌。",
+        characters: [{ name: "林", status: "坐在桌边" }],
+        openHooks: [],
+        advanceHooks: [],
+        resolveHooks: [],
+      }),
+    });
+    expect(removed.settled).toBe(true);
+    const origin = (await loadSerialLedger(created.bookDir))?.chapters.find((entry) => entry.chapter === 1);
+    expect(origin?.openHooks).toEqual([]);
+    expect(await loadWriteMemory(ctx.root, 2)).not.toContain("抽屉里的铜牌");
   });
 });
 

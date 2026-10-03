@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+## 3.0.1
+
+版本 3.0.1。用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。
+
+主安装包 `Lightbound-Setup-3.0.1.exe`，同时发布旧名别名 `Inkborne-Setup-3.0.1.exe`、`FantaWriter-Setup-3.0.1.exe`、`Fantasy-Writer-Setup-3.0.1.exe`。
+
+收口 3.0.0 审查：阅读页保存绑定新 artifact；原子多文件提交记录新建目标并在真实进程中断后恢复完整旧树或新树；织卷重生独立本轮完成集合；损坏连载账本拒绝覆盖；长章连续覆盖全文结算；回改早章保留伏笔身份；研墨修订 / 织卷审查取消后不落盘；轻量书删章不依赖 snapshot-0；审查「定位正文」限定稿件容器并滚动高亮。
+
 ## 3.0.0
 
 版本 3.0.0。用户向说明见根目录 [CHANGELOG.md](../CHANGELOG.md)。

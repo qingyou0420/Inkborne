@@ -357,10 +357,30 @@ function AuthoringGroundBook({
     void postApi(`/authoring/runs/${encodeURIComponent(activeRunId)}/cancel`, { bookId });
   };
   const retryFailedRun = () => {
-    const action = groundRetryAction(authoringRun.run ?? undefined, generationScope.entryIds.length > 0 || visible.length > 0);
+    const failed = authoringRun.run ?? undefined;
+    const action = groundRetryAction(failed, generationScope.entryIds.length > 0 || visible.length > 0);
     if (action === "review") void reviewCurrent();
     else if (action === "catalog") void startCatalog();
-    else void generateEntries(generationScope.entryIds, generationScope.regenerate);
+    else if (action === "revise") {
+      const reportId = failed?.reportId;
+      const issueIds = failed?.checkpoint?.selectedIssueIds ?? failed?.checkpoint?.revisionIssueIds ?? [];
+      if (!reportId || issueIds.length === 0) return;
+      void run("revise", async () => {
+        const revised = await postApi<{ runId?: string; status?: string }>("/authoring/ground/revise", {
+          bookId,
+          reportId,
+          selectedIssueIds: issueIds,
+          reuseStale: failed?.checkpoint?.revisionReuseStale,
+          requirements: failed?.checkpoint?.requirements,
+          entryId: failed?.checkpoint?.entryIds?.[0],
+        });
+        if (isBackgroundAuthoringStart(revised) && revised.runId) setActiveRunId(revised.runId);
+        return true;
+      });
+    } else {
+      const entryIds = failed?.checkpoint?.entryIds?.length ? [...failed.checkpoint.entryIds] : generationScope.entryIds;
+      void generateEntries(entryIds, generationScope.regenerate, failed?.checkpoint?.requirements ?? "");
+    }
   };
   const groundRunStatus = authoringRun.active
     ? (authoringRun.run?.progressLabel ?? (isZh ? "正在生成设定…" : "Generating settings…"))

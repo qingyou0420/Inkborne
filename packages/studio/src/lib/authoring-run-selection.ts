@@ -16,6 +16,19 @@ export interface AuthoringRunLike {
   readonly updatedAt?: string;
   readonly producedArtifactIds?: ReadonlyArray<string>;
   readonly progressLabel?: string;
+  readonly reportId?: string;
+  readonly checkpoint?: {
+    readonly requirements?: string;
+    readonly entryIds?: ReadonlyArray<string>;
+    readonly selectedIssueIds?: ReadonlyArray<string>;
+    readonly revisionIssueIds?: ReadonlyArray<string>;
+    readonly revisionReuseStale?: boolean;
+    readonly entryVersions?: Readonly<Record<string, string>>;
+    readonly requestedStart?: number;
+    readonly requestedEnd?: number;
+    readonly missingChapters?: ReadonlyArray<number>;
+    readonly completedChapters?: ReadonlyArray<number>;
+  };
 }
 
 export function selectScopedAuthoringRun<T extends AuthoringRunLike>(
@@ -52,13 +65,14 @@ export function askRetryAction(operation?: string): AskRetryAction {
   return operation === "review" ? "review" : "generate";
 }
 
-export type GroundRetryAction = "review" | "catalog" | "generate";
+export type GroundRetryAction = "review" | "catalog" | "generate" | "revise";
 
 export function groundRetryAction(
   run: Pick<AuthoringRunLike, "operation" | "progressLabel"> | undefined,
   hasEntries: boolean,
 ): GroundRetryAction {
   if (run?.operation === "review") return "review";
+  if (run?.operation === "revise") return "revise";
   if (!hasEntries) return "catalog";
   return "generate";
 }
